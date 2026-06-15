@@ -1,0 +1,52 @@
+name: Build XTrader Signal Bridge EXE
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Installa Dipendenze
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller customtkinter python-telegram-bot httpx
+
+    - name: Compila EXE con PyInstaller
+      run: >
+        pyinstaller --onefile --windowed
+        --name "XTrader-Signal-Bridge"
+        --collect-all customtkinter
+        --hidden-import=telegram
+        --hidden-import=telegram.ext
+        --hidden-import=telegram.ext._application
+        --hidden-import=telegram.ext._updater
+        --hidden-import=httpx
+        --hidden-import=httpcore
+        main.py
+
+    - name: Carica EXE come Artifact (sempre scaricabile)
+      uses: actions/upload-artifact@v4
+      with:
+        name: XTrader-Signal-Bridge-Windows
+        path: dist/XTrader-Signal-Bridge.exe
+        retention-days: 30
+
+    - name: Crea Release pubblica (solo su tag v*)
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: dist/XTrader-Signal-Bridge.exe
