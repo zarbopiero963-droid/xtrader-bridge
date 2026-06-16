@@ -70,3 +70,24 @@ def test_first_half_goals_05_15_25():
 
 def test_alias_key_normalizza():
     assert dz.alias_key("  Over 0.5 HT ", "OVER 0.5 HT") == ("over 0.5 ht", "over 0.5 ht")
+
+
+def test_alias_key_collassa_spazi_interni():
+    assert dz.alias_key("over   0.5    ht", "Over  0.5  HT") == ("over 0.5 ht", "over 0.5 ht")
+
+
+def test_duplicate_ignora_righe_con_alias_vuoti():
+    rows = [
+        {"MarketAliasTelegram": "", "SelectionAliasTelegram": ""},
+        {"MarketAliasTelegram": "", "SelectionAliasTelegram": ""},
+        {"MarketAliasTelegram": "esito_finale", "SelectionAliasTelegram": "1"},
+    ]
+    assert dz.duplicate_alias_pairs(rows) == []   # gli alias vuoti non sono duplicati
+
+
+def test_duplicate_rileva_veri_duplicati():
+    rows = [
+        {"MarketAliasTelegram": "esito_finale", "SelectionAliasTelegram": "1"},
+        {"MarketAliasTelegram": "Esito_Finale", "SelectionAliasTelegram": " 1 "},
+    ]
+    assert dz.duplicate_alias_pairs(rows) == [("esito_finale", "1")]

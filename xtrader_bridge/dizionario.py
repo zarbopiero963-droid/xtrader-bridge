@@ -32,17 +32,27 @@ def load_dizionario(path: str = DIZIONARIO_PATH) -> list:
         return list(csv.DictReader(f))
 
 
+def _norm(s: str) -> str:
+    # minuscolo, trim e collasso degli spazi interni (es. "Over  0.5  HT" -> "over 0.5 ht").
+    return " ".join(str(s).strip().lower().split())
+
+
 def alias_key(market_alias: str, selection_alias: str) -> tuple:
     """Chiave normalizzata (case/space-insensitive) usata per il lookup (PR-08)."""
-    return (str(market_alias).strip().lower(), str(selection_alias).strip().lower())
+    return (_norm(market_alias), _norm(selection_alias))
 
 
 def duplicate_alias_pairs(rows: list) -> list:
     """Coppie (MarketAliasTelegram, SelectionAliasTelegram) duplicate: devono
-    essere zero, altrimenti il lookup sarebbe ambiguo."""
+    essere zero, altrimenti il lookup sarebbe ambiguo. Le righe con alias vuoti
+    vengono ignorate (non sono lookabili e non devono generare falsi duplicati)."""
     seen, dups = set(), []
     for row in rows:
-        k = alias_key(row["MarketAliasTelegram"], row["SelectionAliasTelegram"])
+        ma = str(row.get("MarketAliasTelegram", "")).strip()
+        sa = str(row.get("SelectionAliasTelegram", "")).strip()
+        if not ma or not sa:
+            continue
+        k = alias_key(ma, sa)
         if k in seen:
             dups.append(k)
         else:
