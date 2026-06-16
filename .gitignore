@@ -11,6 +11,8 @@ config.json
 # CSV generati dal bridge
 *.csv
 segnali.csv
+# ...ma il dizionario è un file dati versionato (non un CSV generato):
+!data/dizionario_xtrader.csv
 
 # Log e cache locali
 logs/
