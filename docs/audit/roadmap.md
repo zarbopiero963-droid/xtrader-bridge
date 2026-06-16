@@ -38,14 +38,21 @@ tutti i check verdi.
 
 ## Contratto CSV XTrader (riferimento per tutte le PR)
 
-```
-Provider,SelectionId,MarketId,SelectionName,MarketName,EventName,MarketType,BetType,Price,MinPrice,MaxPrice,Points
+> Fonte di verità: **`docs/xtrader_csv_contract.md`** (aggiornato in PR-01 sui CSV di
+> esempio reali del team XTrader). Header reale a **14 colonne**:
+
+```text
+Provider,EventId,EventName,MarketId,MarketName,MarketType,SelectionId,SelectionName,Handicap,Price,MinPrice,MaxPrice,BetType,Points
 ```
 
 - `Stake` e `Timestamp` **non** sono colonne CSV (vedi `known_issues.md`).
-- `Points` default `"1"`. `BetType` ∈ {`BACK`,`LAY`}. `Price`/`MinPrice`/`MaxPrice`
-  possono essere vuoti. Tutti i valori scritti con `quoting=QUOTE_ALL`.
+- `BetType` ∈ {`PUNTA` (back), `BANCA` (lay)}. `Points` **vuoto** di default.
+  `Handicap` = `0`. `Price`/`MinPrice`/`MaxPrice` possono essere vuoti.
+- Encoding `utf-8-sig` (BOM) + `quoting=QUOTE_ALL`.
 - Modalità riconoscimento: `ID_ONLY` | `NAME_ONLY` | `BOTH`.
+
+> **Nota:** il contratto a 12 colonne / `BACK`/`LAY` / `Points="1"` citato in versioni
+> precedenti di questo documento è **superato** da quello reale qui sopra.
 
 ---
 
@@ -83,13 +90,15 @@ workflow e `requirements.txt` **non** nel diff.
 
 ## PR-01 — phase-0/xtrader-csv-contract
 **Obiettivo:** definire il formato CSV ufficiale per XTrader.
-**Tecnico:** header `Provider,SelectionId,MarketId,SelectionName,MarketName,EventName,MarketType,BetType,Price,MinPrice,MaxPrice,Points`;
-niente `Stake`/`Timestamp`; `Points` default `"1"`. `docs/xtrader_csv_contract.md`.
-**Task:** aggiornare README col formato corretto; creare il contratto; allineare
+**Tecnico:** header reale a 14 colonne `Provider,EventId,EventName,MarketId,MarketName,MarketType,SelectionId,SelectionName,Handicap,Price,MinPrice,MaxPrice,BetType,Points`;
+niente `Stake`/`Timestamp`; `BetType` = `PUNTA`/`BANCA`; `Points` vuoto; `Handicap` `0`;
+`utf-8-sig` + `QUOTE_ALL`. `docs/xtrader_csv_contract.md`.
+**Task:** aggiornare README col formato reale; creare il contratto; allineare
 `CSV_HEADER`; rimuovere l'esempio README con Stake/Timestamp; specificare ID_ONLY/
 NAME_ONLY/BOTH.
-**Test hard:** header == contratto; `Points` default `"1"`; `BetType` solo BACK/LAY;
-`Price`/`MinPrice`/`MaxPrice` ammettono vuoto; CSV con solo header valido; `QUOTE_ALL`.
+**Test hard:** header == contratto (14 col, order-sensitive); `BetType` mappa BACK→PUNTA,
+LAY→BANCA e blocca valori sconosciuti; `Points` vuoto; `Handicap` `0`; `Price`/`MinPrice`/
+`MaxPrice` ammettono vuoto; CSV con solo header valido; `QUOTE_ALL` + BOM.
 **Micro-audit:** README, contratto e `CSV_HEADER` dicono la stessa cosa.
 **Audit totale:** CSV leggibile da XTrader; README non promette colonne non supportate.
 
@@ -183,9 +192,9 @@ OVER 2.5 e GG mappati; senza squadre/quota → errore controllato.
 **Tecnico:** `validator.py` con stati VALID / INVALID_MISSING_EVENT /
 INVALID_MISSING_PRICE / INVALID_UNKNOWN_MARKET / INVALID_UNKNOWN_SELECTION /
 INVALID_BETTYPE / DUPLICATE.
-**Test hard:** BetType ≠ BACK/LAY → invalido; Price non numerico → invalido; MarketType
+**Test hard:** BetType ≠ PUNTA/BANCA → invalido; Price non numerico → invalido; MarketType
 assente → invalido; SelectionName mancante → invalido; EventName mancante (NAME_ONLY) →
-invalido; Points vuoto → default 1.
+invalido; `Points` vuoto **resta vuoto** (è il default del contratto, NON va normalizzato a "1").
 **Micro-audit:** nessun segnale invalido arriva al CSV.
 **Audit totale:** CSV solo con segnali coerenti. **(chiude #1)**
 
