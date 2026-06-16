@@ -18,6 +18,7 @@ def test_over25_diventa_riga_italiana():
     assert row["MarketName"] == "Over/Under 2,5 gol"
     assert row["SelectionName"] == "Over 2,5 goal"
     assert row["BetType"] == "PUNTA"
+    assert row["Handicap"] == "0"      # dal dizionario (over/under: Handicap 0, non la linea)
     assert row["Points"] == ""
     assert list(row.keys()) == CSV_HEADER
     assert recognition.is_valid(row, "NAME_ONLY") is True

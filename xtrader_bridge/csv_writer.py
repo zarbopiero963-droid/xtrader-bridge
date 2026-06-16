@@ -11,6 +11,8 @@ import tempfile
 import threading
 import time
 
+from . import mapping
+
 # Lock condiviso: serializza scrittura segnale e svuotamento, eliminando la
 # race tra il thread del bot (write_csv) e il timer di auto-clear (init_csv).
 _write_lock = threading.Lock()
@@ -56,8 +58,6 @@ def build_csv_row(parsed: dict, provider: str) -> dict:
     italiani ufficiali (MarketType/MarketName/SelectionName); altrimenti ricade
     sul mapping legacy. Il `bet_type` viene sempre dal segnale (PUNTA/BANCA).
     """
-    from . import mapping  # import locale: evita cicli a livello di modulo
-
     teams = parsed['teams']
     parts = teams.split(' v ')
     home = parts[0].strip() if parts else teams
@@ -76,7 +76,7 @@ def build_csv_row(parsed: dict, provider: str) -> dict:
         market_type = resolved["MarketType"]
         market_name = resolved["MarketName"]
         selection = resolved["SelectionName"]
-        handicap = resolved["Handicap"] or DEFAULT_HANDICAP
+        handicap = resolved["Handicap"]   # già normalizzato in mapping.resolve()
     else:
         # Fallback legacy: mapping inglese del tipo segnale.
         signal_upper = parsed['signal_type'].upper()

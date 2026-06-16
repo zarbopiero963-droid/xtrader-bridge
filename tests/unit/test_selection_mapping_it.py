@@ -3,6 +3,8 @@
 Asserzioni fedeli ai valori reali di data/dizionario_xtrader.csv.
 """
 
+import pytest
+
 from xtrader_bridge import mapping
 
 
@@ -28,10 +30,20 @@ def test_resolve_alias_sconosciuto_none():
 
 # ── forme brevi Telegram (SYNONYMS) ──
 
-def test_shorthand_over_25():
-    r = mapping.resolve_shorthand("OVER 2.5", home="Inter", away="Milan")
-    assert r["MarketType"] == "OVER_UNDER_25"
-    assert r["SelectionName"] == "Over 2,5 goal"
+@pytest.mark.parametrize("shorthand, market_type, selection", [
+    ("OVER 0.5",  "OVER_UNDER_05", "Over 0,5 goal"),
+    ("UNDER 0.5", "OVER_UNDER_05", "Under 0,5 goal"),
+    ("OVER 1.5",  "OVER_UNDER_15", "Over 1,5 goal"),
+    ("UNDER 1.5", "OVER_UNDER_15", "Under 1,5 goal"),
+    ("OVER 2.5",  "OVER_UNDER_25", "Over 2,5 goal"),
+    ("UNDER 2.5", "OVER_UNDER_25", "Under 2,5 goal"),
+    ("OVER 3.5",  "OVER_UNDER_35", "Over 3,5 goal"),
+    ("UNDER 3.5", "OVER_UNDER_35", "Under 3,5 goal"),
+])
+def test_shorthand_over_under_tutte_le_linee(shorthand, market_type, selection):
+    r = mapping.resolve_shorthand(shorthand, home="Inter", away="Milan")
+    assert r["MarketType"] == market_type
+    assert r["SelectionName"] == selection
 
 
 def test_shorthand_over_25_virgola():
@@ -39,11 +51,6 @@ def test_shorthand_over_25_virgola():
     r = mapping.resolve_shorthand("Over 2,5")
     assert r["MarketType"] == "OVER_UNDER_25"
     assert r["SelectionName"] == "Over 2,5 goal"
-
-
-def test_shorthand_under_25():
-    r = mapping.resolve_shorthand("under 2.5")
-    assert r["SelectionName"] == "Under 2,5 goal"
 
 
 def test_shorthand_gg():
