@@ -123,6 +123,25 @@ def test_competizione_non_scambiata_per_squadre():
     assert p["teams"] == "Inter v Milan"
 
 
+def test_messaggio_reale_gol_secondo_tempo():
+    # Messaggio P.Bet reale (formato multi-riga con emoji).
+    p = parse_message(_fixture("real_gol_secondo_tempo_live.txt"))
+    assert p["signal_type"] == "GOL SECONDO TEMPO"       # LIVE rimosso
+    assert p["competition"] == "Myanmar National League 2"
+    assert p["teams"] == "Yangon City v Silver Stars FC"  # lega su riga 🏆 separata
+    assert p["score"] == "6 - 0"
+    assert p["time_"] == "46m"
+    assert p["quota"] == ""                                # "Quota 0,5 HT" = linea, non quota
+    assert p["probability"] == "81.29"
+    assert p["live"] is True
+
+
+def test_quota_sotto_uno_non_e_quota():
+    # "0,5" (linea del mercato) non è una quota valida (le quote sono ≥ 1).
+    assert parse_message("Quota 0,5 HT")["quota"] == ""
+    assert parse_message("Quota 1,85")["quota"] == "1.85"
+
+
 def test_tutte_le_chiavi_presenti():
     p = parse_message("qualcosa")
     for k in ("signal_type", "competition", "teams", "score", "time_",

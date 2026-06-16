@@ -33,10 +33,22 @@ _SCORE_TAIL = re.compile(r'\s+\d+\s*[-–:]\s*\d+(?:\s.*)?$')
 _STATUS_TAIL = re.compile(r'\s+\b(?:live|pre|prematch)\b.*$', re.IGNORECASE)
 
 
+def _is_odds(value: str) -> bool:
+    """Una quota decimale è sempre ≥ 1.0: così "0,5" (linea del mercato, es.
+    "Quota 0,5 HT") non viene scambiato per una quota reale."""
+    try:
+        return float(value) >= 1.0
+    except (TypeError, ValueError):
+        return False
+
+
 def _extract_quota(line: str):
-    """Quota da "Quota X" / "@X" (virgola→punto), numero ben formato."""
+    """Quota da "Quota X" / "@X" (virgola→punto), solo se è una quota valida (≥1)."""
     m = re.search(r'(?:quota|@)[:\s]*(' + _NUM + r')', line, re.IGNORECASE)
-    return m.group(1).replace(',', '.') if m else None
+    if not m:
+        return None
+    val = m.group(1).replace(',', '.')
+    return val if _is_odds(val) else None
 
 
 def _extract_probability(line: str):
@@ -140,7 +152,7 @@ def parse_message(text: str) -> dict:
                     result['probability'] = prob
             elif '📈' in line and not result['quota']:
                 n = _bare_number(line)
-                if n:
+                if n and _is_odds(n):     # niente "0,5" (linea) come quota
                     result['quota'] = n
             continue
 
