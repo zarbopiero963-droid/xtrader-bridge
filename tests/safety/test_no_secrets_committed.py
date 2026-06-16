@@ -29,7 +29,7 @@ def test_nessun_file_vietato_tracciato():
     bad = []
     for f in _tracked_files():
         low = f.lower()
-        base = os.path.basename(f)
+        base = os.path.basename(f).lower()   # case-insensitive: .ENV, Config.json...
         if base in (".env", "config.json"):
             bad.append(f)
         elif low.endswith((".exe", ".zip", ".log")):

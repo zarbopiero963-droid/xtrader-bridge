@@ -18,7 +18,7 @@ if _REPO_ROOT not in sys.path:
 # Categorie = cartelle sotto tests/. L'auto-marking applica il marker giusto in
 # base alla cartella del test, così i selettori `-m` (es. "unit or safety") e i
 # profili commit/pr/release funzionano senza decorare ogni singolo test.
-_DIR_MARKERS = ("unit", "integration", "safety", "smoke", "e2e")
+_DIR_MARKERS = ("unit", "integration", "safety", "smoke", "e2e", "slow", "manual")
 
 
 def pytest_collection_modifyitems(config, items):

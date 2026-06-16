@@ -83,7 +83,7 @@ finiscono segreti/artefatti nel repo (`tests/safety/test_no_secrets_committed.py
 | Profilo | Quando | Selettore |
 |---|---|---|
 | commit | ogni push | `pytest -m "not slow and not manual and not e2e"` (unit+safety+smoke+integration veloci) |
-| pr | ogni PR | `pytest -q` (tutto tranne live/manuali) + merge-simulation |
+| pr | ogni PR | `pytest -m "not manual"` (tutta la suite offline, esclusi i live/manuali) + merge-simulation |
 | release | pre-release / PR-20 | `pytest -m "not manual"` + `tests/e2e` + stress + build EXE (merge-simulation-hard) |
 
 I test pesanti (stress/chaos/e2e completo/recovery) restano su PR/release; tutto
