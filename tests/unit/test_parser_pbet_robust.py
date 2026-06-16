@@ -96,6 +96,33 @@ def test_testo_casuale_non_inventa_segnale():
     assert p["quota"] == ""
 
 
+def test_live_rimosso_da_signal_type():
+    # "OVER 2.5 LIVE" -> signal_type "OVER 2.5" (così il mapping trova l'alias).
+    p = parse_message("P.Bet. OVER 2.5 LIVE\nInter v Milan")
+    assert p["signal_type"] == "OVER 2.5"
+    assert p["live"] is True
+
+
+def test_nome_squadra_che_inizia_con_label_prefix():
+    # "Preston" non deve essere scambiato per l'etichetta "pre".
+    assert parse_message("P.Bet. 1\nPreston v Leeds")["teams"] == "Preston v Leeds"
+
+
+def test_cifre_nei_nomi_squadra():
+    assert parse_message("P.Bet. 1\nSchalke 04 v Inter")["teams"] == "Schalke 04 v Inter"
+
+
+def test_coda_punteggio_rimossa_dalle_squadre():
+    p = parse_message("P.Bet. OVER 2.5\nYangon City v Silver Stars FC 6 - 0 46m")
+    assert p["teams"] == "Yangon City v Silver Stars FC"
+
+
+def test_competizione_non_scambiata_per_squadre():
+    # "Italy - Serie A" (trattino) non deve vincere sul fixture "Inter v Milan" (v).
+    p = parse_message("P.Bet. GG\nItaly - Serie A\nInter v Milan")
+    assert p["teams"] == "Inter v Milan"
+
+
 def test_tutte_le_chiavi_presenti():
     p = parse_message("qualcosa")
     for k in ("signal_type", "competition", "teams", "score", "time_",
