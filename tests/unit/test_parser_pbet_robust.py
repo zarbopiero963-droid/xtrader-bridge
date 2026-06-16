@@ -29,18 +29,37 @@ def test_testo_semplice_equivalente_a_emoji():
     assert p["probability"] == "72.5"
 
 
-def test_separatore_trattino_e_banca():
+def test_plaintext_v_e_banca():
     p = parse_message(_fixture("valid_gg_text.txt"))
     assert p["signal_type"] == "GG"
-    assert p["teams"] == "Arsenal v Chelsea"     # "Arsenal - Chelsea" normalizzato
+    assert p["teams"] == "Arsenal v Chelsea"
     assert p["quota"] == "1.95"
-    assert p["bet_type"] == "LAY"                # "Banca" -> LAY
+    assert p["bet_type"] == "LAY"                # riga "Banca" -> LAY
 
 
 def test_separatori_normalizzati():
     assert parse_message("P.Bet. 1\nInter vs Milan")["teams"] == "Inter v Milan"
-    assert parse_message("P.Bet. 1\nInter - Milan")["teams"] == "Inter v Milan"
     assert parse_message("P.Bet. 1\nInter v Milan")["teams"] == "Inter v Milan"
+    # Il trattino è ammesso solo con l'emoji 🆚 (conferma che è la riga squadre).
+    assert parse_message("P.Bet. 1\n🆚 Inter - Milan")["teams"] == "Inter v Milan"
+    # In testo libero il trattino NON viene preso (ambiguo): squadre vuote.
+    assert parse_message("P.Bet. 1\nInter - Milan")["teams"] == ""
+
+
+def test_bet_type_solo_da_riga_lato():
+    # "Lay" dentro un nome squadra NON deve forzare il lato (P1 wrong-side).
+    assert parse_message("P.Bet. OVER 2.5\nInter v Lay Town\nQuota 1,85")["bet_type"] == "BACK"
+    assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nBanca")["bet_type"] == "LAY"
+    assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nPunta")["bet_type"] == "BACK"
+
+
+def test_quota_malformata_rifiutata():
+    assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nQuota 1.2.3")["quota"] == ""
+
+
+def test_competizione_e_fixture_trattino_non_scrivono_evento():
+    # Entrambe con "-" in testo libero: nessuna squadra (safe), niente evento errato.
+    assert parse_message("P.Bet. GG\nItaly - Serie A\nInter - Milan\nQuota 1,85")["teams"] == ""
 
 
 def test_quota_virgola_e_punto():

@@ -43,8 +43,9 @@ def _is_odds(value: str) -> bool:
 
 
 def _extract_quota(line: str):
-    """Quota da "Quota X" / "@X" (virgola→punto), solo se è una quota valida (≥1)."""
-    m = re.search(r'(?:quota|@)[:\s]*(' + _NUM + r')', line, re.IGNORECASE)
+    """Quota da "Quota X" / "@X" (virgola→punto), solo se è una quota valida (≥1)
+    e ben delimitata (rifiuta token malformati come "1.2.3")."""
+    m = re.search(r'(?:quota|@)[:\s]*(' + _NUM + r')(?![\d.,])', line, re.IGNORECASE)
     if not m:
         return None
     val = m.group(1).replace(',', '.')
@@ -86,12 +87,13 @@ def _teams_from(line: str, sep: re.Pattern):
 
 
 def _find_teams(lines) -> str:
-    """Cerca la riga squadre: prima con " v "/" vs " (cue forte), poi " - "."""
-    for sep in (_SEP_VVS, _SEP_DASH):
-        for raw in lines:
-            t = _teams_from(raw.strip(), sep)
-            if t:
-                return t
+    """Cerca la riga squadre in testo semplice: SOLO " v "/" vs " (cue forte).
+    Il separatore " - " è ammesso solo nelle righe 🆚 (l'emoji conferma le squadre):
+    in testo libero è troppo ambiguo (competizioni come "Italy - Serie A", punteggi)."""
+    for raw in lines:
+        t = _teams_from(raw.strip(), _SEP_VVS)
+        if t:
+            return t
     return ""
 
 
@@ -111,14 +113,22 @@ def parse_message(text: str) -> dict:
         'live': False,
     }
 
-    low = text.lower()
-    # bet_type: BANCA/LAY ha priorità su PUNTA/BACK; default BACK.
-    if re.search(r'\bbanca\b', low) or re.search(r'\blay\b', low):
-        result['bet_type'] = 'LAY'
-    elif re.search(r'\bpunta\b', low) or re.search(r'\bback\b', low):
-        result['bet_type'] = 'BACK'
-    if re.search(r'\blive\b', low):
+    if re.search(r'\blive\b', text.lower()):
         result['live'] = True
+
+    # bet_type SOLO da una riga-lato dedicata (riga corta che è essenzialmente
+    # "Punta"/"Banca"/"Back"/"Lay"), NON da testo libero: così un nome squadra
+    # come "Lay Town" non forza il lato sbagliato (BANCA). Default: BACK.
+    for raw in lines:
+        toks = re.findall(r'[a-zàèéìòùA-Z]+', raw.lower())
+        if not toks or len(toks) > 2:
+            continue
+        if toks[0] in ('banca', 'lay'):
+            result['bet_type'] = 'LAY'
+            break
+        if toks[0] in ('punta', 'back'):
+            result['bet_type'] = 'BACK'
+            break
 
     for raw in lines:
         line = raw.strip()
