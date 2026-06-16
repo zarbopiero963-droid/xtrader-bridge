@@ -262,7 +262,7 @@ class App(ctk.CTk):
         # meglio scartare un segnale incompleto che generare una riga ambigua.
         # Il validatore controlla campi-nome (modalità), BetType e prezzo (> 1.0).
         mode = recognition.normalize_mode(cfg.get("recognition_mode", "NAME_ONLY"))
-        require_price = bool(cfg.get("require_price", True))
+        require_price = validator.require_price_enabled(cfg)
         status, detail = validator.validate(row, mode, require_price=require_price)
         if status != validator.VALID:
             self.after(0, lambda: self._log(
