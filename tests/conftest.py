@@ -24,7 +24,9 @@ _DIR_MARKERS = ("unit", "integration", "safety", "smoke", "e2e", "slow", "manual
 def pytest_collection_modifyitems(config, items):
     for item in items:
         parts = item.nodeid.replace("\\", "/").split("/")
+        # Applica TUTTI i marker presenti nella path (niente break): così un test
+        # in "tests/integration/manual/..." è sia integration sia manual e viene
+        # escluso dai profili commit/pr (-m "not manual" / "not slow ...").
         for marker in _DIR_MARKERS:
             if marker in parts:
                 item.add_marker(getattr(pytest.mark, marker))
-                break

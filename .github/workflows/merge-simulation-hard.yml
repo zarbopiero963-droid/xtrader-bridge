@@ -67,7 +67,7 @@ jobs:
       - name: Controllo file vietati tracciati
         shell: bash
         run: |
-          bad=$(git ls-files | grep -iE '(^|/)\.env$|(^|/)config\.json$|\.(exe|zip|log|spec|secret)$|(^|/)(build|dist)/' || true)
+          bad=$(git ls-files | grep -iE '(^|/)\.env$|(^|/)config\.json$|\.(exe|zip|log|spec|secret|bak)$|(^|/)(build|dist|logs|history)/' || true)
           csv=$(git ls-files | grep -iE '\.csv$' | grep -vx 'data/dizionario_xtrader.csv' || true)
           if [ -n "$bad$csv" ]; then
             echo "::error::File vietati tracciati nel repo:"; echo "$bad"; echo "$csv"; exit 1

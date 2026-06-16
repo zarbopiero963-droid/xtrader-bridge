@@ -33,10 +33,10 @@ def test_nessun_file_vietato_tracciato():
         dirs = [seg.lower() for seg in f.split("/")[:-1]]
         if base in (".env", "config.json"):
             bad.append(f)
-        elif low.endswith((".exe", ".zip", ".log", ".spec", ".secret")):
+        elif low.endswith((".exe", ".zip", ".log", ".spec", ".secret", ".bak")):
             bad.append(f)
-        elif "build" in dirs or "dist" in dirs:   # artefatti PyInstaller tracciati
-            bad.append(f)
+        elif any(seg in ("build", "dist", "logs", "history") for seg in dirs):
+            bad.append(f)   # artefatti PyInstaller, log e dati utente locali
         elif low.endswith(".csv") and f not in _ALLOWED_CSV:
             bad.append(f)
     assert not bad, f"File vietati tracciati nel repo: {bad}"
