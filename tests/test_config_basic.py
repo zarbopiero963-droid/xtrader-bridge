@@ -109,13 +109,13 @@ def test_config_version_aggiunto_e_persistito_da_config_legacy(tmp_path):
     assert on_disk["config_version"] == config_store.CONFIG_VERSION
 
 
-def test_legacy_path_da_executable_se_frozen(monkeypatch):
+def test_legacy_path_da_executable_se_frozen(monkeypatch, tmp_path):
     # Nell'EXE PyInstaller il legacy config va cercato accanto a sys.executable.
+    exe = tmp_path / "app" / "XTrader-Signal-Bridge.exe"
     monkeypatch.setattr(config_store.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(config_store.sys, "executable",
-                        os.path.join("Z", "app", "XTrader-Signal-Bridge.exe"), raising=False)
+    monkeypatch.setattr(config_store.sys, "executable", str(exe), raising=False)
     p = config_store.legacy_config_path()
-    assert p == os.path.join("Z", "app", "config.json")
+    assert p == str(tmp_path / "app" / "config.json")
 
 
 def test_legacy_path_dev_non_frozen(monkeypatch):
