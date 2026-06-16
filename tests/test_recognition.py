@@ -18,7 +18,9 @@ def _id_row(**over):
 
 
 def test_modi_validi():
-    assert rec.VALID_MODES == ("ID_ONLY", "NAME_ONLY", "BOTH")
+    # Confronto come set: non dipende dall'ordine.
+    assert set(rec.VALID_MODES) == {"ID_ONLY", "NAME_ONLY", "BOTH"}
+    assert rec.DEFAULT_MODE in rec.VALID_MODES
     assert rec.DEFAULT_MODE == "NAME_ONLY"
 
 
@@ -60,7 +62,8 @@ def test_both_valido_se_solo_id():
 def test_both_invalido_se_nessun_set_completo():
     row = _name_row(EventName="", MarketId="", SelectionId="")  # né nomi né ID completi
     assert rec.is_valid(row, "BOTH") is False
-    assert rec.missing_fields(row, "BOTH")  # riporta i campi nome mancanti
+    # Solo EventName manca nel set nomi (MarketType/SelectionName presenti).
+    assert rec.missing_fields(row, "BOTH") == ["EventName"]
 
 
 def test_modalita_sconosciuta_tratta_come_name_only():
