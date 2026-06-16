@@ -95,6 +95,22 @@ def test_bettype_lay_maps_to_banca():
     assert row["BetType"] == "BANCA"
 
 
+def test_bettype_lowercase_is_normalized():
+    # back/lay in minuscolo vengono normalizzati, non rifiutati.
+    assert _row(bet_type="back")["BetType"] == "PUNTA"
+    assert _row(bet_type="lay")["BetType"] == "BANCA"
+
+
+def test_unsupported_bettype_is_blocked():
+    # Un bet_type sconosciuto deve essere bloccato, non mappato a un lato valido.
+    raised = False
+    try:
+        _row(bet_type="foo")
+    except ValueError:
+        raised = True
+    assert raised, "bet_type non valido deve sollevare ValueError"
+
+
 def test_points_is_empty_by_default():
     main = _import_main()
     assert _row()["Points"] == main.DEFAULT_POINTS == ""

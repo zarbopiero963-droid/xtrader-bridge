@@ -28,7 +28,7 @@ Provider,EventId,EventName,MarketId,MarketName,MarketType,SelectionId,SelectionN
 Note:
 - **`BetType`** è in italiano: **`PUNTA`** (punta/back) o **`BANCA`** (banca/lay).
 - **`Stake`** non è una colonna del CSV: è gestito in XTrader nell'azione "Piazza Scommessa su Segnali".
-- Non esiste una colonna `Timestamp`: la protezione anti-duplicato è interna al bridge.
+- Non esiste una colonna `Timestamp`: la deduplica anti-duplicato è **pianificata** (interna al bridge, PR-15) e **non ancora implementata**.
 - **`Points`** è lasciato vuoto (lo stake/moltiplicatore lo gestisce XTrader); **`Handicap`** vale `0`.
 - Encoding **UTF-8 con BOM**, tutti i valori tra virgolette.
 - XTrader può validare il segnale tramite `MarketId + SelectionId` **oppure** `EventName + MarketType + SelectionName`; usando i nomi, la lingua del CSV deve coincidere con quella della fonte Segnali di XTrader. Gli ID non arrivano dal messaggio Telegram, quindi oggi restano vuoti.

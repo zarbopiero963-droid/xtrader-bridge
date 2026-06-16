@@ -66,17 +66,23 @@ Legenda severità: 🔴 critico · 🟠 medio-alto/alto · 🟡 medio/basso.
 
 ## Decisione contratto CSV (input del proprietario)
 
-Per XTrader il CSV deve seguire la guida ufficiale:
+Per XTrader il CSV segue il formato dei **CSV di esempio reali** del team XTrader
+(fonte di verità: `docs/xtrader_csv_contract.md`). Header reale a **14 colonne**:
 
-```
-Provider,SelectionId,MarketId,SelectionName,MarketName,EventName,MarketType,BetType,Price,MinPrice,MaxPrice,Points
+```text
+Provider,EventId,EventName,MarketId,MarketName,MarketType,SelectionId,SelectionName,Handicap,Price,MinPrice,MaxPrice,BetType,Points
 ```
 
 - **`Stake`** NON è colonna CSV: è gestito in XTrader nell'azione "Piazza Scommessa su Segnali".
-- **`Timestamp`** NON è colonna CSV: la deduplica è interna al bridge.
-- **`Points`** È colonna CSV (moltiplicatore stake, default `"1"`).
+- **`Timestamp`** NON è colonna CSV: la deduplica (pianificata, PR-15) è interna al bridge.
+- **`BetType`** in italiano: `PUNTA` (back) / `BANCA` (lay).
+- **`Points`** vuoto di default; **`Handicap`** = `0`.
+- Encoding `utf-8-sig` (BOM) + `quoting=QUOTE_ALL`.
 - Validazione XTrader: `MarketId + SelectionId` (ID_ONLY) **oppure**
   `EventName + MarketType + SelectionName` (NAME_ONLY). Con i nomi, la lingua del CSV
   deve coincidere con quella impostata nella fonte Segnali di XTrader (italiano).
+
+> Il contratto a 12 colonne / `BACK`/`LAY` / `Points="1"` indicato inizialmente è
+> **superato** da questo, dopo aver ricevuto gli esempi reali XTrader.
 
 Questa decisione supera l'esempio CSV attuale del README ed è formalizzata in PR-01.

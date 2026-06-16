@@ -123,7 +123,12 @@ def build_csv_row(parsed: dict, provider: str) -> dict:
     selection = "Over 0.5 Goals" if is_goals else home
 
     # XTrader usa PUNTA/BANCA; il segnale interno resta BACK/LAY (default BACK).
-    bet_type = BETTYPE_MAP.get(parsed.get('bet_type', 'BACK'), "PUNTA")
+    # Un bet_type sconosciuto NON deve essere mappato silenziosamente: piazzerebbe
+    # il lato opposto della scommessa. Lo blocchiamo (safety-critical).
+    raw_bet_type = str(parsed.get('bet_type', 'BACK')).strip().upper()
+    if raw_bet_type not in BETTYPE_MAP:
+        raise ValueError(f"bet_type non supportato: {raw_bet_type!r} (atteso BACK o LAY)")
+    bet_type = BETTYPE_MAP[raw_bet_type]
 
     # Gli ID (EventId/MarketId/SelectionId) non sono presenti nel messaggio
     # Telegram: restano vuoti. XTrader valida via EventName+MarketType+SelectionName.
