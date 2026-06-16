@@ -30,9 +30,12 @@ def test_nessun_file_vietato_tracciato():
     for f in _tracked_files():
         low = f.lower()
         base = os.path.basename(f).lower()   # case-insensitive: .ENV, Config.json...
+        dirs = [seg.lower() for seg in f.split("/")[:-1]]
         if base in (".env", "config.json"):
             bad.append(f)
-        elif low.endswith((".exe", ".zip", ".log")):
+        elif low.endswith((".exe", ".zip", ".log", ".spec", ".secret")):
+            bad.append(f)
+        elif "build" in dirs or "dist" in dirs:   # artefatti PyInstaller tracciati
             bad.append(f)
         elif low.endswith(".csv") and f not in _ALLOWED_CSV:
             bad.append(f)

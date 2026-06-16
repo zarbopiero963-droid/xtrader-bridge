@@ -44,7 +44,9 @@ jobs:
       # Profilo release: esclusi i soli test live/manuali.
       - run: python -m pytest tests/safety -q --maxfail=1 -m "not manual"
       - run: python -m pytest tests/integration -q --maxfail=1 -m "not manual"
-      - run: python -m pytest tests/unit tests/smoke -q -m "not manual"
+      # Tutto il resto (unit, smoke, e2e, slow/stress quando esisteranno), escluse
+      # le categorie già girate sopra e i soli test live/manuali (profilo release).
+      - run: python -m pytest -q -m "not manual" --ignore=tests/safety --ignore=tests/integration
 
       - name: Build EXE
         run: >
@@ -65,7 +67,7 @@ jobs:
       - name: Controllo file vietati tracciati
         shell: bash
         run: |
-          bad=$(git ls-files | grep -iE '(^|/)\.env$|(^|/)config\.json$|\.(exe|zip|log)$' || true)
+          bad=$(git ls-files | grep -iE '(^|/)\.env$|(^|/)config\.json$|\.(exe|zip|log|spec|secret)$|(^|/)(build|dist)/' || true)
           csv=$(git ls-files | grep -iE '\.csv$' | grep -vx 'data/dizionario_xtrader.csv' || true)
           if [ -n "$bad$csv" ]; then
             echo "::error::File vietati tracciati nel repo:"; echo "$bad"; echo "$csv"; exit 1

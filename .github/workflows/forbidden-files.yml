@@ -21,9 +21,10 @@ jobs:
           persist-credentials: false
       - name: Controllo file vietati tracciati
         run: |
-          # .env, config.json (ovunque), .exe/.zip/.log tracciati = vietati.
+          # Segreti/artefatti vietati (allineato a .gitignore): .env, config.json,
+          # *.secret, *.spec, *.exe, *.zip, *.log e cartelle build/ dist/ tracciate.
           # Match case-insensitive (-i): blocca anche Config.json, .ENV, secret.EXE...
-          bad=$(git ls-files | grep -iE '(^|/)\.env$|(^|/)config\.json$|\.(exe|zip|log)$' || true)
+          bad=$(git ls-files | grep -iE '(^|/)\.env$|(^|/)config\.json$|\.(exe|zip|log|spec|secret)$|(^|/)(build|dist)/' || true)
           # CSV (estensione case-insensitive): ammesso SOLO il dizionario ufficiale.
           csv=$(git ls-files | grep -iE '\.csv$' | grep -vx 'data/dizionario_xtrader.csv' || true)
           if [ -n "$bad" ] || [ -n "$csv" ]; then
