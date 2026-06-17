@@ -58,6 +58,18 @@ def _has_keyword(text: str, keyword: str) -> bool:
     return re.search(r"\b" + re.escape(kw) + r"\b", text) is not None
 
 
+# Ref ETICHETTATO nel testo: "Ref ABC123", "Rif: 123", "ID-9", "#ABC". Serve a
+# capire se la notifica è esplicitamente per un certo ref. Copre le forme comuni;
+# il formato esatto di XTrader si fisserà al wiring reale.
+_REF_LABEL_RE = re.compile(
+    r"(?:\b(?:ref|rif|reference|id)\b[^\w-]*|#)([0-9a-z][\w-]*)", re.IGNORECASE)
+
+
+def _message_ref_tokens(text: str) -> list:
+    """Token di ref etichettati trovati nel testo (minuscoli). Vuoto se nessuno."""
+    return [m.group(1).lower() for m in _REF_LABEL_RE.finditer(text)]
+
+
 def _has_ref_token(text: str, ref: str) -> bool:
     """True se `ref` compare come **token intero** in `text`, delimitato da inizio/
     fine o da un carattere che NON prosegue il token (`[\\w-]`). Più stretto di
@@ -132,11 +144,18 @@ def match_pending(text: str, pending):
         rest = _remove_first(rest, mk)
         return _has_keyword(rest, sel)
 
+    # Se la notifica porta un ref ETICHETTATO ("Ref/Rif/ID/#") che NON è di
+    # nessun nostro segnale, è esplicitamente per un'altra scommessa: niente
+    # fallback per nomi (eviterebbe di confermare un nostro segnale senza ref con i
+    # nomi coincidenti — es. scommesse ripetute sullo stesso mercato). Fail-safe:
+    # nel dubbio non si associa.
+    pending_refs = {_norm(p.get("ref")).strip() for p in pending if _norm(p.get("ref")).strip()}
+    msg_refs = _message_ref_tokens(t)
+    if msg_refs and not any(r in pending_refs for r in msg_refs):
+        return None
+
     # Il fallback per nomi vale SOLO per i segnali SENZA ref: se un segnale ha un
-    # SignalRef, va confermato solo via quel ref. Così una notifica con un ref
-    # ESTRANEO (es. "Ref XYZ999 ...") non associa per nomi un nostro segnale con
-    # ref diverso, anche se i nomi coincidono (es. scommesse ripetute sullo stesso
-    # mercato).
+    # SignalRef, va confermato solo via quel ref.
     by_fields = [p for p in pending
                  if not _norm(p.get("ref")).strip() and all_name_fields_present(p)]
     return by_fields[0] if len(by_fields) == 1 else None

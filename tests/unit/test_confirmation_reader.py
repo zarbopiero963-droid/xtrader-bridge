@@ -126,6 +126,20 @@ def test_ref_estraneo_non_fa_scattare_il_fallback_nomi():
     assert res.status == cr.UNMATCHED
 
 
+def test_ref_etichettato_estraneo_sopprime_fallback_nomi():
+    # Notifica con ref ETICHETTATO estraneo (XYZ999) ma con i nomi di un nostro
+    # segnale SENZA ref: non deve associarsi per nomi (è per un'altra scommessa).
+    pending = [{"signal_id": "x", "ref": "",
+                "EventName": "Roma v Lazio", "MarketName": "Both Teams To Score",
+                "SelectionName": "Sì"}]
+    res = cr.interpret("Ref XYZ999: Roma v Lazio - Both Teams To Score - Sì piazzata",
+                       pending)
+    assert res.status == cr.UNMATCHED
+    # senza etichetta di ref, lo stesso messaggio per nomi si associa
+    ok = cr.interpret("Roma v Lazio - Both Teams To Score - Sì piazzata", pending)
+    assert ok.status == cr.CONFIRMED
+
+
 def test_ref_ambiguo_non_associa():
     pending = [
         {"signal_id": "a", "ref": "REF"},
