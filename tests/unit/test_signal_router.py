@@ -61,6 +61,21 @@ def test_custom_inesistente_ripiega_su_hardcoded(tmp_path):
     assert res.source == signal_router.HARDCODED
 
 
+def test_chat_id_esplicito_attiva_override(tmp_path):
+    # parser_by_chat senza chat_id singolo in config: il chat id del messaggio
+    # (passato esplicitamente, come fa il live) attiva l'override per-chat.
+    _save_example(str(tmp_path), "PerChat")
+    cfg = {"provider": "TG", "parser_by_chat": {"123": "PerChat"},
+           "recognition_mode": "NAME_ONLY"}
+    res = signal_router.resolve_row(parser_io.fixture_message(), cfg,
+                                    chat_id="123", parsers_dir=str(tmp_path))
+    assert res.source == signal_router.CUSTOM
+    assert res.placeable is True
+    # senza chat id → nessun override → hardcoded
+    res2 = signal_router.resolve_row("qualsiasi", cfg, parsers_dir=str(tmp_path))
+    assert res2.source == signal_router.HARDCODED
+
+
 def test_override_per_chat(tmp_path):
     _save_example(str(tmp_path), "PerChat")
     cfg = {"provider": "TG", "chat_id": "123",

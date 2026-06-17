@@ -241,15 +241,17 @@ class App(ctk.CTk):
                     return
                 text = msg.text or msg.caption or ''
                 cid = cfg.get("chat_id", "").strip()
-                if cid and str(msg.chat_id) != cid:
+                runtime_chat = str(msg.chat_id)
+                if cid and runtime_chat != cid:
                     return
                 # Il prefiltro legacy (P.Bet./📊) vale SOLO per il parser hardcoded.
-                # Se per la chat è attivo un Parser Personalizzato (CP-09), deve
-                # ricevere ogni messaggio (i formati custom non hanno quei marker).
-                if parser_manager.load_active(cfg, cid) is None:
+                # Se per la chat di origine è attivo un Parser Personalizzato
+                # (CP-09), deve ricevere ogni messaggio (i formati custom non hanno
+                # quei marker). Si usa il chat id reale del messaggio.
+                if parser_manager.load_active(cfg, runtime_chat) is None:
                     if 'P.Bet.' not in text and '📊' not in text:
                         return
-                self._process(text, cfg)
+                self._process(text, cfg, chat_id=runtime_chat)
 
             self._tg_app.add_handler(MessageHandler(filters.ALL, _handle))
             await self._tg_app.initialize()
@@ -268,11 +270,11 @@ class App(ctk.CTk):
             self.after(0, self._stop)
 
     # ── PROCESS SIGNAL ────────────────────────
-    def _process(self, text: str, cfg: dict):
+    def _process(self, text: str, cfg: dict, chat_id: str = None):
         # CP-09: instrada al Parser Personalizzato attivo (autoritativo) o, in
         # assenza, al parser hardcoded. Non scrive righe non piazzabili: meglio
         # scartare un segnale incompleto che generare una riga ambigua.
-        result = signal_router.resolve_row(text, cfg)
+        result = signal_router.resolve_row(text, cfg, chat_id=chat_id)
         if not result.placeable:
             detail = (", ".join(result.missing_required)
                       if result.missing_required else result.detail)

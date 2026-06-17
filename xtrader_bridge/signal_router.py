@@ -38,14 +38,18 @@ class RouteResult:
         return self.row is not None
 
 
-def resolve_row(text: str, cfg: dict, *, parsers_dir: str = None) -> RouteResult:
-    """Sceglie il parser e ritorna la riga da scrivere (o `row=None` se scartata)."""
+def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str = None) -> RouteResult:
+    """Sceglie il parser e ritorna la riga da scrivere (o `row=None` se scartata).
+
+    `chat_id` è la chat di ORIGINE del messaggio (dal live): se passato ha la
+    precedenza sul `chat_id` di config, così l'override `parser_by_chat` funziona
+    anche in setup multi-chat dove il singolo `chat_id` non è impostato."""
     mode = recognition.normalize_mode(cfg.get("recognition_mode", "NAME_ONLY"))
     require_price = validator.require_price_enabled(cfg)
     provider = str(cfg.get("provider", "") or "")
-    chat_id = str(cfg.get("chat_id", "") or "")
+    chat = str((chat_id if chat_id is not None else cfg.get("chat_id", "")) or "")
 
-    defn = parser_manager.load_active(cfg, chat_id, parsers_dir)
+    defn = parser_manager.load_active(cfg, chat, parsers_dir)
     if defn is not None:
         # Parser Personalizzato attivo: autoritativo.
         res = custom_pipeline.build_validated_row(
