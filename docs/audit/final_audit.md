@@ -19,10 +19,11 @@
 | Contratto CSV XTrader (14 col) | ✅ Conforme | barriera di test `contract`; `utf-8-sig` + `QUOTE_ALL` |
 | Parser (hardcoded + Parser Personalizzato) | ✅ Coperto da test | catena Telegram→riga validata, fail-closed |
 | Validazione pre-scrittura | ✅ Implementata | nessun segnale invalido raggiunge il CSV |
-| Telegram (filtro chat, hardening) | ✅ Implementato | filtro `chat_id` non permissivo, multi-chat |
+| Telegram — filtro chat (single) | ⚠️ Attivo **solo se `chat_id` configurato** | con `chat_id`/`parser_by_chat` vuoti il default è "ammetti tutte" (legacy) — vedi §4 |
+| Telegram — multi-chat (provider/mode) | ⚠️ Logica pura, **non agganciata al runtime** | `source_manager`/`source_chats` non letti da `app`/`signal_router` — vedi §4 |
 | Config persistente (`%APPDATA%`) | ✅ Implementata | migrazione legacy + backup config corrotta |
 | Scrittura CSV atomica + svuotamento | ✅ Implementata | tmp+rename, header sempre presente |
-| Deduplica / coda / conferma | ✅ Logica pura testata | dedupe, coda multi-segnale, lettura conferme |
+| Deduplica / coda / conferma | ⚠️ Logica pura testata, **non agganciata al runtime** | `signal_dedupe`/`signal_queue`/`confirmation_reader` non usati da `app` — vedi §4 |
 | Guardrail di sicurezza (DRY_RUN, limite/giorno) | ⚠️ Logica pronta, wiring runtime da agganciare | vedi §4 |
 | Build EXE Windows (versionata) | ⚠️ Workflow pronto, build non eseguita qui | verifica manuale |
 | Supply-chain (action SHA-pinned) | ✅ Implementato | test di enforcement |
@@ -55,6 +56,11 @@ manuali su Windows/XTrader e l'attivazione esplicita della modalità reale.
 | 14 | README rotto/incoerente | PR-01, PR-18, PR-20 | ✅ |
 | 15 | Build EXE | PR-18 | ⚠️ workflow pronto, build manuale |
 
+> **Nota:** "Chiuso da" indica la PR che ha implementato la logica. Per alcuni punti
+> (anti-duplicato #5, coda #2, filtro chat #8, multi-chat) la logica è **pura e testata
+> ma non ancora agganciata al runtime** — vedi §4. Non considerarli garanzie operative
+> finché non sono collegati al bot live.
+
 ---
 
 ## 3. Stato per area
@@ -78,18 +84,32 @@ manuali su Windows/XTrader e l'attivazione esplicita della modalità reale.
   SelectionName XTrader; alias ambigui scartati (mai una selezione tradotta a caso).
 
 ### Telegram
-- `signal_router`, `source_manager`, `signal_gate`: filtro `chat_id` non permissivo
-  (chat non approvata → ignorata), multi-chat con provider/mode, `drop_pending_updates`.
+- **Agganciato al runtime** (`app` → `signal_router.should_process`/`resolve_row`):
+  `drop_pending_updates`; filtro chat `is_chat_allowed`. **Attenzione:** con
+  `chat_id` **e** `parser_by_chat` entrambi vuoti, `is_chat_allowed` ammette **tutte**
+  le chat (comportamento legacy). Il filtro è effettivo **solo** se in config c'è un
+  `chat_id` (o un override per chat); la release checklist lo richiede esplicitamente.
+- **NON agganciato al runtime:** `source_manager` e `source_chats` (multi-chat con
+  provider/mode) non sono importati né letti da `app`/`signal_router` → chat disattivate
+  e provider/mode per-chat sono **ignorati a runtime** (`TODO(wiring)`, §4).
 - `event_log`: log con **redazione dei segreti** (mai token Telegram nei log).
 
 ### Config
 - `config_store`: `%APPDATA%\XTraderBridge\config.json`; migrazione legacy; backup
   `.bak` su config corrotta; default sicuri; chiavi additive senza rompere config vecchie.
 
+### Deduplica / coda / conferma (logica pura, NON agganciata)
+- `signal_dedupe` (dedupe + limite/minuto), `signal_queue` (coda multi-segnale +
+  timeout), `confirmation_reader` (lettura conferme XTrader): **moduli puri testati
+  ma non importati né usati da `app`** → a runtime un duplicato/raffica **non** è
+  bloccato e una notifica XTrader **non** marca alcun segnale CONFIRMED/REJECTED/
+  TIMEOUT. Protezione doppia-scommessa **non ancora attiva** (`TODO(wiring)`, §4).
+
 ### Sicurezza (PR-19)
 - `safety_guard`: DRY_RUN (default sicuro = simulazione), warning modalità reale,
-  `DailyLimiter` (limite/giorno UTC con reset) complementare al limite/minuto
-  (`signal_dedupe`). **Vedi §4 sul wiring.**
+  `DailyLimiter` (limite/giorno UTC con reset). **Logica pura testata ma NON
+  agganciata al runtime** (`app` non importa `safety_guard`): oggi `dry_run` non
+  cambia il comportamento di scrittura. **Vedi §4 sul wiring.**
 
 ### Build / supply-chain
 - `build.yaml`: test → compile → PyInstaller `--windowed` → artifact **versionato**
@@ -115,29 +135,51 @@ TOTALE       536 passed, 2 skipped (marcatore "manual" escluso)
 > trasformare in una issue/PR di follow-up dedicata prima dell'uso reale. Non sono
 > note "stantie": descrivono lavoro non ancora fatto.
 
-1. **`TODO(wiring)` — Wiring runtime di DRY_RUN (PR-19)**: la logica (`safety_guard`)
-   e i default di config esistono e sono testati, ma **non sono ancora agganciati al
-   flusso live**: oggi il blocco effettivo della scrittura del CSV operativo in
-   simulazione, il banner di avviso e il collegamento del `DailyLimiter` al runtime
-   restano da implementare e verificare a mano su Windows. **Finché non sono
-   agganciati, il comportamento runtime è invariato** (vedi nota nel PR body di PR-19
-   e in `xtrader_simulation_test.md` §0).
-2. **GUI**: i controller sono testati headless, ma l'avvio GUI, START/STOP, salvataggio
-   da finestra e builder del Parser Personalizzato vanno verificati a mano su Windows.
-3. **Build EXE**: il workflow è pronto ma la build reale non è eseguibile qui.
-4. **XTrader live**: lettura CSV, segnale verde, conferma Telegram → CONFIRMED sono
-   passi manuali in **simulazione** (vedi `xtrader_simulation_test.md`).
+> **Cosa è agganciato al runtime oggi** (`app` → `signal_router`): filtro chat
+> (se `chat_id` configurato), parsing (hardcoded + Parser Personalizzato per chat),
+> validazione contratto, scrittura/svuotamento CSV atomici, log con redazione. Tutto
+> il resto qui sotto è **logica pura testata ma non ancora collegata** al bot live.
+
+1. **`TODO(wiring)` — DRY_RUN / limite giornaliero (PR-19)**: `safety_guard` e i default
+   esistono e sono testati, ma `app` non li importa: oggi `dry_run` **non** sopprime la
+   scrittura del CSV, non c'è banner di avviso e il `DailyLimiter` non gira. Da agganciare
+   e verificare a mano su Windows.
+2. **`TODO(wiring)` — Deduplica / limite-minuto (PR-15)**: `signal_dedupe` non è usato da
+   `app` → due messaggi identici ravvicinati possono **riscrivere il CSV due volte**; la
+   raffica non è limitata. La protezione doppia-scommessa **non è attiva** a runtime.
+3. **`TODO(wiring)` — Coda multi-segnale (PR-16)**: `signal_queue` (modalità + timeout per
+   segnale) non è collegato al flusso live.
+4. **`TODO(wiring)` — Conferma XTrader (PR-17)**: `confirmation_reader` non è usato da
+   `app` → una notifica XTrader **non** marca alcun segnale CONFIRMED/REJECTED/TIMEOUT.
+5. **`TODO(wiring)` — Multi-chat (PR-12)**: `source_manager`/`source_chats` non letti a
+   runtime → chat disattivate e provider/mode per-chat sono **ignorati**.
+6. **`TODO(filter)` — Filtro chat aperto di default**: con `chat_id` e `parser_by_chat`
+   vuoti, `is_chat_allowed` ammette **tutte** le chat. Mitigazione attuale: la release
+   checklist **richiede** un `chat_id` esplicito prima dell'uso (in alternativa, irrigidire
+   `is_chat_allowed`/`_start` per esigere una chat).
+7. **GUI**: i controller sono testati headless, ma avvio GUI, START/STOP, salvataggio e
+   builder del Parser Personalizzato vanno verificati a mano su Windows.
+8. **Build EXE**: workflow pronto, build reale non eseguibile qui.
+9. **XTrader live**: lettura CSV, segnale verde, conferma Telegram sono passi manuali in
+   **simulazione** (vedi `xtrader_simulation_test.md`).
 
 ---
 
-## 5. Invarianti di sicurezza (verificate nei test offline)
+## 5. Invarianti di sicurezza
 
-- Nessun segnale invalido raggiunge il CSV (validator + gate).
-- Una sola riga attiva quando il design è one-signal-at-a-time; header sempre presente.
-- Filtro `chat_id` non indebolito; chat non approvata → ignorata.
+**Attive a runtime (e verificate nei test offline):**
+- Nessun segnale invalido raggiunge il CSV (validator + gate nel percorso `resolve_row`).
+- Scrittura/svuotamento CSV atomici; header sempre presente.
+- Filtro chat effettivo **quando `chat_id` è configurato** (con config vuota ammette
+  tutte — vedi §4 punto 6; la checklist richiede un `chat_id`).
 - Nessun token/segreto nei log (redazione) né nel repo (`forbidden-files` + test).
 - Contratto CSV invariato dalle PR successive a PR-01 (barriera `contract`).
 - Merge sempre **manuale** del proprietario; nessun auto-merge.
+
+**Implementate come logica pura ma NON ancora attive a runtime** (§4): protezione
+duplicati/raffica, coda multi-segnale, conferma XTrader, DRY_RUN/limite-giorno,
+multi-chat provider/mode. **Non vanno considerate garanzie operative** finché non
+sono agganciate.
 
 ---
 
