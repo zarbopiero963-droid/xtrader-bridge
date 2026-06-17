@@ -185,13 +185,15 @@ class App(ctk.CTk):
         self._log_box.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
     # ── LOG ───────────────────────────────────
-    def _log(self, msg: str, level: str = "INFO"):
+    def _log(self, msg: str, level: str = None):
         ts = datetime.now().strftime("%H:%M:%S")
         self._log_box.insert("end", f"[{ts}] {msg}\n")
         self._log_box.see("end")
-        # Storico persistente in AppData (#11): sopravvive al riavvio. Best-effort:
-        # un errore di filesystem non deve interrompere la GUI.
-        event_log.append_entry(msg, level)
+        # Storico persistente in AppData (#11): sopravvive al riavvio. Il livello,
+        # se non passato, è derivato dal marker del messaggio (❌/⚠️/📱) così lo
+        # storico distingue errori/segnali. Best-effort: un errore di filesystem
+        # non deve interrompere la GUI.
+        event_log.append_entry(msg, level or event_log.classify(msg))
 
     # ── START / STOP ──────────────────────────
     def _start(self):

@@ -21,6 +21,16 @@ def test_normalize_level():
     assert el.normalize_level(None) == "INFO"
 
 
+def test_classify_dal_marker():
+    # Lo storico distingue errori/segnali derivando il livello dal marker (#11).
+    assert el.classify("❌ CSV non scrivibile") == "ERROR"
+    assert el.classify("⚠️ Segnale scartato (custom/NOT_READY)") == "WARNING"
+    assert el.classify("📱 Segnale (custom): Inter v Milan") == "SIGNAL"
+    assert el.classify("🚀 Bridge avviato!") == "INFO"     # nessun marker noto
+    assert el.classify("") == "INFO"
+    assert el.classify("   ❌ con spazi iniziali") == "ERROR"   # lstrip
+
+
 # ── persistenza: append + rilettura (storico dopo restart) ───────────────────
 
 def test_append_e_read_round_trip(tmp_path):

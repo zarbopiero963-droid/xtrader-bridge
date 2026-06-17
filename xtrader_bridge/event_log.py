@@ -30,6 +30,27 @@ def normalize_level(level) -> str:
     return lvl if lvl in LEVELS else DEFAULT_LEVEL
 
 
+# Marker emoji con cui la GUI prefissa i messaggi → livello di log. Serve a
+# derivare automaticamente il livello quando il chiamante non lo passa, così lo
+# storico persistente distingue errori/segnali e `filter_by_level` è utile (#11).
+_MARKER_LEVEL = (
+    ("❌", "ERROR"),
+    ("⚠️", "WARNING"),
+    ("📱", "SIGNAL"),
+)
+
+
+def classify(message: str) -> str:
+    """Deriva il livello dal marker iniziale del messaggio (❌→ERROR, ⚠️→WARNING,
+    📱→SIGNAL); altrimenti INFO. Permette di classificare lo storico senza dover
+    annotare a mano ogni punto di log della GUI."""
+    text = str(message or "").lstrip()
+    for marker, level in _MARKER_LEVEL:
+        if text.startswith(marker):
+            return level
+    return DEFAULT_LEVEL
+
+
 def format_entry(message: str, level=DEFAULT_LEVEL, when: datetime = None) -> str:
     """Riga di log formattata: ``[HH:MM:SS] [LEVEL] messaggio``."""
     when = when or datetime.now()
