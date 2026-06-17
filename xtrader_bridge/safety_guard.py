@@ -74,7 +74,7 @@ def _require_positive_int(value, name: str) -> int:
     try:
         f = float(value)
     except (TypeError, ValueError):
-        raise ValueError(f"{name} non valido: {value!r}")
+        raise ValueError(f"{name} non valido: {value!r}") from None
     if not math.isfinite(f) or f <= 0 or f != int(f):
         raise ValueError(f"{name} deve essere un intero > 0 (ricevuto {value!r})")
     return int(f)
@@ -89,7 +89,7 @@ def _require_finite_now(now) -> float:
     try:
         f = float(now)
     except (TypeError, ValueError):
-        raise ValueError(f"now non valido: {now!r}")
+        raise ValueError(f"now non valido: {now!r}") from None
     if not math.isfinite(f):
         raise ValueError(f"now deve essere finito (ricevuto {now!r})")
     return f
