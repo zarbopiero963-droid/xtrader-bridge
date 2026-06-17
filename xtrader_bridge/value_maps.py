@@ -21,10 +21,12 @@ Regole di sicurezza:
 
 from . import dizionario, mapping
 
-# Lookup normalizzato coerente col dizionario (minuscolo, trim, spazi collassati).
-# Usa la funzione pubblica del dizionario: fonte unica, niente accoppiamento a
-# un helper privato.
-_norm = dizionario.normalize
+# Normalizzazione del lookup: usa quella shorthand di `mapping` (minuscolo,
+# spazi, virgola→punto, suffisso FT rimosso). È un superset sicuro della
+# normalizzazione del dizionario, così le grafie comuni dei messaggi Telegram
+# ("OVER 2,5", "OVER 2.5 FT") combaciano con le mappe; per gli alias interni del
+# dizionario (con underscore) non cambia nulla.
+_norm = mapping.normalize_shorthand
 
 
 # ── built-in: BetType (lato scommessa) ─────────────────────────────────────

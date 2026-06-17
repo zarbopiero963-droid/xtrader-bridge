@@ -114,6 +114,19 @@ def test_shorthand_con_placeholder_resta_non_mappato():
     assert vm.resolve("1", "marketname", reg) == "Esito finale"  # MarketName non è placeholder
 
 
+def test_shorthand_grafie_virgola_e_ft():
+    # "OVER 2,5" (virgola) e "OVER 2.5 FT" (suffisso FT) devono risolvere come
+    # nel percorso legacy (mapping.normalize_shorthand). [Codex P2]
+    rows = [{"MarketAliasTelegram": "over_under_2.5_ft", "SelectionAliasTelegram": "over 2.5 ft",
+             "MarketType_XTrader": "OVER_UNDER_25", "MarketName_XTrader": "Over/Under 2.5",
+             "SelectionName_XTrader": "Over 2,5 gol"}]
+    reg = vm.registry(include_dizionario=True, rows=rows)
+    assert vm.resolve("OVER 2.5", "marketname", reg) == "Over/Under 2.5"
+    assert vm.resolve("OVER 2,5", "marketname", reg) == "Over/Under 2.5"   # virgola
+    assert vm.resolve("OVER 2.5 FT", "marketname", reg) == "Over/Under 2.5"  # suffisso FT
+    assert vm.resolve("over 2,5", "selectionname", reg) == "Over 2,5 gol"
+
+
 def test_shorthand_su_dizionario_reale():
     # Smoke sul dizionario ufficiale: "GG" → selezione "Sì".
     reg = vm.registry(include_dizionario=True)
