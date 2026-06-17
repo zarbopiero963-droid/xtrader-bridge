@@ -34,7 +34,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 
-from . import config_store
+from . import config_store, transforms
 from .csv_writer import CSV_HEADER
 
 # Versione dello schema del file parser: serve a gestire migrazioni future
@@ -77,6 +77,7 @@ class FieldRule:
     start_after: str = ""       # "Inizia dopo": delimitatore sinistro (testo/emoji)
     end_before: str = ""        # "Finisce prima di": delimitatore destro (testo/emoji)
     fixed_value: str = ""       # valore costante (alternativo all'estrazione)
+    transform: str = ""         # nome trasformazione (CP-05), applicata dopo l'estrazione
     value_map: str = ""         # nome value-map per tradurre il valore (opz.)
     required: bool = False      # obbligatorio: se vuoto → parser "Non pronto"
 
@@ -184,6 +185,13 @@ def validate_parser_def(defn: CustomParserDef) -> list:
             errors.append(
                 f"{where}: ha sia 'fixed_value' sia 'start_after'/'end_before' "
                 "(scegline uno: valore costante OPPURE estrazione)."
+            )
+
+        # Trasformazione (CP-05) deve essere una nota.
+        if rule.transform and not transforms.has_transform(rule.transform):
+            errors.append(
+                f"{where}: trasformazione sconosciuta {rule.transform!r}; "
+                f"ammesse: {', '.join(transforms.available_transforms())}."
             )
 
     return errors
