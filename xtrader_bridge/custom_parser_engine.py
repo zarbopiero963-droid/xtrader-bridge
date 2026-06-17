@@ -5,9 +5,9 @@ Telegram e produce i valori per le colonne del contratto CSV XTrader.
 
 Scope (estrazione CP-02 + applicazione value-map CP-03):
 - `extract_value` estrae il valore GREZZO (nessuna traduzione);
-- `apply_parser` applica poi la value-map della regola (CP-03), producendo il
-  valore XTrader; un valore non mappato resta vuoto (→ "Non pronto");
-- NON applica trasformazioni configurabili, es. somma-gol → Over (somma).5 (CP-05);
+- `apply_parser` applica poi, nell'ordine, la trasformazione (CP-05) e la
+  value-map (CP-03) della regola, producendo il valore XTrader; un valore non
+  mappato/non trasformabile resta vuoto (→ "Non pronto");
 - NON scrive il CSV (CP-04);
 - NON tocca la GUI (CP-06).
 
@@ -33,7 +33,7 @@ Semantica di una regola (`FieldRule`):
 
 from dataclasses import dataclass, field
 
-from . import value_maps
+from . import transforms, value_maps
 from .csv_writer import CSV_HEADER
 from .custom_parser import CustomParserDef, FieldRule
 
@@ -127,6 +127,9 @@ def apply_parser(defn: CustomParserDef, text: str, value_maps_registry: dict = N
     required_targets = []
     for rule in defn.rules:
         value = extract_value(text, rule)
+        # Ordine: estrazione → trasformazione (CP-05) → value-map (CP-03).
+        if rule.transform:
+            value = transforms.apply(value, rule.transform)
         if rule.value_map:
             value = value_maps.resolve(value, rule.value_map, value_maps_registry)
         values[rule.target] = value

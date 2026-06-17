@@ -338,9 +338,22 @@ NAME_ONLY); `require_price=False` bypassa; `is_placeable`.
 **Micro-audit:** nessuna scrittura CSV; `app`/GUI/contratto invariati.
 **Audit totale:** segnale custom validato col contratto prima della scrittura.
 
-## CP-05..CP-10 (pianificate, da affinare con il proprietario)
-- **CP-05** — trasformazioni configurabili (es. somma-gol → Over (somma).5,
-  normalizzazione quota).
+## CP-05 — custom-parser/transforms ✅ (consegnato)
+**Obiettivo:** derivare un valore calcolato da quello estratto (es. somma-gol →
+linea Over), configurabile per regola.
+**Tecnico:** `xtrader_bridge/transforms.py` — registro di trasformazioni;
+built-in `score_to_over` (punteggio "6-0"/"6:0" → "Over 6,5"); `apply`,
+`has_transform`, `available_transforms`. `FieldRule.transform` (CP-01); il motore
+applica, nell'ordine, **estrazione → trasformazione → value-map**. Sicuro:
+trasformazione sconosciuta o input non interpretabile → vuoto (→ "Non pronto").
+`validate_parser_def` rifiuta nomi di trasformazione sconosciuti.
+**Test hard:** `tests/unit/test_transforms.py` — score_to_over (vari punteggi /
+input non validi / sconosciuta); round-trip `transform`; validate nota/ignota;
+integrazione `apply_parser` (punteggio → "Over 6,5"; input non valido → "Non pronto").
+**Micro-audit:** nessuna scrittura CSV/GUI; fail-closed; contratto invariato.
+**Audit totale:** linea Over calcolata dalla somma gol, senza hardcoding nel parser.
+
+## CP-06..CP-10 (pianificate, da affinare con il proprietario)
 - **CP-06** — costruttore GUI (Inizia dopo / Finisce prima di / obbligatorio /
   value-map a tendina / test live su messaggio incollato).
 - **CP-07** — gestione parser: selezione/attivazione per chat sorgente, default.
