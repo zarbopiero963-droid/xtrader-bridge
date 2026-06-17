@@ -36,6 +36,22 @@ def test_nessun_file_ignorato_tracciato():
     assert not ignored, f"File ignorati da .gitignore ma tracciati: {ignored}"
 
 
+def test_nessun_artefatto_case_variant():
+    # Rete case-insensitive (su Linux .gitignore è case-sensitive): blocca le varianti
+    # Windows Config.json/.ENV/secret.EXE/signals.CSV. CSV: solo l'esatto dizionario.
+    bad = []
+    for f in _git(["ls-files"]):
+        low = f.lower()
+        base = os.path.basename(f).lower()
+        if base in (".env", "config.json"):
+            bad.append(f)
+        elif low.endswith((".exe", ".zip", ".log", ".spec", ".secret", ".bak")):
+            bad.append(f)
+        elif low.endswith(".csv") and f != "data/dizionario_xtrader.csv":
+            bad.append(f)
+    assert not bad, f"Artefatti/segreti tracciati (qualsiasi maiuscola): {bad}"
+
+
 def test_nessun_token_telegram_in_chiaro():
     # Scansione contenuti: nessun token bot Telegram in chiaro nei file tracciati.
     # Il token NON viene stampato (solo il path), per non riesporlo nei log.
