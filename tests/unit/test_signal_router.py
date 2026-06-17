@@ -199,6 +199,14 @@ def test_is_chat_allowed_sorgenti_multichat():
     assert signal_router.is_chat_allowed(cfg, "999") is False   # non configurata → no
 
 
+def test_is_chat_allowed_sole_sorgenti_disattivate_blocca_tutte():
+    # Sorgenti configurate ma tutte disattivate (nessun chat_id/parser_by_chat):
+    # NON si torna a "ammetti tutte" — disattivarle blocca ogni chat.
+    cfg = {"source_chats": [{"chat_id": "111", "enabled": False}]}
+    assert signal_router.is_chat_allowed(cfg, "111") is False
+    assert signal_router.is_chat_allowed(cfg, "999") is False
+
+
 def test_is_chat_allowed_union_chatid_e_sorgenti():
     # chat_id globale + una sorgente attiva: ammesse entrambe (retro-compatibile).
     cfg = {"chat_id": "42", "source_chats": [{"chat_id": "111", "enabled": True}]}

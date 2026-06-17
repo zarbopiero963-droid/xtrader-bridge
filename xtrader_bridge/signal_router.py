@@ -49,17 +49,23 @@ def _chat_approved_for_custom(cfg: dict, chat: str) -> bool:
 def is_chat_allowed(cfg: dict, chat: str) -> bool:
     """Chat che il bridge può processare nel live: quella CONFIGURATA (`chat_id`),
     le chiavi `parser_by_chat` e le **sorgenti multi-chat ATTIVE** (`source_chats`
-    con `enabled=True`, PR-24). Una sorgente disattivata NON è ammessa. Se NULLA è
-    configurato (chat_id vuoto, mappa vuota, nessuna sorgente attiva) → comportamento
-    legacy: tutte ammesse (responsabilità dell'utente). Gatea sia il percorso custom
-    sia l'hardcoded: nessuna scrittura per chat non autorizzate."""
+    con `enabled=True`, PR-24). Una sorgente disattivata NON è ammessa.
+
+    Comportamento legacy "tutte ammesse" SOLO se NULLA è configurato: `chat_id` vuoto,
+    `parser_by_chat` vuota e **nessuna** `source_chats` (anche disattivata). Così
+    disattivare tutte le sorgenti **blocca tutte** le chat, non riapre il gate.
+    Gatea sia il percorso custom sia l'hardcoded: nessuna scrittura per chat non
+    autorizzate."""
     chat = str(chat or "")
     configured = str(cfg.get("chat_id", "") or "").strip()
     per_chat = parser_manager.parser_by_chat(cfg)
-    source_ids = source_manager.enabled_chat_ids(cfg)
-    if not configured and not per_chat and not source_ids:
+    # `has_sources`: esiste ALMENO una sorgente configurata (anche disattivata) →
+    # l'utente ha definito un set di sorgenti, quindi NON si torna a "ammetti tutte".
+    has_sources = bool(source_manager.source_chats(cfg))
+    source_ids = set(map(str, source_manager.enabled_chat_ids(cfg)))   # solo le attive
+    if not configured and not per_chat and not has_sources:
         return True
-    allowed = set(per_chat.keys()) | set(source_ids)
+    allowed = set(per_chat.keys()) | source_ids
     if configured:
         allowed.add(configured)
     return chat in allowed
