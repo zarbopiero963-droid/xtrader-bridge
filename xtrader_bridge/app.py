@@ -17,7 +17,7 @@ from .config_store import (
     save_config,
 )
 from .csv_writer import init_csv, write_csv
-from . import signal_router
+from . import settings_validation, signal_router
 from .signal_gate import SignalGate
 
 try:
@@ -57,11 +57,17 @@ class App(ctk.CTk):
         return load_config(CONFIG_FILE)
 
     def _save_config(self) -> dict:
+        # Timeout robusto: un valore non numerico non deve crashare il salvataggio
+        # (PR-13/#10). Se invalido, si tiene il default e si avvisa nel log.
+        delay, delay_err = settings_validation.parse_timeout(self._e_delay.get())
+        if delay_err:
+            delay = settings_validation.DEFAULT_TIMEOUT
+            self._log(f"⚠️ {delay_err} Uso {delay}s.")
         cfg = {
             "bot_token":   self._e_token.get().strip(),
             "chat_id":     self._e_chat.get().strip(),
             "csv_path":    self._e_csv.get().strip(),
-            "clear_delay": int(self._e_delay.get().strip() or 90),
+            "clear_delay": delay,
             "provider":    self._e_provider.get().strip() or "TelegramBot",
             # Preservati finché non c'è un campo GUI dedicato (PR-13): senza questo
             # un salvataggio (anche all'avvio) cancellerebbe l'opt-out require_price.
@@ -191,11 +197,25 @@ class App(ctk.CTk):
             # silenzioso nel thread del bot (PR-11, #11).
             self._log("❌ python-telegram-bot non disponibile: impossibile avviare il listener.")
             return
-        cfg = self._save_config()
-        if not cfg["bot_token"]:
+        # Validazione sui valori GREZZI dei campi PRIMA del salvataggio
+        # (PR-13/#10): _save_config normalizza il timeout invalido al default,
+        # quindi validare la cfg dopo il save non vedrebbe più l'errore e il
+        # bridge partirebbe a 90s ignorando l'input dell'utente.
+        raw = {
+            "bot_token":   self._e_token.get().strip(),
+            "csv_path":    self._e_csv.get().strip(),
+            "clear_delay": self._e_delay.get().strip(),
+        }
+        if not raw["bot_token"]:
             self._log("❌ Inserisci il Bot Token prima di avviare!")
             return
+        errors = settings_validation.validate_settings(raw)
+        if errors:
+            for err in errors:
+                self._log(f"❌ {err}")
+            return
 
+        cfg = self._save_config()
         self._running = True
         self._status_lbl.configure(text="⬤  ATTIVO", text_color="#66bb6a")
         self._btn_start.configure(state="disabled")
