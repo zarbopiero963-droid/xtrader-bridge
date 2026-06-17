@@ -14,7 +14,9 @@ WORKFLOWS = sorted((Path(__file__).resolve().parents[2] / ".github" / "workflows
 
 # `uses: owner/repo@<ref>` (ignora i `uses:` locali `./...` e i docker `docker://`).
 _USES_RE = re.compile(r"uses:\s*([^\s@]+)@([^\s#]+)")
-_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+# `re.IGNORECASE`: uno SHA Git può comparire in maiuscolo/misto ed è comunque un
+# pin valido; senza ignorecase il test lo rigetterebbe per errore (falso positivo).
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 
 
 def _external_uses():
