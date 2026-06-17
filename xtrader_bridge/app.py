@@ -21,6 +21,7 @@ from .config_store import (
 )
 from .csv_writer import init_csv, write_rows
 from . import (
+    confirmation_reader,
     event_log,
     live_guard,
     safety_guard,
@@ -380,6 +381,12 @@ class App(ctk.CTk):
                     return
                 text = msg.text or msg.caption or ''
                 runtime_chat = str(msg.chat_id)
+                # PR-23: la chat notifiche XTrader (SEPARATA dalle sorgenti) porta
+                # ESITI, non segnali → percorso di conferma, non di scrittura.
+                notif = str(cfg.get("xtrader_notification_chat_id", "") or "").strip()
+                if notif and runtime_chat == notif:
+                    self._process_confirmation(text, cfg)
+                    return
                 # PR-11: decisione di instradamento estratta e testabile.
                 # Gatea il filtro chat (CP-09, chat configurata ∪ parser_by_chat)
                 # e il prefiltro legacy P.Bet./📊 (solo per il parser hardcoded):
@@ -509,6 +516,52 @@ class App(ctk.CTk):
         elif decision == live_guard.DAILY_LIMITED:
             self.after(0, lambda: self._log(
                 "🚦 Limite giornaliero raggiunto: segnale ignorato."))
+
+    def _process_confirmation(self, text: str, cfg: dict) -> None:
+        """Interpreta una notifica XTrader (PR-23) rispetto ai segnali in attesa e,
+        se associata, marca l'esito rimuovendo il segnale dalla coda + CSV.
+
+        - CONFIRMED (piazzata) o REJECTED (rifiutata/errore) → rimuove il segnale
+          (scelta del proprietario: una volta che XTrader ha risposto, la riga non
+          resta nel CSV);
+        - UNKNOWN (associato ma esito non chiaro) / UNMATCHED (di un'altra scommessa)
+          → solo log, nessuna modifica. Il TIMEOUT è già coperto dalla scadenza coda.
+        """
+        confirm_kw = cfg.get("confirmation_keywords") or None
+        reject_kw = cfg.get("rejection_keywords") or None
+        with self._queue_lock:
+            pending = self._queue.pending() if self._queue is not None else []
+        # interpret è puro: lo si chiama fuori dal lock (nessuna mutazione qui).
+        result = confirmation_reader.interpret(
+            text, pending, confirm_keywords=confirm_kw, reject_keywords=reject_kw)
+
+        if result.status in (confirmation_reader.CONFIRMED, confirmation_reader.REJECTED):
+            path = cfg["csv_path"]
+            write_error = None
+            with self._queue_lock:
+                self._queue.confirm(result.signal_id)   # rimuove il segnale dalla coda
+                rows = self._queue.active_rows()
+                try:
+                    write_rows(rows, path)
+                except Exception as ex:   # noqa: BLE001 — esito a log, no crash
+                    write_error = ex
+            esito = ("confermato (CONFIRMED)"
+                     if result.status == confirmation_reader.CONFIRMED
+                     else "rifiutato (REJECTED)")
+            if write_error is not None:
+                self.after(0, lambda e=write_error: self._log(
+                    f"❌ Aggiornamento CSV dopo conferma fallito: {e}. Riprovo."))
+                self._schedule_expiry(path, delay=self._queue_timeout)   # converge su disco
+                return
+            self.after(0, lambda v=esito: self._log(
+                f"✅ XTrader: segnale {v} → rimosso dal CSV"))
+            self._schedule_expiry(path)   # riprogramma per i segnali eventualmente rimasti
+        elif result.status == confirmation_reader.UNKNOWN:
+            self.after(0, lambda: self._log(
+                "ℹ️ Notifica XTrader associata a un segnale ma esito non chiaro: ignorata."))
+        else:  # UNMATCHED
+            self.after(0, lambda: self._log(
+                "ℹ️ Notifica XTrader non associata ad alcun segnale attivo: ignorata."))
 
     def _schedule_expiry(self, path: str, delay=None) -> None:
         """(Ri)programma il tick di scadenza (PR-22). Con `delay=None` lo programma
