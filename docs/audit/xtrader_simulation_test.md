@@ -8,9 +8,19 @@
 
 ## 0. Premesse di sicurezza
 
-- XTrader in **Modalità Simulazione** (mai reale durante il collaudo).
-- Bridge in **DRY_RUN** finché non si è verificata l'intera catena; passare a
-  modalità reale solo consapevolmente e con stake minimo.
+> **Comportamento ATTUALE di DRY_RUN (importante).** Il flag `dry_run` esiste in
+> config (default = simulazione) e la logica `safety_guard` è testata, ma il
+> **wiring runtime non è ancora attivo** (`TODO(wiring)`, vedi `final_audit.md` §4):
+> oggi il bridge **non** modifica ancora il proprio comportamento di scrittura in
+> base a `dry_run`. Per questo, durante il collaudo, la sicurezza è garantita da
+> **XTrader in Modalità Simulazione**, non dal flag del bridge. I passi "atteso"
+> che menzionano DRY_RUN descrivono il comportamento **desiderato dopo il wiring**;
+> sono segnalati di volta in volta.
+
+- XTrader in **Modalità Simulazione** (mai reale durante il collaudo) — è questa,
+  oggi, la garanzia primaria.
+- Bridge in **DRY_RUN** in config; passare a modalità reale solo consapevolmente,
+  con stake minimo e **dopo** che il wiring runtime è stato implementato e verificato.
 - Usare un bot Telegram e una chat **di test**, non quelli di produzione.
 
 ## 1. Setup

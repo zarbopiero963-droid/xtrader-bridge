@@ -97,7 +97,7 @@ manuali su Windows/XTrader e l'attivazione esplicita della modalità reale.
 - Tutte le action dei workflow sono **fissate a SHA** (hardening) con test di enforcement.
 
 ### Test / coverage
-- Vedi §below — 536 passed, 2 skipped (offline). I test live/manuali sono marcati `manual`.
+- Vedi sotto — 536 passed, 2 skipped (offline). I test live/manuali sono marcati `manual`.
 
 ```
 unit         471 test
@@ -111,12 +111,17 @@ TOTALE       536 passed, 2 skipped (marcatore "manual" escluso)
 
 ## 4. Limiti noti / lavoro residuo (onesto)
 
-1. **Wiring runtime di DRY_RUN (PR-19)**: la logica (`safety_guard`) e i default di
-   config esistono e sono testati, ma **non sono ancora agganciati al flusso live**:
-   oggi il blocco effettivo della scrittura del CSV operativo in simulazione, il
-   banner di avviso e il collegamento del `DailyLimiter` al runtime restano da
-   implementare e verificare a mano su Windows. **Finché non sono agganciati, il
-   comportamento runtime è invariato.**
+> I punti seguenti sono **TODO rintracciabili** (greppabili come `TODO(wiring)`): da
+> trasformare in una issue/PR di follow-up dedicata prima dell'uso reale. Non sono
+> note "stantie": descrivono lavoro non ancora fatto.
+
+1. **`TODO(wiring)` — Wiring runtime di DRY_RUN (PR-19)**: la logica (`safety_guard`)
+   e i default di config esistono e sono testati, ma **non sono ancora agganciati al
+   flusso live**: oggi il blocco effettivo della scrittura del CSV operativo in
+   simulazione, il banner di avviso e il collegamento del `DailyLimiter` al runtime
+   restano da implementare e verificare a mano su Windows. **Finché non sono
+   agganciati, il comportamento runtime è invariato** (vedi nota nel PR body di PR-19
+   e in `xtrader_simulation_test.md` §0).
 2. **GUI**: i controller sono testati headless, ma l'avvio GUI, START/STOP, salvataggio
    da finestra e builder del Parser Personalizzato vanno verificati a mano su Windows.
 3. **Build EXE**: il workflow è pronto ma la build reale non è eseguibile qui.
