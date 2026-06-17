@@ -21,6 +21,7 @@ successive (PR-16 coda, PR-17 conferma XTrader); l'aggancio al runtime è separa
 
 import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -71,7 +72,10 @@ class SignalTracker:
     _seen: list = field(default_factory=list)   # (hash, epoch_seconds)
 
     def _prune(self, now: float) -> None:
-        cutoff = now - self.dedupe_window
+        # Si conserva la storia per il MASSIMO tra finestra dedup e 60s: altrimenti
+        # con una finestra dedup < 60s il conteggio al minuto verrebbe falsato
+        # (voci rimosse prima di contarle) e il limite sarebbe aggirabile.
+        cutoff = now - max(self.dedupe_window, 60)
         self._seen = [(h, t) for (h, t) in self._seen if t >= cutoff]
 
     def register(self, text: str, *, now: float = None) -> RegisterResult:
@@ -85,7 +89,10 @@ class SignalTracker:
         now = time.time() if now is None else now
         self._prune(now)
         h = message_hash(text)
-        if any(hh == h for (hh, _) in self._seen):
+        # Duplicato: stesso hash entro la finestra di deduplica (NON l'intera
+        # storia conservata, che può essere più lunga per il conteggio al minuto).
+        dedupe_cutoff = now - self.dedupe_window
+        if any(hh == h and t >= dedupe_cutoff for (hh, t) in self._seen):
             return RegisterResult(DUPLICATE, h)
         minute_ago = now - 60
         recent = sum(1 for (_, t) in self._seen if t >= minute_ago)
@@ -113,16 +120,26 @@ class SignalTracker:
 
 
 def save_state(tracker: SignalTracker, path: str) -> bool:
-    """Salva lo stato del tracker su file JSON (best-effort). True se riuscito."""
+    """Salva lo stato del tracker su file JSON **atomicamente** (best-effort): si
+    scrive un `.tmp` e poi `os.replace`. Così un'interruzione/errore lascia la
+    history precedente intatta, invece di troncarla e perdere la protezione
+    anti-duplicato dopo un riavvio. True se riuscito."""
+    tmp = path + ".tmp"
     try:
-        import os
         d = os.path.dirname(os.path.abspath(path))
         if d:
             os.makedirs(d, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(tracker.state(), f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
         return True
     except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         return False
 
 

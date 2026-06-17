@@ -50,6 +50,16 @@ def test_limite_al_minuto():
     assert t.register("segnale numero 20", now=1019).status == sd.RATE_LIMITED
 
 
+def test_limite_non_aggirabile_con_finestra_dedup_corta():
+    # Anche con dedupe_window < 60s il limite/minuto deve reggere: la storia per
+    # il conteggio si conserva per 60s (max tra finestra e minuto).
+    t = sd.SignalTracker(max_per_minute=20, dedupe_window=10)
+    for i in range(20):
+        assert t.register(f"segnale {i}", now=1000 + i).status == sd.NEW
+    # il 21esimo entro il minuto è limitato, non NEW (niente bypass)
+    assert t.register("segnale 20", now=1020).status == sd.RATE_LIMITED
+
+
 def test_limite_si_libera_dopo_un_minuto():
     t = sd.SignalTracker(max_per_minute=2, dedupe_window=600)
     assert t.register("a", now=1000).status == sd.NEW
@@ -78,6 +88,34 @@ def test_restart_riconosce_duplicati_recenti(tmp_path):
     t2 = sd.SignalTracker()
     assert sd.load_state(t2, path) is True
     assert t2.register(MSG, now=1002).status == sd.DUPLICATE
+
+
+def test_save_state_atomico_non_lascia_tmp(tmp_path):
+    path = str(tmp_path / "history.json")
+    t = sd.SignalTracker()
+    t.register(MSG, now=1000)
+    assert sd.save_state(t, path) is True
+    # scrittura atomica: nessun file .tmp residuo, history leggibile
+    assert not (tmp_path / "history.json.tmp").exists()
+    t2 = sd.SignalTracker()
+    assert sd.load_state(t2, path) is True
+    assert t2.register(MSG, now=1001).status == sd.DUPLICATE
+
+
+def test_save_state_fallito_non_distrugge_history_esistente(tmp_path):
+    # Una save riuscita crea la history; una save successiva verso un path non
+    # scrivibile (dir inesistente trattata come file) fallisce ma non tocca il file ok.
+    path = str(tmp_path / "history.json")
+    t = sd.SignalTracker()
+    t.register(MSG, now=1000)
+    assert sd.save_state(t, path) is True
+    before = (tmp_path / "history.json").read_text(encoding="utf-8")
+    # path il cui "genitore" è un file → makedirs/replace falliscono → False
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    assert sd.save_state(t, str(blocker / "sub" / "history.json")) is False
+    # la history originale è intatta
+    assert (tmp_path / "history.json").read_text(encoding="utf-8") == before
 
 
 def test_load_state_file_assente_lascia_invariato(tmp_path):
