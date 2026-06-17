@@ -258,6 +258,9 @@ class App(ctk.CTk):
         except ValueError:
             self._queue = signal_queue.SignalQueue(mode=mode)
             self._log(f"⚠️ clear_delay non valido per la coda: uso il default.")
+        # Fonte UNICA del timeout (validata dalla coda): usata anche dai timer di
+        # scadenza, così coda e timer condividono lo stesso valore valido.
+        self._queue_timeout = self._queue.default_timeout
         self._log(f"🧮 Modalità coda: {mode}")
 
     def _load_daily_state(self) -> None:
@@ -439,24 +442,29 @@ class App(ctk.CTk):
         # riscrive TUTTE le righe attive in modo atomico. `expire` prima dell'add
         # rimuove i segnali già scaduti.
         path = cfg["csv_path"]
-        delay = cfg.get("clear_delay", settings_validation.DEFAULT_TIMEOUT)
+        delay = self._queue_timeout
         now = time.time()
+        # Lock tenuto ATTRAVERSO la scrittura: stato della coda e contenuto del CSV
+        # evolvono in modo monotòno (nessuna corsa con il tick di scadenza).
+        write_error = None
         with self._queue_lock:
             self._queue.expire(now=now)
             sid = self._queue.add(row, now=now)
             rows = self._queue.active_rows()
-        try:
-            write_rows(rows, path)
-        except Exception as ex:
-            # Scrittura fallita: togli dalla coda il segnale appena aggiunto e annulla
-            # il consumo dei guardrail → il segnale è riprovabile e non resta soppresso.
-            with self._queue_lock:
+            try:
+                write_rows(rows, path)
+            except Exception as ex:   # noqa: BLE001 — esito riportato a log, no crash
+                # Scrittura fallita: togli dalla coda il segnale appena aggiunto, così
+                # memoria e disco restano allineati e il segnale è riprovabile.
                 self._queue.remove(sid)
+                write_error = ex
+        if write_error is not None:
+            # Annulla anche il consumo dei guardrail → il segnale non resta soppresso.
             if self._tracker is not None:
                 self._tracker.restore_state(tracker_snap)
                 if self._daily is not None and daily_snap is not None:
                     self._daily.restore_state(daily_snap)
-            self.after(0, lambda e=ex: self._log(
+            self.after(0, lambda e=write_error: self._log(
                 f"❌ Scrittura CSV fallita: {e}. Segnale non registrato (riprovabile)."))
             return
         # Scrittura riuscita: ora è sicuro persistere lo stato dei guardrail.
@@ -514,17 +522,25 @@ class App(ctk.CTk):
         non cancella mai un segnale ancora valido. Si riprogramma finché la coda
         non è vuota."""
         now = time.time()
+        # Lock tenuto ATTRAVERSO la scrittura (monotòno con _process).
+        write_error = None
         with self._queue_lock:
             if self._queue is None:
                 return
             expired = self._queue.expire(now=now)
             rows = self._queue.active_rows()
             empty = self._queue.is_empty()
-        try:
-            write_rows(rows, path)        # rows vuota → solo header (CSV svuotato)
-        except Exception as ex:
-            self.after(0, lambda e=ex: self._log(
-                f"❌ Aggiornamento CSV alla scadenza fallito: {e}"))
+            try:
+                write_rows(rows, path)    # rows vuota → solo header (CSV svuotato)
+            except Exception as ex:       # noqa: BLE001 — esito riportato a log, no crash
+                write_error = ex
+        if write_error is not None:
+            # La coda (memoria) ha già rimosso gli scaduti ma il CSV è rimasto indietro:
+            # RIPROVA, così il disco converge allo stato della coda (un segnale scaduto
+            # non deve restare nel CSV). Riprogramma anche se la coda è vuota.
+            self.after(0, lambda e=write_error: self._log(
+                f"❌ Aggiornamento CSV alla scadenza fallito: {e}. Riprovo."))
+            self._schedule_expiry(path, delay)
             return
         if expired:
             self.after(0, lambda n=len(expired): self._log(

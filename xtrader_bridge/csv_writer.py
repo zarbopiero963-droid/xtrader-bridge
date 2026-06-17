@@ -175,7 +175,12 @@ def write_rows(rows, path: str):
     coda dei segnali attivi (PR-22): in OVERWRITE_LAST è una sola riga, in
     APPEND_ACTIVE/QUEUE_UNTIL_CONFIRMED sono i segnali attivi correnti."""
     rows = list(rows or [])
-    _atomic_write(path, lambda writer: [writer.writerow(r) for r in rows])
+
+    def _emit(writer):
+        for r in rows:
+            writer.writerow(r)
+
+    _atomic_write(path, _emit)
 
 
 def write_csv(row: dict, path: str):
