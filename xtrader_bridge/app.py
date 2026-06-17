@@ -37,7 +37,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("XTrader Signal Bridge")
-        self.geometry("720x650")
+        self.geometry("720x700")
         self.resizable(False, False)
 
         self._config = self._load_config()
@@ -146,6 +146,14 @@ class App(ctk.CTk):
             fg_color="#37474f", hover_color="#263238",
             command=lambda: [self._save_config(), self._log("💾 Configurazione salvata")],
         ).pack(side="right", padx=5)
+
+        # Riga propria: la finestra è a larghezza fissa, non far sforare i pulsanti.
+        tools_frame = ctk.CTkFrame(self, fg_color="transparent")
+        tools_frame.pack(fill="x", padx=15, pady=(0, 4))
+        ctk.CTkButton(
+            tools_frame, text="🧩  Parser Personalizzato", width=220, height=38,
+            fg_color="#4527a0", hover_color="#311b92",
+            command=self._open_parser_builder).pack(side="left", padx=5)
 
         # Ultimo segnale
         sig_frame = ctk.CTkFrame(self, corner_radius=10)
@@ -307,3 +315,12 @@ class App(ctk.CTk):
             self._gate.begin()
             init_csv(path)
             self._log("🗑️  CSV svuotato manualmente")
+
+    def _open_parser_builder(self):
+        """Apre la finestra del costruttore di Parser Personalizzati (CP-06).
+
+        Import lazy: la GUI del costruttore non serve all'avvio del bridge."""
+        from .custom_parser_gui import CustomParserWindow
+        provider = str(self._load_config().get("provider", "")).strip()
+        win = CustomParserWindow(self, provider=provider)
+        win.focus()
