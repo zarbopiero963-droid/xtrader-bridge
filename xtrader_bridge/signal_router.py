@@ -35,12 +35,15 @@ NO_CONTENT_MATCH = "NO_CONTENT_MATCH"
 
 
 def _chat_approved_for_custom(cfg: dict, chat: str) -> bool:
-    """Una chat è approvata per il parsing custom solo se è quella CONFIGURATA
-    (`chat_id`) o ha una voce esplicita in `parser_by_chat`. Un `active_parser`
-    GLOBALE non deve quindi far scommettere chat non autorizzate (con `chat_id`
-    vuoto in un bot multi-chat sarebbe un buco): non si indebolisce il filtro chat."""
+    """Una chat è approvata per il parsing custom se è quella CONFIGURATA
+    (`chat_id`), ha una voce esplicita in `parser_by_chat`, o è una **sorgente
+    multi-chat ATTIVA** (`source_chats`, PR-24): così un `active_parser` GLOBALE
+    funziona anche per le sorgenti, senza far scommettere chat non autorizzate
+    (non si indebolisce il filtro chat)."""
     chat = str(chat or "")
     if chat and chat in parser_manager.parser_by_chat(cfg):
+        return True
+    if chat and chat in set(map(str, source_manager.enabled_chat_ids(cfg))):
         return True
     configured = str(cfg.get("chat_id", "") or "").strip()
     return bool(configured) and chat == configured

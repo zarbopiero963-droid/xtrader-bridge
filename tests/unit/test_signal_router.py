@@ -199,6 +199,19 @@ def test_is_chat_allowed_sorgenti_multichat():
     assert signal_router.is_chat_allowed(cfg, "999") is False   # non configurata → no
 
 
+def test_sorgente_attiva_approvata_per_parser_globale(tmp_path):
+    # Setup source_chats-only con active_parser GLOBALE: una sorgente attiva è
+    # approvata per il custom (non cade sull'hardcoded perdendo i messaggi custom).
+    _save_example(str(tmp_path), "Glob")
+    cfg = {"provider": "GLOBAL", "active_parser": "Glob",
+           "source_chats": [{"chat_id": "111", "enabled": True, "mode": "LIVE"}]}
+    res = signal_router.resolve_row(parser_io.fixture_message(), cfg,
+                                    chat_id="111", parsers_dir=str(tmp_path))
+    assert res.source == signal_router.CUSTOM and res.placeable is True
+    # una chat NON sorgente non è approvata per il custom globale
+    assert signal_router.active_custom_parser(cfg, "999", str(tmp_path)) is None
+
+
 def test_is_chat_allowed_sole_sorgenti_disattivate_blocca_tutte():
     # Sorgenti configurate ma tutte disattivate (nessun chat_id/parser_by_chat):
     # NON si torna a "ammetti tutte" — disattivarle blocca ogni chat.
