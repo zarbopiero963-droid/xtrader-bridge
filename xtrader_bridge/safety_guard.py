@@ -1,0 +1,147 @@
+"""PR-19: guardrail di sicurezza (logica pura, testabile headless).
+
+Riduce il rischio di uso pericoloso del bridge senza trasformarlo in un bot di
+puntata aggressivo. Tre responsabilità, tutte **pure** (nessuna GUI/CSV/Telegram):
+
+- **DRY_RUN (simulazione)**: `is_dry_run(cfg)` / `should_write_operational_csv(cfg)`
+  decidono se il CSV operativo va scritto. Default **sicuro**: se il campo manca
+  (config vecchia o prima installazione) il bridge è in simulazione (`True`), così
+  non si genera una scommessa reale per sbaglio dopo un aggiornamento.
+- **Warning modalità reale**: `real_mode_warning(cfg)` ritorna un avviso quando la
+  simulazione è disattivata, che la GUI mostra come banner (qui solo il testo).
+- **Limite giornaliero**: `DailyLimiter` applica un tetto di segnali **al giorno**
+  (UTC) con **reset automatico** al cambio di data. Complementare al limite/minuto
+  già in `signal_dedupe` (PR-15). Fail-safe: parametri non validi → ValueError.
+
+**Sola decisione**: questo modulo non scrive il CSV e non piazza scommesse; il
+wiring GUI/runtime (toggle, banner, blocco START) è un passo successivo.
+"""
+
+import math
+import time
+from dataclasses import dataclass, field
+
+DEFAULT_MAX_PER_DAY = 200      # tetto di segnali nuovi accettati in un giorno (UTC)
+
+# Valori stringa interpretati come "spento" (per config che arrivano da campi
+# testuali GUI o da un vecchio config.json scritto a mano).
+_FALSEY = {"0", "false", "no", "off", "n", "", "none"}
+
+
+def is_dry_run(cfg) -> bool:
+    """True se il bridge è in **simulazione** (non deve scrivere il CSV operativo).
+
+    Default **sicuro**: campo assente → `True`. Un valore esplicito viene
+    interpretato in modo robusto: bool diretto, oppure stringa
+    (``"false"/"0"/"no"/"off"`` → False; tutto il resto non vuoto → True)."""
+    if not isinstance(cfg, dict) or "dry_run" not in cfg:
+        return True
+    val = cfg.get("dry_run")
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return val != 0
+    return str(val).strip().lower() not in _FALSEY
+
+
+def should_write_operational_csv(cfg) -> bool:
+    """True se è consentito scrivere il CSV operativo (cioè NON in simulazione)."""
+    return not is_dry_run(cfg)
+
+
+def real_mode_warning(cfg) -> str:
+    """Testo di avviso quando la simulazione è **disattivata** (modalità reale), da
+    mostrare nella GUI. Stringa vuota se in simulazione (nessun avviso)."""
+    if is_dry_run(cfg):
+        return ""
+    return ("ATTENZIONE: modalità REALE attiva — i segnali vengono scritti nel CSV "
+            "operativo e XTrader può piazzare scommesse reali. Usa la simulazione "
+            "(DRY_RUN) per i test.")
+
+
+def _require_positive_int(value, name: str) -> int:
+    """`value` come int finito e > 0, altrimenti ValueError. Un `NaN`/`inf`/`<=0`
+    renderebbe il limite inefficace o sempre bloccante."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} non valido: {value!r}")
+    if not math.isfinite(f) or f <= 0 or f != int(f):
+        raise ValueError(f"{name} deve essere un intero > 0 (ricevuto {value!r})")
+    return int(f)
+
+
+def _require_finite_now(now) -> float:
+    """`now` (epoch) come float finito, altrimenti ValueError. Rifiuta `bool`
+    (``True``/``False`` non sono timestamp) e `NaN`/`inf`, che renderebbero il
+    giorno indefinito e il reset inaffidabile."""
+    if isinstance(now, bool):
+        raise ValueError(f"now non valido: {now!r}")
+    try:
+        f = float(now)
+    except (TypeError, ValueError):
+        raise ValueError(f"now non valido: {now!r}")
+    if not math.isfinite(f):
+        raise ValueError(f"now deve essere finito (ricevuto {now!r})")
+    return f
+
+
+def _day_key(now: float) -> str:
+    """Chiave del giorno (UTC) ``YYYY-MM-DD`` per `now` (epoch). UTC per evitare
+    salti di fuso/ora legale che falserebbero il reset giornaliero."""
+    t = time.gmtime(now)
+    return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}"
+
+
+@dataclass
+class DailyLimiter:
+    """Tetto di segnali **al giorno** (UTC) con reset automatico al cambio data.
+
+    `allow(now)` ritorna True se c'è ancora capienza nel giorno corrente (e in tal
+    caso conta il segnale), False se il tetto è raggiunto. Lo stato è serializzabile
+    (`state`/`restore_state`) così il conteggio sopravvive a un riavvio nello stesso
+    giorno (non si azzera ripartendo l'app)."""
+
+    max_per_day: int = DEFAULT_MAX_PER_DAY
+    _day: str = ""
+    _count: int = 0
+
+    def __post_init__(self):
+        self.max_per_day = _require_positive_int(self.max_per_day, "max_per_day")
+
+    def _roll(self, now: float) -> None:
+        key = _day_key(now)
+        if key != self._day:
+            self._day = key
+            self._count = 0
+
+    def allow(self, *, now: float = None) -> bool:
+        """True se il segnale è ammesso oggi (e lo conta); False se tetto raggiunto."""
+        now = time.time() if now is None else now
+        now = _require_finite_now(now)
+        self._roll(now)
+        if self._count >= self.max_per_day:
+            return False
+        self._count += 1
+        return True
+
+    def remaining(self, *, now: float = None) -> int:
+        """Segnali ancora ammessi nel giorno corrente (senza consumarne)."""
+        now = time.time() if now is None else now
+        now = _require_finite_now(now)
+        self._roll(now)
+        return max(0, self.max_per_day - self._count)
+
+    def state(self) -> dict:
+        """Stato serializzabile (per sopravvivere a un riavvio nello stesso giorno)."""
+        return {"day": self._day, "count": self._count}
+
+    def restore_state(self, data) -> None:
+        """Ripristina lo stato da `state()` (tollerante a dati malformati)."""
+        if not isinstance(data, dict):
+            return
+        day = data.get("day")
+        count = data.get("count")
+        if isinstance(day, str) and isinstance(count, int) and count >= 0:
+            self._day = day
+            self._count = count

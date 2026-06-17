@@ -41,6 +41,13 @@ DEFAULTS = {
     "confirmation_timeout":         120,
     "confirmation_keywords":        [],
     "rejection_keywords":           [],
+    # Guardrail di sicurezza (PR-19): in DRY_RUN (simulazione) il CSV operativo non
+    # viene scritto. Default sicuro True: una config vecchia senza il campo eredita
+    # la simulazione, così un aggiornamento non genera scommesse reali per sbaglio.
+    "dry_run":                      True,
+    # Tetto di segnali nuovi accettati in un giorno (UTC), complementare al
+    # limite/minuto di signal_dedupe (PR-15).
+    "max_per_day":                  200,
 }
 
 
