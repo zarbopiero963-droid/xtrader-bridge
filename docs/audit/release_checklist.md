@@ -44,12 +44,13 @@
 - [ ] Nessun token Telegram compare nei log (redazione attiva).
 - [ ] **`chat_id` esplicito configurato** prima dell'uso: senza, il filtro chat ammette
       tutte le chat (vedi `final_audit.md` §4 punto 6). Requisito bloccante per l'uso reale.
-- [ ] DRY_RUN è presente in config con default = simulazione. **Attenzione:** oggi è
-      **solo configurazione, non applicato al runtime** (`TODO(wiring)`, `final_audit.md`
-      §4): la non-scrittura del CSV in simulazione NON è ancora garantita dal bridge —
-      durante il collaudo affidarsi a XTrader in Modalità Simulazione.
+- [ ] DRY_RUN (default = simulazione) **agganciato al runtime (PR-21)**: verifica che in
+      DRY_RUN il CSV operativo NON venga scritto (log "🧪 DRY_RUN"). Per l'uso reale,
+      disattivarlo consapevolmente.
+- [ ] **Attive a runtime (PR-21):** anti-duplicato + limite/minuto (`signal_dedupe`,
+      stato persistito) e limite/giorno (`safety_guard`, `max_per_day`). Verifica i log
+      "♻️ Duplicato"/"🚦 Limite ...".
 - [ ] **Protezioni NON ancora attive a runtime** (da agganciare prima dell'uso reale):
-      anti-duplicato/limite-minuto (`signal_dedupe`), limite-giorno (`safety_guard`),
       coda multi-segnale (`signal_queue`), conferma XTrader (`confirmation_reader`),
       multi-chat (`source_manager`). Vedi `final_audit.md` §4.
 

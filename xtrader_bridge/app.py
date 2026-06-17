@@ -13,12 +13,20 @@ import customtkinter as ctk
 from . import __version__
 from .config_store import (
     CONFIG_FILE,
+    config_dir,
     load_config,
     migrate_legacy_config,
     save_config,
 )
 from .csv_writer import init_csv, write_csv
-from . import event_log, settings_validation, signal_router
+from . import (
+    event_log,
+    live_guard,
+    safety_guard,
+    settings_validation,
+    signal_dedupe,
+    signal_router,
+)
 from .signal_gate import SignalGate
 
 try:
@@ -46,6 +54,10 @@ class App(ctk.CTk):
         self._tg_app = None
         self._loop = None
         self._gate = SignalGate()   # evita che un clear obsoleto cancelli un nuovo segnale
+        # Guardrail del percorso di scrittura (PR-21), creati allo START dalla config:
+        # tracker = dedup + limite/minuto (PR-15); daily = limite/giorno (PR-19).
+        self._tracker = None
+        self._daily = None
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -198,6 +210,76 @@ class App(ctk.CTk):
         # non deve interrompere la GUI.
         event_log.append_entry(safe, level or event_log.classify(safe))
 
+    # ── GUARDRAIL (PR-21) ─────────────────────
+    def _dedupe_state_path(self) -> str:
+        # History anti-duplicato accanto al config (AppData): i duplicati recenti
+        # restano riconosciuti dopo un riavvio.
+        import os
+        return os.path.join(config_dir(), "dedupe_state.json")
+
+    def _daily_state_path(self) -> str:
+        # Conteggio giornaliero persistito: stop/start nello stesso giorno (UTC)
+        # NON deve azzerare il tetto (altrimenti il limite/giorno è aggirabile).
+        import os
+        return os.path.join(config_dir(), "daily_state.json")
+
+    def _init_guards(self, cfg: dict) -> None:
+        """Crea i guardrail del percorso di scrittura dalla config (chiamato allo
+        START). `max_per_day` invalido in config → default sicuro con avviso."""
+        import os
+        self._dedupe_save_warned = False
+        self._tracker = signal_dedupe.SignalTracker()
+        # Avvisa solo se lo stato ESISTE ma non è caricabile (corrotto/illeggibile):
+        # l'assenza al primo avvio è normale, non un degrado.
+        dpath = self._dedupe_state_path()
+        if os.path.exists(dpath) and not signal_dedupe.load_state(self._tracker, dpath):
+            self._log("⚠️ Stato anti-duplicato presente ma illeggibile: "
+                      "protezione dopo riavvio non garantita.")
+        try:
+            self._daily = safety_guard.DailyLimiter(
+                max_per_day=cfg.get("max_per_day", safety_guard.DEFAULT_MAX_PER_DAY))
+        except ValueError:
+            self._daily = safety_guard.DailyLimiter()
+            self._log(f"⚠️ max_per_day non valido in config: uso "
+                      f"{safety_guard.DEFAULT_MAX_PER_DAY}.")
+        self._load_daily_state()
+
+    def _load_daily_state(self) -> None:
+        """Ripristina il conteggio giornaliero (persistenza same-day tra START/STOP).
+        Best-effort: file assente/illeggibile → si riparte da 0 per oggi."""
+        import json
+        if self._daily is None:
+            return
+        try:
+            with open(self._daily_state_path(), encoding="utf-8") as f:
+                self._daily.restore_state(json.load(f))
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+
+    def _save_guard_state(self) -> None:
+        """Persiste lo stato dei guardrail su disco DOPO una decisione/scrittura.
+        Dedupe: atomico, con avviso (una sola volta) se fallisce. Daily: best-effort."""
+        import json
+        import os
+        if (not signal_dedupe.save_state(self._tracker, self._dedupe_state_path())
+                and not self._dedupe_save_warned):
+            self._dedupe_save_warned = True
+            self.after(0, lambda: self._log(
+                "⚠️ Impossibile salvare lo stato anti-duplicato su disco: "
+                "protezione dopo riavvio degradata."))
+        if self._daily is not None:
+            try:
+                path = self._daily_state_path()
+                d = os.path.dirname(os.path.abspath(path))
+                if d:
+                    os.makedirs(d, exist_ok=True)
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self._daily.state(), f)
+                os.replace(tmp, path)
+            except OSError:
+                pass
+
     # ── START / STOP ──────────────────────────
     def _start(self):
         if not TELEGRAM_OK:
@@ -230,9 +312,14 @@ class App(ctk.CTk):
         self._btn_stop.configure(state="normal")
 
         init_csv(cfg["csv_path"])
+        self._init_guards(cfg)
         self._log("🚀 Bridge avviato!")
         self._log(f"📄 CSV: {cfg['csv_path']}")
         self._log(f"⏱️  Auto-clear dopo: {cfg['clear_delay']}s")
+        if safety_guard.is_dry_run(cfg):
+            self._log("🧪 DRY_RUN attivo (simulazione): il CSV operativo NON verrà scritto.")
+        else:
+            self._log("⚠️ Modalità REALE: i segnali validi verranno scritti nel CSV.")
         self._log("👂 In ascolto su Telegram...")
 
         self._bot_thread = threading.Thread(
@@ -315,10 +402,41 @@ class App(ctk.CTk):
             return
 
         row = result.row
+
+        # Guardrail del percorso di scrittura (PR-21): dedup + limite/minuto +
+        # limite/giorno + DRY_RUN. Solo WRITE autorizza la scrittura; ogni altro
+        # esito la sopprime (anti-doppia-scommessa / simulazione). `evaluate`
+        # consuma lo stato (registra il messaggio, scala il tetto): si fa uno
+        # snapshot per poterlo annullare se la scrittura del CSV poi fallisce.
+        tracker_snap = daily_snap = None
+        if self._tracker is not None:
+            tracker_snap = self._tracker.state()
+            daily_snap = self._daily.state() if self._daily is not None else None
+            decision = live_guard.evaluate(cfg, self._tracker, self._daily, text)
+            if decision != live_guard.WRITE:
+                self._save_guard_state()
+                self._after_non_write(decision, row)
+                return
+
         # Registra la generazione PRIMA di scrivere: invalida eventuali clear in
         # coda di segnali precedenti, così non cancellano questo nuovo segnale.
         gen = self._gate.begin()
-        write_csv(row, cfg["csv_path"])
+        try:
+            write_csv(row, cfg["csv_path"])
+        except Exception as ex:
+            # Scrittura fallita (es. CSV bloccato oltre i retry): annulla il consumo
+            # dei guardrail, così lo stesso segnale può essere ritentato e NON resta
+            # soppresso come "duplicato" o conteggiato nel tetto giornaliero.
+            if self._tracker is not None:
+                self._tracker.restore_state(tracker_snap)
+                if self._daily is not None and daily_snap is not None:
+                    self._daily.restore_state(daily_snap)
+            self.after(0, lambda e=ex: self._log(
+                f"❌ Scrittura CSV fallita: {e}. Segnale non registrato (riprovabile)."))
+            return
+        # Scrittura riuscita: ora è sicuro persistere lo stato dei guardrail.
+        if self._tracker is not None:
+            self._save_guard_state()
 
         info = (f"🏆 {row.get('EventName', '')}  |  "
                 f"{row.get('SelectionName', '')}  |  "
@@ -338,6 +456,27 @@ class App(ctk.CTk):
             delay, lambda g=gen: self._do_clear(cfg["csv_path"], g))
         self._clear_timer.start()
         self.after(0, lambda: self._log(f"⏱️  CSV verrà svuotato tra {delay}s"))
+
+    def _after_non_write(self, decision: str, row: dict) -> None:
+        """Gestisce gli esiti che NON scrivono il CSV (PR-21): log chiaro e, in
+        DRY_RUN, aggiorna comunque l'ultimo segnale riconosciuto."""
+        ev = row.get("EventName", "")
+        sel = row.get("SelectionName", "")
+        if decision == live_guard.DRY_RUN:
+            info = f"🧪 DRY_RUN — {ev}  |  {sel}  q.{row.get('Price', '')}"
+            self.after(0, lambda: self._sig_lbl.configure(text=info, text_color="#ffb74d"))
+            self.after(0, lambda: self._log(
+                f"🧪 DRY_RUN: segnale riconosciuto ma CSV NON scritto (simulazione): "
+                f"{ev} | {sel}"))
+        elif decision == live_guard.DUPLICATE:
+            self.after(0, lambda: self._log(
+                f"♻️ Duplicato ignorato (nessuna doppia scommessa): {ev} | {sel}"))
+        elif decision == live_guard.RATE_LIMITED:
+            self.after(0, lambda: self._log(
+                "🚦 Limite al minuto raggiunto: segnale ignorato."))
+        elif decision == live_guard.DAILY_LIMITED:
+            self.after(0, lambda: self._log(
+                "🚦 Limite giornaliero raggiunto: segnale ignorato."))
 
     def _do_clear(self, path: str, gen: int):
         # Svuota solo se nessun segnale più recente è arrivato nel frattempo.
