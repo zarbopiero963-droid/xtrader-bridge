@@ -169,6 +169,10 @@ def validate_parser_def(defn: CustomParserDef) -> list:
 
     if not defn.name or not str(defn.name).strip():
         errors.append("Il parser deve avere un nome non vuoto.")
+    elif str(defn.name) != str(defn.name).strip():
+        # Spazi iniziali/finali rendono incoerenti filename (normalizzato) e
+        # selezione (strippata): il parser non si ricaricherebbe (fallback muto).
+        errors.append("Il nome non deve avere spazi iniziali o finali.")
 
     if not isinstance(defn.version, int) or defn.version < 1:
         errors.append(f"Versione schema non valida: {defn.version!r} (atteso intero >= 1).")

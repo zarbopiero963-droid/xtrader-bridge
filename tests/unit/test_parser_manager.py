@@ -84,6 +84,20 @@ def test_available_parser_names_esclude_file_rinominato(tmp_path):
     assert pm.available_parser_names(str(tmp_path)) == []
 
 
+def test_available_parser_names_esclude_nome_con_spazi(tmp_path):
+    import json
+    # Nome con spazi iniziali/finali: invalido → non offerto (eviterebbe un
+    # fallback silenzioso, perché la selezione viene strippata).
+    spazi = {"name": " Foo ", "rules": [{"target": "Price", "required": True}]}
+    (tmp_path / "Foo.json").write_text(json.dumps(spazi), encoding="utf-8")
+    assert pm.available_parser_names(str(tmp_path)) == []
+
+
+def test_validate_rifiuta_nome_con_spazi():
+    d = cp.CustomParserDef(name=" Foo ", rules=[cp.FieldRule(target="Price", required=True)])
+    assert any("spazi iniziali" in e for e in cp.validate_parser_def(d))
+
+
 def test_set_active_copia_parser_by_chat():
     cfg = {"active_parser": "", "parser_by_chat": {"123": "X"}}
     out = pm.set_active(cfg, "Nuovo")
