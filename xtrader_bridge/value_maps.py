@@ -28,16 +28,24 @@ _norm = dizionario.normalize
 
 
 # ── built-in: BetType (lato scommessa) ─────────────────────────────────────
-# PUNTA = back, BANCA = lay. Sinonimi comuni IT/EN; tutto il resto NON è mappato
+# PUNTA = back, BANCA = lay. Solo alias NON ambigui: niente monolettera come
+# "B"/"P" (es. "B" potrebbe stare per Back→PUNTA ma anche Banca→BANCA, e
+# invertire il lato sarebbe catastrofico). Tutto il resto NON è mappato
 # (→ vuoto → "Non pronto"): non si indovina mai il lato della scommessa.
 _BETTYPE = {
-    "back": "PUNTA", "punta": "PUNTA", "p": "PUNTA", "punto": "PUNTA",
-    "lay": "BANCA", "banca": "BANCA", "b": "BANCA", "banco": "BANCA",
+    "back": "PUNTA", "punta": "PUNTA",
+    "lay": "BANCA", "banca": "BANCA",
 }
 
 _BUILTIN = {
     "bettype": dict(_BETTYPE),
 }
+
+
+def _is_placeholder(value: str) -> bool:
+    """Valore con placeholder dinamico non sostituito, es. "{HOME_TEAM}"."""
+    v = value or ""
+    return "{" in v and "}" in v
 
 
 def value_map_from_pairs(pairs) -> dict:
@@ -80,7 +88,15 @@ def dizionario_value_maps(rows=None) -> dict:
         rows = dizionario.load_dizionario()
     maps = {}
     for name, (alias_col, value_col) in _DIZIONARIO_MAPS.items():
-        pairs = ((r.get(alias_col, ""), r.get(value_col, "")) for r in rows)
+        # Salta i valori placeholder dinamici (es. "{HOME_TEAM}", "{AWAY_TEAM}"):
+        # richiedono la sostituzione con le squadre del match, che qui non c'è.
+        # Mapparli darebbe un SelectionName non valido per XTrader → meglio
+        # lasciarli non mappati (→ "Non pronto" finché non risolti altrove).
+        pairs = (
+            (r.get(alias_col, ""), r.get(value_col, ""))
+            for r in rows
+            if not _is_placeholder(r.get(value_col, ""))
+        )
         maps[name] = value_map_from_pairs(pairs)
     return maps
 

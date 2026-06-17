@@ -15,16 +15,18 @@ from xtrader_bridge import value_maps as vm
 # ── built-in bettype (safety-critical) ─────────────────────────────────────
 
 @pytest.mark.parametrize("raw, expected", [
-    ("BACK", "PUNTA"), ("back", "PUNTA"), (" Punta ", "PUNTA"), ("P", "PUNTA"),
-    ("LAY", "BANCA"), ("Banca", "BANCA"), ("b", "BANCA"),
+    ("BACK", "PUNTA"), ("back", "PUNTA"), (" Punta ", "PUNTA"),
+    ("LAY", "BANCA"), ("Banca", "BANCA"),
 ])
 def test_bettype_traduce_sinonimi(raw, expected):
     assert vm.resolve(raw, "bettype") == expected
 
 
-def test_bettype_valore_sconosciuto_vuoto():
-    # Un lato non riconosciuto NON viene indovinato → vuoto (→ "Non pronto").
-    assert vm.resolve("forse", "bettype") == ""
+@pytest.mark.parametrize("raw", ["forse", "b", "p", "1", "x"])
+def test_bettype_alias_ambigui_o_sconosciuti_vuoto(raw):
+    # Monolettera "B"/"P" sono ambigui (potrebbero invertire il lato) e non
+    # mappati; un lato non riconosciuto NON viene indovinato → "Non pronto".
+    assert vm.resolve(raw, "bettype") == ""
 
 
 def test_resolve_valore_vuoto_o_mappa_sconosciuta_vuoto():
@@ -73,6 +75,22 @@ def test_registry_default_solo_builtin():
 def test_available_value_maps_include_bettype():
     assert "bettype" in vm.available_value_maps()
     assert "selectionname" in vm.available_value_maps(include_dizionario=True, rows=_FAKE_ROWS)
+
+
+def test_dizionario_value_maps_esclude_placeholder():
+    # Un SelectionName placeholder ({HOME_TEAM}) NON deve finire nella mappa:
+    # resterebbe "pronto" con un valore non valido per XTrader. [Codex P1]
+    rows = [
+        {"MarketAliasTelegram": "esito_finale", "SelectionAliasTelegram": "1",
+         "MarketType_XTrader": "MATCH_ODDS", "MarketName_XTrader": "Esito finale",
+         "SelectionName_XTrader": "{HOME_TEAM}"},
+        {"MarketAliasTelegram": "esito_finale", "SelectionAliasTelegram": "x",
+         "MarketType_XTrader": "MATCH_ODDS", "MarketName_XTrader": "Esito finale",
+         "SelectionName_XTrader": "Pareggio"},
+    ]
+    reg = vm.registry(include_dizionario=True, rows=rows)
+    assert vm.resolve("1", "selectionname", reg) == ""        # placeholder escluso
+    assert vm.resolve("x", "selectionname", reg) == "Pareggio"  # valore reale ok
 
 
 def test_dizionario_value_maps_carica_il_dizionario_reale():
