@@ -31,6 +31,23 @@ jobs:
     - name: Esegui i test (bloccante)
       run: python -m pytest -m "not manual"
 
+    - name: Versione app + data build (nome artifact)
+      id: meta
+      shell: bash
+      run: |
+        # Versione dall'UNICA fonte di verità (xtrader_bridge/__init__.py); fail
+        # se manca, così l'artifact non finisce mai senza versione.
+        # `sys.stdout.write` (niente newline) + `tr -d '\r\n'`: su windows-latest il
+        # print() di Python emette CRLF e $(...) toglie solo \n, lasciando un \r che
+        # renderebbe il nome artifact malformato (`...v0.1.0\r-<data>`). Stripping
+        # difensivo di CR/LF così il nome resta pulito su ogni runner.
+        ver=$(python -c "import sys, xtrader_bridge as p; sys.stdout.write(p.__version__)" | tr -d '\r\n')
+        [ -n "$ver" ] || { echo "::error::__version__ mancante"; exit 1; }
+        date=$(date -u +%Y%m%d)
+        echo "version=$ver"          >> "$GITHUB_OUTPUT"
+        echo "build_date=$date"      >> "$GITHUB_OUTPUT"
+        echo "artifact=XTrader-Signal-Bridge-Windows-v${ver}-${date}" >> "$GITHUB_OUTPUT"
+
     - name: Compila EXE con PyInstaller
       run: >
         pyinstaller --onefile --windowed
@@ -48,9 +65,11 @@ jobs:
         main.py
 
     - name: Carica EXE come Artifact (sempre scaricabile)
+      # Nome artifact versionato (versione + data build) per tracciabilità; il file
+      # .exe interno resta `XTrader-Signal-Bridge.exe` così l'utente lo ritrova uguale.
       uses: actions/upload-artifact@v4
       with:
-        name: XTrader-Signal-Bridge-Windows
+        name: ${{ steps.meta.outputs.artifact }}
         path: dist/XTrader-Signal-Bridge.exe
         retention-days: 30
 
