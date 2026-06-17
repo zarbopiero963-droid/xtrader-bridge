@@ -186,6 +186,11 @@ class App(ctk.CTk):
 
     # ── START / STOP ──────────────────────────
     def _start(self):
+        if not TELEGRAM_OK:
+            # Libreria python-telegram-bot assente: errore chiaro, niente crash
+            # silenzioso nel thread del bot (PR-11, #11).
+            self._log("❌ python-telegram-bot non disponibile: impossibile avviare il listener.")
+            return
         cfg = self._save_config()
         if not cfg["bot_token"]:
             self._log("❌ Inserisci il Bot Token prima di avviare!")
@@ -241,27 +246,21 @@ class App(ctk.CTk):
                     return
                 text = msg.text or msg.caption or ''
                 runtime_chat = str(msg.chat_id)
-                # Guardia unica delle chat ammesse (CP-09): chat configurata
-                # (`chat_id`) ∪ chiavi `parser_by_chat`. Gatea sia il percorso
-                # custom sia l'hardcoded, così un override per-chat è ammesso
-                # anche con `chat_id` singolo impostato, e nessuna chat non
-                # autorizzata può scrivere. Se nulla è configurato → legacy.
-                if not signal_router.is_chat_allowed(cfg, runtime_chat):
+                # PR-11: decisione di instradamento estratta e testabile.
+                # Gatea il filtro chat (CP-09, chat configurata ∪ parser_by_chat)
+                # e il prefiltro legacy P.Bet./📊 (solo per il parser hardcoded):
+                # una chat non ammessa o un messaggio non pertinente non scrive.
+                if not signal_router.should_process(cfg, runtime_chat, text):
                     return
-                # Il prefiltro legacy (P.Bet./📊) vale SOLO per il parser hardcoded.
-                # Se per la chat di origine (approvata) è attivo un Parser
-                # Personalizzato (CP-09), deve ricevere ogni messaggio (i formati
-                # custom non hanno quei marker). active_custom_parser approva solo
-                # la chat configurata o le voci parser_by_chat esplicite.
-                if signal_router.active_custom_parser(cfg, runtime_chat) is None:
-                    if 'P.Bet.' not in text and '📊' not in text:
-                        return
                 self._process(text, cfg, chat_id=runtime_chat)
 
             self._tg_app.add_handler(MessageHandler(filters.ALL, _handle))
             await self._tg_app.initialize()
             await self._tg_app.start()
-            await self._tg_app.updater.start_polling(allowed_updates=["message", "channel_post"])
+            # drop_pending_updates: scarta i messaggi accodati mentre il bridge era
+            # offline, così all'avvio non si processano segnali vecchi (PR-11, #9).
+            await self._tg_app.updater.start_polling(
+                allowed_updates=["message", "channel_post"], drop_pending_updates=True)
             while self._running:
                 await asyncio.sleep(1)
             await self._tg_app.updater.stop()

@@ -185,3 +185,38 @@ def test_is_chat_allowed_solo_mappa_per_chat():
     cfg = {"provider": "TG", "parser_by_chat": {"123": "PerChat"}}
     assert signal_router.is_chat_allowed(cfg, "123") is True
     assert signal_router.is_chat_allowed(cfg, "42") is False
+
+
+# ── should_process: gate di instradamento live (PR-11) ──────────────────────
+
+def test_should_process_chat_non_ammessa_mai():
+    # chat_id configurato: una chat diversa non viene mai processata, nemmeno
+    # con un marker legacy valido (non si indebolisce il filtro chat).
+    cfg = {"provider": "TG", "chat_id": "42"}
+    assert signal_router.should_process(cfg, "999", "🔔 P.Bet. ...") is False
+
+
+def test_should_process_hardcoded_richiede_marker():
+    # chat ammessa, nessun custom: passa solo se c'è un marker legacy.
+    cfg = {"provider": "TG", "chat_id": "42"}
+    assert signal_router.should_process(cfg, "42", "P.Bet. OVER 2.5") is True
+    assert signal_router.should_process(cfg, "42", "📊 segnale") is True
+    assert signal_router.should_process(cfg, "42", "messaggio qualsiasi") is False
+    assert signal_router.should_process(cfg, "42", "") is False
+
+
+def test_should_process_custom_attivo_passa_qualsiasi_testo(tmp_path):
+    # chat approvata con custom attivo: ogni messaggio passa (i formati custom
+    # non hanno i marker legacy), così non si scartano i loro segnali.
+    _save_example(str(tmp_path), "Yangon")
+    cfg = {"provider": "TG", "active_parser": "Yangon", "chat_id": "42"}
+    assert signal_router.should_process(
+        cfg, "42", "Match: Inter v Milan", parsers_dir=str(tmp_path)) is True
+
+
+def test_should_process_legacy_nessuna_config_richiede_marker():
+    # Nessun chat_id e nessuna mappa → tutte le chat ammesse (legacy), ma senza
+    # custom resta il prefiltro marker per il parser hardcoded.
+    cfg = {"provider": "TG"}
+    assert signal_router.should_process(cfg, "777", "P.Bet. ...") is True
+    assert signal_router.should_process(cfg, "777", "ciao") is False
