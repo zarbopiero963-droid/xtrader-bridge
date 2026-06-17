@@ -40,9 +40,17 @@ def test_end_before_vuoto_senza_a_capo_prende_fino_a_fine():
     assert eng.extract_value("Quota: 1,85", r) == "1,85"
 
 
-def test_end_before_assente_prende_fino_a_fine():
+def test_end_before_configurato_ma_assente_fallisce():
+    # Strict: se il delimitatore di fine è configurato ma manca, estrazione vuota
+    # (un messaggio non conforme non deve passare il gate). [Codex P2]
     r = cp.FieldRule(target="EventName", start_after="Match:", end_before="@@@")
-    assert eng.extract_value("Match: Inter v Milan", r) == "Inter v Milan"
+    assert eng.extract_value("Match: Inter v Milan", r) == ""
+
+
+def test_regola_non_configurata_e_vuota():
+    # Né fixed né delimitatori → vuoto (non sappiamo dove prendere il valore).
+    r = cp.FieldRule(target="EventName")
+    assert eng.extract_value("Inter v Milan\nx", r) == ""
 
 
 def test_start_after_vuoto_parte_da_inizio():
@@ -139,13 +147,32 @@ def test_apply_parser_target_duplicato_ultimo_vince_senza_doppioni():
         cp.FieldRule(target="Price", start_after="A:", end_before="\n", required=True),
         cp.FieldRule(target="Price", start_after="B:", end_before="\n", required=True),
     ])
-    res = eng.apply_parser(defn, "B: 2,10")  # solo il secondo trova valore
+    res = eng.apply_parser(defn, "B: 2,10\n")  # solo il secondo trova valore
     assert res.values["Price"] == "2,10"
     assert res.ready is True
     assert res.missing_required == []  # niente "Price" doppio né falso mancante
 
 
 def test_extract_value_robusto_a_none():
-    # Costruzione "a mano" con None: niente crash su .find().
-    r = cp.FieldRule(target="EventName", start_after=None, end_before=None)
-    assert eng.extract_value("Inter v Milan\nx", r) == "Inter v Milan"
+    # Costruzione "a mano" con None: niente crash su .find() (None → "").
+    r = cp.FieldRule(target="EventName", start_after=None, end_before="|")
+    assert eng.extract_value("Inter v Milan|x", r) == "Inter v Milan"
+
+
+def test_skeleton_non_configurato_non_e_pronto():
+    # Lo skeleton (CP-01) ha regole obbligatorie senza delimitatori: applicato
+    # a un messaggio NON deve diventare "pronto" con dati fasulli. [Codex P2]
+    res = eng.apply_parser(cp.skeleton("X"), "Inter v Milan\nQuota 1,85")
+    assert res.ready is False
+    assert set(res.missing_required) == {"EventName", "MarketName", "SelectionName", "Price", "BetType"}
+    assert res.values["Provider"] == "TG_CUSTOM"  # i fixed restano valorizzati
+
+
+def test_obbligatorio_con_end_before_assente_non_pronto():
+    # Un obbligatorio con end_before configurato ma assente nel messaggio → "Non pronto".
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="EventName", start_after="Match:", end_before="\nQuota:", required=True),
+    ])
+    res = eng.apply_parser(defn, "Match: Inter v Milan (manca il marker di fine)")
+    assert res.ready is False
+    assert res.missing_required == ["EventName"]

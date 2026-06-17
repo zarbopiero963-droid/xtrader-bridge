@@ -17,9 +17,13 @@ Semantica di una regola (`FieldRule`):
   emoji/simboli); se il testo non è presente nel messaggio → valore vuoto; se
   `start_after == ""` → si parte dall'inizio del messaggio.
 - `end_before` ("Finisce prima di"): l'estrazione termina PRIMA della prima
-  occorrenza di questo testo trovata dopo il punto di inizio; se non è presente
-  → fino a fine messaggio; se `end_before == ""` → fino a fine RIGA (primo
-  a-capo dopo l'inizio), per non "ingoiare" il resto del messaggio.
+  occorrenza di questo testo trovata dopo il punto di inizio; se il delimitatore
+  è configurato ma NON è presente → estrazione **fallita** (valore vuoto): un
+  messaggio non conforme non deve passare il gate. Se `end_before == ""` →
+  fino a fine RIGA (primo a-capo dopo l'inizio), per non "ingoiare" il resto.
+- una regola **senza estrazione configurata** (né `fixed_value`, né `start_after`,
+  né `end_before`) restituisce vuoto: non sappiamo dove prendere il valore, quindi
+  resta "mancante" finché non viene configurata (es. le regole di `skeleton()`).
 - il valore estratto viene rifilato degli spazi ai bordi.
 - `required`: se il valore finale è vuoto il parser è "Non pronto" (nessuna riga
   CSV); se opzionale e vuoto → colonna vuota (non blocca).
@@ -40,11 +44,16 @@ def extract_value(text: str, rule: FieldRule) -> str:
     fixed = rule.fixed_value or ""
     if fixed != "":
         return fixed
-    if not text:
-        return ""
 
     start_after = rule.start_after or ""
     end_before = rule.end_before or ""
+
+    # Regola senza estrazione configurata: nessun modo di localizzare il valore
+    # → vuoto (resta "mancante" se obbligatoria, es. le regole di skeleton()).
+    if start_after == "" and end_before == "":
+        return ""
+    if not text:
+        return ""
 
     start = 0
     if start_after != "":
@@ -54,10 +63,13 @@ def extract_value(text: str, rule: FieldRule) -> str:
         start = idx + len(start_after)
 
     if end_before != "":
+        # Delimitatore di fine configurato ma assente → messaggio non conforme:
+        # estrazione fallita (vuoto), così un obbligatorio resta "Non pronto".
         end = text.find(end_before, start)
         if end == -1:
-            end = len(text)
+            return ""
     else:
+        # Nessun end_before: fino a fine riga (non "ingoia" il resto del messaggio).
         nl = text.find("\n", start)
         end = nl if nl != -1 else len(text)
 
