@@ -18,10 +18,22 @@ SOLO se `result.placeable` è True (status VALID).
 
 from dataclasses import dataclass, field
 
-from . import recognition, validator
+from . import recognition, validator, value_maps
 from .csv_writer import DEFAULT_HANDICAP, DEFAULT_POINTS
 from .custom_parser import CustomParserDef
 from .custom_parser_engine import apply_parser
+
+# Registro value-map di default del pipeline: include il dizionario (le mappe
+# markettype/marketname/selectionname usate dallo skeleton e dai parser reali).
+# Costruito una volta (legge il CSV una sola volta), poi riusato.
+_DEFAULT_REGISTRY = None
+
+
+def _default_registry() -> dict:
+    global _DEFAULT_REGISTRY
+    if _DEFAULT_REGISTRY is None:
+        _DEFAULT_REGISTRY = value_maps.registry(include_dizionario=True)
+    return _DEFAULT_REGISTRY
 
 NOT_READY = "NOT_READY"   # gate parser: manca un campo obbligatorio della regola
 INVALID_MISSING_PROVIDER = "INVALID_MISSING_PROVIDER"  # Provider assente (contratto)
@@ -83,10 +95,16 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
     `provider` è fornito dal runtime/config (come per il parser hardcoded) e
     riempie la colonna `Provider` se la regola non la imposta.
 
+    `value_maps_registry` di default include il dizionario (built-in + mappe
+    markettype/marketname/selectionname), così i parser/skeleton che usano quelle
+    value-map risolvono senza che il chiamante debba passare un registro.
+
     Ritorna un `PipelineResult`: `placeable` True solo se supera il gate "Non
     pronto" del parser, ha un `Provider` E passa la validazione (modalità +
     prezzo + BetType). La riga è già in formato contratto (quota col punto,
     BetType maiuscolo)."""
+    if value_maps_registry is None:
+        value_maps_registry = _default_registry()
     res = apply_parser(defn, text, value_maps_registry)
     row = _normalize_to_contract(res.as_csv_row(), provider)
 

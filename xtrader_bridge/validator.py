@@ -14,6 +14,8 @@ raggiungere XTrader. Il validatore non modifica la riga: la accetta o la scarta.
 `Points` resta come arriva (vuoto di default): NON va normalizzato a "1".
 """
 
+import math
+
 from . import recognition
 
 VALID = "VALID"
@@ -39,6 +41,10 @@ def _price_status(value) -> str:
         price = float(s.replace(",", "."))
     except ValueError:
         return INVALID_PRICE
+    # `inf`/`nan` parse-ano come float ma NON sono quote reali (il parser custom
+    # può estrarre testo arbitrario come "inf"/"1e309").
+    if not math.isfinite(price):
+        return INVALID_PRICE
     return VALID if price > 1.0 else INVALID_PRICE
 
 
@@ -63,6 +69,16 @@ def validate(row: dict, mode: str, require_price: bool = True):
         status = _price_status(row.get("Price", ""))
         if status != VALID:
             return (status, str(row.get("Price", "")).strip())
+
+    # MinPrice/MaxPrice sono opzionali (possono restare vuoti), ma se valorizzati
+    # devono essere quote valide: un limite malformato ("abc") o sotto/uguale a
+    # 1.0 non deve raggiungere XTrader. (Il percorso hardcoded li lascia vuoti.)
+    for col in ("MinPrice", "MaxPrice"):
+        v = str(row.get(col, "")).strip()
+        if v:
+            status = _price_status(v)
+            if status != VALID:
+                return (status, v)
 
     return (VALID, None)
 

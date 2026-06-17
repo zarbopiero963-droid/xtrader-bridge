@@ -165,6 +165,52 @@ def test_prezzo_virgola_normalizzato_a_punto():
     assert res.row["Price"] == "2.50"
 
 
+def test_prezzo_non_finito_rifiutato():
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
+        cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
+        cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
+        cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
+        cp.FieldRule(target="Price", fixed_value="inf", required=True),
+        cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+    ])
+    res = pipe.build_validated_row(defn, "x")
+    assert res.status == validator.INVALID_PRICE
+    assert res.placeable is False
+
+
+def test_minprice_malformato_rifiutato():
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
+        cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
+        cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
+        cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
+        cp.FieldRule(target="Price", fixed_value="2.0", required=True),
+        cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+        cp.FieldRule(target="MinPrice", fixed_value="abc"),
+    ])
+    res = pipe.build_validated_row(defn, "x")
+    assert res.status == validator.INVALID_PRICE
+    assert res.placeable is False
+
+
+def test_value_map_dizionario_di_default():
+    # Senza passare un registro, le value-map del dizionario sono disponibili:
+    # "GG" → MarketType/SelectionName risolti dal dizionario.
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
+        cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
+        cp.FieldRule(target="MarketType", start_after="M:", value_map="markettype", required=True),
+        cp.FieldRule(target="SelectionName", start_after="S:", value_map="selectionname", required=True),
+        cp.FieldRule(target="Price", fixed_value="2.0", required=True),
+        cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+    ])
+    res = pipe.build_validated_row(defn, "M: GG\nS: GG")
+    assert res.status == validator.VALID
+    assert res.row["MarketType"] == "BOTH_TEAMS_TO_SCORE"
+    assert res.row["SelectionName"] == "Sì"
+
+
 def test_is_placeable_scorciatoia():
     assert pipe.is_placeable(_full_parser(), _MSG_OK) is True
     assert pipe.is_placeable(_full_parser(), "vuoto") is False
