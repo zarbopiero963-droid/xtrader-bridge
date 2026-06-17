@@ -227,3 +227,12 @@ def test_save_atomico_non_lascia_tmp_residui(tmp_path):
     cp.save_parser(_valid_def(), str(tmp_path))
     leftovers = [f for f in os.listdir(str(tmp_path)) if f.startswith(".parser_")]
     assert leftovers == []
+
+
+def test_list_parser_files_ignora_tmp_atomici(tmp_path):
+    # Un temp atomico residuo (crash a metà save) NON deve apparire come parser.
+    p = cp.save_parser(_valid_def(), str(tmp_path))
+    (tmp_path / ".parser_orfano.json").write_text("{}", encoding="utf-8")
+    files = cp.list_parser_files(str(tmp_path))
+    assert files == [p]
+    assert all(not os.path.basename(f).startswith(".") for f in files)

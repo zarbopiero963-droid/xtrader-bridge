@@ -289,10 +289,17 @@ def load_parser(path: str) -> CustomParserDef:
 
 
 def list_parser_files(dir_path: str = None) -> list:
-    """Elenca i path dei file parser (`*.json`) presenti nella cartella."""
+    """Elenca i path dei file parser (`*.json`) presenti nella cartella.
+
+    Esclude i file che iniziano con `.` (es. il temporaneo `.parser_*.json`
+    della scrittura atomica, eventualmente rimasto dopo un crash prima di
+    `os.replace`): non sono parser reali e non devono apparire come "fantasmi".
+    `_safe_filename()` non produce mai nomi che iniziano con `.`."""
     base = dir_path if dir_path is not None else default_parsers_dir()
     if not os.path.isdir(base):
         return []
     return sorted(
-        os.path.join(base, f) for f in os.listdir(base) if f.endswith(".json")
+        os.path.join(base, f)
+        for f in os.listdir(base)
+        if f.endswith(".json") and not f.startswith(".")
     )
