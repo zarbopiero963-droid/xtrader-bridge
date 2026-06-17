@@ -6,9 +6,11 @@ salvataggio/caricamento su disco (tmp_path, nessun file committato).
 """
 
 import json
+import os
 
 import pytest
 
+from xtrader_bridge import config_store
 from xtrader_bridge import custom_parser as cp
 from xtrader_bridge.csv_writer import CSV_HEADER
 
@@ -188,3 +190,40 @@ def test_filename_sicuro_contro_path_traversal(tmp_path):
 
 def test_list_parser_files_vuoto_se_cartella_assente(tmp_path):
     assert cp.list_parser_files(str(tmp_path / "non_esiste")) == []
+
+
+def test_default_parsers_dir_e_persistente_non_meipass():
+    # I parser utente vanno in una cartella persistente (config_store.config_dir),
+    # NON nella cartella temporanea dell'EXE (sys._MEIPASS).
+    d = cp.default_parsers_dir()
+    assert d == os.path.join(config_store.config_dir(), "parsers")
+    assert d.endswith(os.path.join("XTraderBridge", "parsers"))
+
+
+def test_save_rifiuta_collisione_nomi(tmp_path):
+    # "A/B" e "AB" si sanitizzano allo stesso file: il secondo NON deve
+    # sovrascrivere in silenzio il primo (perdita di regole).
+    first = _valid_def()
+    first.name = "A/B"
+    p1 = cp.save_parser(first, str(tmp_path))
+    second = _valid_def()
+    second.name = "AB"
+    assert cp.parser_path("AB", str(tmp_path)) == p1  # stesso file
+    with pytest.raises(ValueError):
+        cp.save_parser(second, str(tmp_path))
+    # il primo parser è rimasto intatto
+    assert cp.load_parser(p1).name == "A/B"
+
+
+def test_save_stesso_nome_aggiorna(tmp_path):
+    d = _valid_def()
+    cp.save_parser(d, str(tmp_path))
+    d.description = "aggiornata"
+    path = cp.save_parser(d, str(tmp_path))  # stesso nome → update, nessun errore
+    assert cp.load_parser(path).description == "aggiornata"
+
+
+def test_save_atomico_non_lascia_tmp_residui(tmp_path):
+    cp.save_parser(_valid_def(), str(tmp_path))
+    leftovers = [f for f in os.listdir(str(tmp_path)) if f.startswith(".parser_")]
+    assert leftovers == []

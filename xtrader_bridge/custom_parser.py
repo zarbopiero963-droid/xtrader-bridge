@@ -8,7 +8,8 @@ Telegram, senza dipendere dal parser hardcoded (PR-09). Questo modulo contiene
 - `FieldRule`        — una regola per UNA colonna CSV (target).
 - `CustomParserDef`  — un parser con nome + elenco di regole.
 - (de)serializzazione JSON, validazione strutturale, skeleton di default,
-  salvataggio/caricamento in `data/parsers/<nome>.json`.
+  salvataggio/caricamento in `<cartella utente persistente>/parsers/<nome>.json`
+  (riusa `config_store.config_dir()`, non la cartella temporanea dell'EXE).
 
 NON è incluso (scope dei CP successivi):
 - il motore di estrazione a runtime (applicare le regole a un messaggio);
@@ -30,9 +31,10 @@ Semantica delle regole (interpretata dal motore runtime, NON qui):
 import dataclasses
 import json
 import os
-import sys
+import tempfile
 from dataclasses import dataclass, field
 
+from . import config_store
 from .csv_writer import CSV_HEADER
 
 # Versione dello schema del file parser: serve a gestire migrazioni future
@@ -212,22 +214,17 @@ def skeleton(name: str = "Nuovo parser") -> CustomParserDef:
     )
 
 
-# ── Persistenza: data/parsers/<nome>.json ──────────────────────────────────
-
-def _data_dir() -> str:
-    """Cartella `data/` (stessa logica di dizionario.py per l'EXE PyInstaller)."""
-    if getattr(sys, "frozen", False):
-        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.executable)))
-    else:
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, "data")
-
+# ── Persistenza: <cartella utente persistente>/parsers/<nome>.json ─────────
 
 def default_parsers_dir() -> str:
-    """Cartella di default dei parser utente: `data/parsers/`.
+    """Cartella persistente dei parser utente: `<config_dir>/parsers/`.
 
-    NB: è in `.gitignore` — i parser definiti dall'utente NON vanno committati."""
-    return os.path.join(_data_dir(), "parsers")
+    Riusa `config_store.config_dir()` (`%APPDATA%\\XTraderBridge` su Windows,
+    `~/.config/XTraderBridge` altrove): è una posizione **scrivibile e
+    persistente**, che sopravvive a riavvii/aggiornamenti dell'EXE. NON usiamo
+    `sys._MEIPASS` (la cartella di estrazione PyInstaller è temporanea e di sola
+    lettura): lì stanno solo i dati bundled read-only come il dizionario."""
+    return os.path.join(config_store.config_dir(), "parsers")
 
 
 def _safe_filename(name: str) -> str:
@@ -252,8 +249,36 @@ def save_parser(defn: CustomParserDef, dir_path: str = None) -> str:
     base = dir_path if dir_path is not None else default_parsers_dir()
     os.makedirs(base, exist_ok=True)
     path = parser_path(defn.name, base)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(defn.to_json())
+    # Due nomi diversi che si sanitizzano allo stesso file (es. "A/B" e "AB")
+    # NON devono sovrascriversi in silenzio: si perderebbero le regole del primo
+    # parser. Sovrascrivere è consentito solo se è lo *stesso* parser (update).
+    if os.path.exists(path):
+        try:
+            existing_name = load_parser(path).name
+        except (OSError, ValueError, json.JSONDecodeError):
+            existing_name = None
+        if existing_name is not None and existing_name != defn.name:
+            raise ValueError(
+                f"Il nome {defn.name!r} collide con il parser {existing_name!r} "
+                f"(stesso file {os.path.basename(path)}): scegli un nome diverso."
+            )
+    # Scrittura atomica: file temporaneo nella stessa cartella + fsync + rename,
+    # così un crash a metà scrittura non lascia un JSON parziale/corrotto (il
+    # file esistente resta intatto finché il rename non riesce).
+    payload = defn.to_json()
+    fd, tmp = tempfile.mkstemp(prefix=".parser_", suffix=".json", dir=base)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
     return path
 
 
