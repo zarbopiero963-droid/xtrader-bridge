@@ -3,8 +3,10 @@
 Applica le regole di un `CustomParserDef` (CP-01) al testo di un messaggio
 Telegram e produce i valori per le colonne del contratto CSV XTrader.
 
-Scope di CP-02 (volutamente stretto):
-- NON risolve le value-map (è CP-03);
+Scope (estrazione CP-02 + applicazione value-map CP-03):
+- `extract_value` estrae il valore GREZZO (nessuna traduzione);
+- `apply_parser` applica poi la value-map della regola (CP-03), producendo il
+  valore XTrader; un valore non mappato resta vuoto (→ "Non pronto");
 - NON applica trasformazioni configurabili, es. somma-gol → Over (somma).5 (CP-05);
 - NON scrive il CSV (CP-04);
 - NON tocca la GUI (CP-06).
@@ -89,8 +91,8 @@ class ExtractionResult:
         """Riga completa a 14 colonne: le colonne senza regola restano vuote.
 
         Le colonne sono quelle del contratto (`csv_writer.CSV_HEADER`, fonte
-        unica) per evitare drift. NB: i valori sono quelli grezzi estratti
-        (nessuna value-map/trasformazione, quelle arrivano in CP-03/CP-05).
+        unica) per evitare drift. NB: i valori riflettono l'output di
+        `apply_parser` (value-map CP-03 già applicata; trasformazioni CP-05 no).
         Usare solo a parser `ready`."""
         row = {col: "" for col in CSV_HEADER}
         for target, value in self.values.items():
