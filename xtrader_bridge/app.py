@@ -17,7 +17,7 @@ from .config_store import (
     save_config,
 )
 from .csv_writer import init_csv, write_csv
-from . import settings_validation, signal_router
+from . import event_log, settings_validation, signal_router
 from .signal_gate import SignalGate
 
 try:
@@ -185,10 +185,13 @@ class App(ctk.CTk):
         self._log_box.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
     # ── LOG ───────────────────────────────────
-    def _log(self, msg: str):
+    def _log(self, msg: str, level: str = "INFO"):
         ts = datetime.now().strftime("%H:%M:%S")
         self._log_box.insert("end", f"[{ts}] {msg}\n")
         self._log_box.see("end")
+        # Storico persistente in AppData (#11): sopravvive al riavvio. Best-effort:
+        # un errore di filesystem non deve interrompere la GUI.
+        event_log.append_entry(msg, level)
 
     # ── START / STOP ──────────────────────────
     def _start(self):
