@@ -60,6 +60,34 @@ def test_tolleranza_spazi_nei_delimitatori_end_to_end(tmp_path):
     assert res.row["Price"] == "1.85"
 
 
+def test_quota_con_punto_end_to_end(tmp_path):
+    # Linee guida parser: quota sia con virgola sia con PUNTO. Qui "1.85" deve
+    # restare "1.85" (già col punto) e produrre una riga piazzabile.
+    defn = parser_io.example_parser()
+    defn.name = "Esempio"
+    cp.save_parser(defn, str(tmp_path))
+    msg = "Match: Inter v Milan\nEsito: GG\nQuota: 1.85\nLato: BACK"
+    res = signal_router.resolve_row(msg, _cfg("Esempio"),
+                                    chat_id="42", parsers_dir=str(tmp_path))
+    assert res.placeable is True
+    assert res.row["Price"] == "1.85"
+
+
+def test_messaggio_vuoto_o_non_supportato_scarta(tmp_path):
+    # Linee guida parser: messaggio vuoto/non supportato → nessuna riga. Con un
+    # parser custom attivo restano source=CUSTOM e placeable=False (resolve_row è
+    # puro: niente CSV scritto; la garanzia "non scrive" è proprio placeable=False).
+    defn = parser_io.example_parser()
+    defn.name = "Esempio"
+    cp.save_parser(defn, str(tmp_path))
+    for msg in ("", "testo non supportato"):
+        res = signal_router.resolve_row(msg, _cfg("Esempio"),
+                                        chat_id="42", parsers_dir=str(tmp_path))
+        assert res.source == signal_router.CUSTOM
+        assert res.placeable is False
+        assert res.row is None
+
+
 # ── trasformazione somma-gol → Over (CP-05) lungo la catena ─────────────────
 
 def test_transform_score_to_over_end_to_end(tmp_path):
