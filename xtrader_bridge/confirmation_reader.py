@@ -36,6 +36,10 @@ DEFAULT_CONFIRM_KEYWORDS = (
 DEFAULT_REJECT_KEYWORDS = (
     "rifiutata", "rifiutato", "errore", "fallita", "fallito", "annullata",
     "annullato", "rejected", "failed", "no match", "unmatched", "error",
+    # Frasi NEGATE: contengono una keyword di conferma ma indicano il contrario.
+    # Stanno tra i reject (valutati per primi) per non risultare un falso CONFIRMED.
+    "non piazzata", "non piazzato", "non confermata", "non confermato",
+    "non eseguita", "non eseguito", "not matched", "not placed", "not confirmed",
 )
 
 
@@ -84,17 +88,25 @@ def match_pending(text: str, pending):
     testo (più affidabile); altrimenti per tutti i campi nome presenti. Se più di
     un candidato combacia → None (ambiguo: non si associa a caso)."""
     t = _norm(text)
+    # Match per ref come PAROLA INTERA: un ref "123" non deve combaciare dentro
+    # "ABC1234" (associerebbe il segnale sbagliato).
     by_ref = [p for p in pending
-              if _norm(p.get("ref")).strip() and _norm(p.get("ref")) in t]
+              if _norm(p.get("ref")).strip() and _has_keyword(t, p.get("ref"))]
     if len(by_ref) == 1:
         return by_ref[0]
     if len(by_ref) > 1:
         return None
 
     def all_name_fields_present(p) -> bool:
-        fields = [p.get("EventName", ""), p.get("MarketName", ""), p.get("SelectionName", "")]
-        fields = [f for f in fields if str(f or "").strip()]
-        return bool(fields) and all(_norm(f) in t for f in fields)
+        # Fallback: servono TUTTI E TRE i campi identità, non vuoti e presenti nel
+        # testo. Un sottoinsieme (es. solo EventName, con MarketName vuoto) NON basta
+        # a identificare il segnale: meglio nessun match che il segnale sbagliato.
+        ev = _norm(p.get("EventName")).strip()
+        mk = _norm(p.get("MarketName")).strip()
+        sel = _norm(p.get("SelectionName")).strip()
+        if not (ev and mk and sel):
+            return False
+        return ev in t and mk in t and sel in t
 
     by_fields = [p for p in pending if all_name_fields_present(p)]
     return by_fields[0] if len(by_fields) == 1 else None

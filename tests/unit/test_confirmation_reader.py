@@ -54,6 +54,21 @@ def test_messaggio_errore_rejected():
     assert res.signal_id == "s1"
 
 
+def test_ref_match_parola_intera():
+    # Un ref "123" non deve combaciare dentro "ABC1234" (segnale sbagliato).
+    pending = [{"signal_id": "x", "ref": "123"}]
+    assert cr.match_pending("Ref ABC1234 piazzata", pending) is None
+    assert cr.match_pending("Ref 123 piazzata", pending) is not None
+
+
+def test_frase_negata_non_e_conferma():
+    # "non piazzata"/"not matched" contengono una keyword di conferma ma vanno
+    # interpretati come RIFIUTO (no falso CONFIRMED su scommessa non piazzata).
+    res = cr.interpret("Ref ABC123: scommessa non piazzata", _pending())
+    assert res.status == cr.REJECTED
+    assert cr.classify_outcome("not matched") == cr.REJECTED
+
+
 # ── fallback per Event+Market+Selection (senza SignalRef) ────────────────────
 
 def test_fallback_senza_signalref():
@@ -80,6 +95,16 @@ def test_conferma_di_altro_segnale_non_associata():
 def test_fallback_parziale_non_associa():
     # Solo l'evento combacia (manca mercato/selezione): non si associa a caso.
     res = cr.interpret("Inter v Milan confermata", _pending())
+    assert res.status == cr.UNMATCHED
+
+
+def test_fallback_richiede_tutti_e_tre_i_campi():
+    # Un pending con MarketName vuoto NON è identificabile via fallback (servono
+    # tutti e tre i campi): solo il SignalRef può confermarlo.
+    pending = [{"signal_id": "x", "ref": "",
+                "EventName": "Inter v Milan", "MarketName": "",
+                "SelectionName": "Over 2,5 goal"}]
+    res = cr.interpret("Inter v Milan Over 2,5 goal confermata", pending)
     assert res.status == cr.UNMATCHED
 
 
