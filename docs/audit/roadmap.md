@@ -322,9 +322,23 @@ selezione dal dizionario).
 valori non riconosciuti.
 **Audit totale:** traduzione alias → valore XTrader pronta e safe.
 
-## CP-04..CP-10 (pianificate, da affinare con il proprietario)
-- **CP-04** — integrazione con `validator.py` (PR-10) e `build_csv_row` prima
-  della scrittura CSV.
+## CP-04 — custom-parser/validated-row ✅ (consegnato)
+**Obiettivo:** dal Parser Personalizzato a una riga CSV validata, pronta alla
+scrittura (senza scriverla: l'aggancio ad `app` è CP-09).
+**Tecnico:** `xtrader_bridge/custom_pipeline.py` — `build_validated_row(defn,
+text, *, value_maps_registry, mode, require_price)` applica `apply_parser`
+(CP-02/03), impone i default del contratto (`Handicap`="0", `Points`=""), poi
+`validator.validate` (PR-10). Due gate: parser "Non pronto" (`NOT_READY`) +
+validator (modalità + `Price`>1.0 + `BetType` PUNTA/BANCA). `PipelineResult`
+con `.placeable`; `is_placeable()` scorciatoia.
+**Test hard:** `tests/unit/test_custom_pipeline.py` — riga valida piazzabile
+(14 col, BetType tradotto, Handicap default); NOT_READY; INVALID_PRICE (1.00);
+INVALID_BETTYPE (lato sconosciuto); INVALID_MISSING_FIELDS (MarketType per
+NAME_ONLY); `require_price=False` bypassa; `is_placeable`.
+**Micro-audit:** nessuna scrittura CSV; `app`/GUI/contratto invariati.
+**Audit totale:** segnale custom validato col contratto prima della scrittura.
+
+## CP-05..CP-10 (pianificate, da affinare con il proprietario)
 - **CP-05** — trasformazioni configurabili (es. somma-gol → Over (somma).5,
   normalizzazione quota).
 - **CP-06** — costruttore GUI (Inizia dopo / Finisce prima di / obbligatorio /
