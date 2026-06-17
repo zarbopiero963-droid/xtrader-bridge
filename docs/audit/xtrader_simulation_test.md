@@ -8,28 +8,21 @@
 
 ## 0. Premesse di sicurezza
 
-> **Comportamento ATTUALE di DRY_RUN (importante).** Il flag `dry_run` esiste in
-> config (default = simulazione) e la logica `safety_guard` è testata, ma il
-> **wiring runtime non è ancora attivo** (`TODO(wiring)`, vedi `final_audit.md` §4):
-> oggi il bridge **non** modifica ancora il proprio comportamento di scrittura in
-> base a `dry_run`. Per questo, durante il collaudo, la sicurezza è garantita da
-> **XTrader in Modalità Simulazione**, non dal flag del bridge. I passi "atteso"
-> che menzionano DRY_RUN descrivono il comportamento **desiderato dopo il wiring**;
-> sono segnalati di volta in volta.
+> **DRY_RUN ora è agganciato (PR-21).** In DRY_RUN il bridge riconosce il segnale ma
+> **NON scrive** il CSV operativo (lo dichiara nel log). Resta comunque buona prassi
+> tenere XTrader in **Modalità Simulazione** durante il collaudo.
 
-- XTrader in **Modalità Simulazione** (mai reale durante il collaudo) — è questa,
-  oggi, la garanzia primaria.
-- Bridge in **DRY_RUN** in config; passare a modalità reale solo consapevolmente,
-  con stake minimo e **dopo** che il wiring runtime è stato implementato e verificato.
+- XTrader in **Modalità Simulazione** (mai reale durante il collaudo).
+- Bridge in **DRY_RUN** in config: con PR-21 questo **sopprime davvero** la scrittura.
+  Passare a modalità reale solo consapevolmente, con stake minimo.
 - Usare un bot Telegram e una chat **di test**, non quelli di produzione.
 
-> **Cosa è agganciato al runtime oggi** (vedi `final_audit.md` §4). Sono attivi:
-> filtro chat (solo con `chat_id` configurato), parsing+validazione, scrittura/
-> svuotamento CSV. **NON sono ancora agganciati** (logica pura testata, non collegata
-> al bot live): protezione **duplicati/raffica** (Caso E), **conferma XTrader** (Caso F),
-> **DRY_RUN/limite-giorno**, **multi-chat** provider/mode. I passi "atteso" che li
-> riguardano sono marcati `TODO(wiring)` e oggi **falliranno**: vanno trattati come
-> verifica del **comportamento desiderato dopo il wiring**, non come criteri superabili ora.
+> **Cosa è agganciato al runtime oggi** (vedi `final_audit.md` §4). **Attivi:** filtro
+> chat (solo con `chat_id` configurato), parsing+validazione, **anti-duplicato +
+> limite/minuto + limite/giorno + DRY_RUN** (PR-21), scrittura/svuotamento CSV.
+> **NON ancora agganciati** (logica pura testata): **conferma XTrader** (Caso F), coda
+> multi-segnale, **multi-chat** provider/mode — passi marcati `TODO(wiring)`, oggi
+> attesi come falliti.
 
 ## 1. Setup
 
@@ -42,15 +35,12 @@
 
 ## 2. Caso A — segnale valido (happy path)
 
-> **Nota DRY_RUN.** Oggi il flag non è agganciato: il bridge **scrive** comunque la riga
-> (la sicurezza è data da XTrader in Simulazione). Una volta agganciato il wiring, DRY_RUN
-> **sopprimerà** la scrittura operativa. Per non avere un criterio contraddittorio, il
-> test di scrittura+XTrader (A1) va eseguito con **DRY_RUN disattivato** (modalità reale
-> ma XTrader in Simulazione); un separato **smoke DRY_RUN (A2)** verifica la non-scrittura
-> dopo il wiring.
+> **Nota DRY_RUN (PR-21).** Il test di scrittura+XTrader (A1) va eseguito con **DRY_RUN
+> disattivato** (`dry_run=false`); lo smoke A2 verifica che con DRY_RUN attivo il CSV
+> **non** venga scritto — ora è davvero agganciato.
 
 ### A1 — scrittura + lettura XTrader (DRY_RUN OFF, XTrader in Simulazione)
-1. Avvia il bridge (START).
+1. Avvia il bridge (START). Verifica nel log "⚠️ Modalità REALE".
 2. Invia nella chat di test un messaggio P.Bet. valido, oppure coerente col Parser
    Personalizzato attivo.
 3. **Atteso nel bridge:** segnale riconosciuto, validato, scritto nel CSV.
@@ -59,10 +49,11 @@
 5. **Atteso in XTrader:** la fonte Segnali legge il CSV; segnale valido (verde) secondo
    `MarketId+SelectionId` o `EventName+MarketType+SelectionName`.
 
-### A2 — `TODO(wiring)` smoke DRY_RUN (dopo il wiring di PR-19)
-1. Con `dry_run` attivo, invia lo stesso segnale valido.
-2. **Atteso (dopo wiring):** **nessuna** scrittura del CSV operativo; log che indica la
-   simulazione. *Oggi questo passo fallisce perché il flag non è agganciato.*
+### A2 — smoke DRY_RUN (ora attivo, PR-21)
+1. Con `dry_run` attivo (default), avvia: il log mostra "🧪 DRY_RUN attivo". Invia un
+   segnale valido.
+2. **Atteso:** log "🧪 DRY_RUN: segnale riconosciuto ma CSV NON scritto"; il CSV operativo
+   resta **invariato** (nessuna riga). L'ultimo segnale è comunque mostrato in GUI.
 
 ## 3. Caso B — segnale invalido (deve essere scartato)
 
@@ -84,19 +75,17 @@
 2. **Atteso:** il CSV viene svuotato lasciando **solo l'header** (nessun vecchio
    segnale residuo).
 
-## 6. Caso E — `TODO(wiring)` duplicati e raffica (NON ancora attivo)
+## 6. Caso E — duplicati e raffica (ora attivo, PR-21)
 
-> `signal_dedupe`/`DailyLimiter` non sono agganciati a `app` (vedi `final_audit.md`
-> §4 punti 1–2): **oggi due messaggi identici ravvicinati riscrivono il CSV due
-> volte** e la raffica non è limitata. Questo caso descrive il comportamento
-> **desiderato dopo il wiring** e oggi **fallisce**.
+> Eseguire con **DRY_RUN OFF** per osservare la soppressione della scrittura
+> (`live_guard` aggancia dedup + limite/minuto + limite/giorno a `app._process`).
 
 1. Invia due volte lo **stesso** messaggio ravvicinato.
-2. **Atteso (dopo wiring):** il secondo è riconosciuto come duplicato (nessuna seconda
-   scommessa).
+2. **Atteso:** il secondo è riconosciuto come duplicato — log "♻️ Duplicato ignorato";
+   **nessuna seconda riga** scritta.
 3. Invia molti segnali in poco tempo.
-4. **Atteso (dopo wiring):** oltre il limite/minuto e il limite/giorno i segnali in
-   eccesso sono rifiutati.
+4. **Atteso:** oltre il limite/minuto → log "🚦 Limite al minuto raggiunto"; oltre
+   `max_per_day` → log "🚦 Limite giornaliero raggiunto". I segnali in eccesso non scrivono.
 
 ## 7. Caso F — `TODO(wiring)` conferma XTrader (NON ancora attivo)
 
@@ -115,14 +104,14 @@
 
 1. Riavvia il bridge e l'EXE.
 2. **Atteso:** la config persiste; nessun thread/polling incoerente dopo STOP/chiusura.
-   (Il riconoscimento dei duplicati dopo riavvio dipende dal wiring di `signal_dedupe`,
-   oggi non attivo — vedi Caso E.)
+   Con PR-21 lo stato anti-duplicato è persistito in `%APPDATA%\XTraderBridge\
+   dedupe_state.json`, quindi un duplicato recente resta riconosciuto anche dopo il riavvio.
 
 ## 9. Esito
 
-- [ ] Casi **attivi oggi** con esito atteso: A1, B, C (con `chat_id`), D, G.
-- [ ] Casi `TODO(wiring)` (A2, E, F): verificati **dopo** l'aggancio al runtime; oggi
-      attesi come falliti/non applicabili. Non certificarli come superati prima del wiring.
+- [ ] Casi **attivi** con esito atteso: A1, A2, B, C (con `chat_id`), D, E, G.
+- [ ] Caso `TODO(wiring)` rimasto (F — conferma XTrader): verificarlo **dopo**
+      l'aggancio del listener conferme; oggi atteso come non applicabile.
 - [ ] Nessun token nei log; nessun CSV corrotto/parziale; header sempre presente.
 - [ ] Registrare versione testata, data, ambiente (Windows/XTrader) e note.
 

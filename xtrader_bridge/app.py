@@ -13,12 +13,20 @@ import customtkinter as ctk
 from . import __version__
 from .config_store import (
     CONFIG_FILE,
+    config_dir,
     load_config,
     migrate_legacy_config,
     save_config,
 )
 from .csv_writer import init_csv, write_csv
-from . import event_log, settings_validation, signal_router
+from . import (
+    event_log,
+    live_guard,
+    safety_guard,
+    settings_validation,
+    signal_dedupe,
+    signal_router,
+)
 from .signal_gate import SignalGate
 
 try:
@@ -46,6 +54,10 @@ class App(ctk.CTk):
         self._tg_app = None
         self._loop = None
         self._gate = SignalGate()   # evita che un clear obsoleto cancelli un nuovo segnale
+        # Guardrail del percorso di scrittura (PR-21), creati allo START dalla config:
+        # tracker = dedup + limite/minuto (PR-15); daily = limite/giorno (PR-19).
+        self._tracker = None
+        self._daily = None
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -198,6 +210,26 @@ class App(ctk.CTk):
         # non deve interrompere la GUI.
         event_log.append_entry(safe, level or event_log.classify(safe))
 
+    # ── GUARDRAIL (PR-21) ─────────────────────
+    def _dedupe_state_path(self) -> str:
+        # History anti-duplicato accanto al config (AppData): i duplicati recenti
+        # restano riconosciuti dopo un riavvio.
+        import os
+        return os.path.join(config_dir(), "dedupe_state.json")
+
+    def _init_guards(self, cfg: dict) -> None:
+        """Crea i guardrail del percorso di scrittura dalla config (chiamato allo
+        START). `max_per_day` invalido in config → default sicuro con avviso."""
+        self._tracker = signal_dedupe.SignalTracker()
+        signal_dedupe.load_state(self._tracker, self._dedupe_state_path())  # best-effort
+        try:
+            self._daily = safety_guard.DailyLimiter(
+                max_per_day=cfg.get("max_per_day", safety_guard.DEFAULT_MAX_PER_DAY))
+        except ValueError:
+            self._daily = safety_guard.DailyLimiter()
+            self._log(f"⚠️ max_per_day non valido in config: uso "
+                      f"{safety_guard.DEFAULT_MAX_PER_DAY}.")
+
     # ── START / STOP ──────────────────────────
     def _start(self):
         if not TELEGRAM_OK:
@@ -230,9 +262,14 @@ class App(ctk.CTk):
         self._btn_stop.configure(state="normal")
 
         init_csv(cfg["csv_path"])
+        self._init_guards(cfg)
         self._log("🚀 Bridge avviato!")
         self._log(f"📄 CSV: {cfg['csv_path']}")
         self._log(f"⏱️  Auto-clear dopo: {cfg['clear_delay']}s")
+        if safety_guard.is_dry_run(cfg):
+            self._log("🧪 DRY_RUN attivo (simulazione): il CSV operativo NON verrà scritto.")
+        else:
+            self._log("⚠️ Modalità REALE: i segnali validi verranno scritti nel CSV.")
         self._log("👂 In ascolto su Telegram...")
 
         self._bot_thread = threading.Thread(
@@ -315,6 +352,17 @@ class App(ctk.CTk):
             return
 
         row = result.row
+
+        # Guardrail del percorso di scrittura (PR-21): dedup + limite/minuto +
+        # limite/giorno + DRY_RUN. Solo WRITE autorizza la scrittura; ogni altro
+        # esito la sopprime (anti-doppia-scommessa / simulazione).
+        if self._tracker is not None:
+            decision = live_guard.evaluate(cfg, self._tracker, self._daily, text)
+            signal_dedupe.save_state(self._tracker, self._dedupe_state_path())  # best-effort
+            if decision != live_guard.WRITE:
+                self._after_non_write(decision, row)
+                return
+
         # Registra la generazione PRIMA di scrivere: invalida eventuali clear in
         # coda di segnali precedenti, così non cancellano questo nuovo segnale.
         gen = self._gate.begin()
@@ -338,6 +386,27 @@ class App(ctk.CTk):
             delay, lambda g=gen: self._do_clear(cfg["csv_path"], g))
         self._clear_timer.start()
         self.after(0, lambda: self._log(f"⏱️  CSV verrà svuotato tra {delay}s"))
+
+    def _after_non_write(self, decision: str, row: dict) -> None:
+        """Gestisce gli esiti che NON scrivono il CSV (PR-21): log chiaro e, in
+        DRY_RUN, aggiorna comunque l'ultimo segnale riconosciuto."""
+        ev = row.get("EventName", "")
+        sel = row.get("SelectionName", "")
+        if decision == live_guard.DRY_RUN:
+            info = f"🧪 DRY_RUN — {ev}  |  {sel}  q.{row.get('Price', '')}"
+            self.after(0, lambda: self._sig_lbl.configure(text=info, text_color="#ffb74d"))
+            self.after(0, lambda: self._log(
+                f"🧪 DRY_RUN: segnale riconosciuto ma CSV NON scritto (simulazione): "
+                f"{ev} | {sel}"))
+        elif decision == live_guard.DUPLICATE:
+            self.after(0, lambda: self._log(
+                f"♻️ Duplicato ignorato (nessuna doppia scommessa): {ev} | {sel}"))
+        elif decision == live_guard.RATE_LIMITED:
+            self.after(0, lambda: self._log(
+                "🚦 Limite al minuto raggiunto: segnale ignorato."))
+        elif decision == live_guard.DAILY_LIMITED:
+            self.after(0, lambda: self._log(
+                "🚦 Limite giornaliero raggiunto: segnale ignorato."))
 
     def _do_clear(self, path: str, gen: int):
         # Svuota solo se nessun segnale più recente è arrivato nel frattempo.
