@@ -88,6 +88,8 @@ class FieldRule:
     def from_dict(cls, data: dict) -> "FieldRule":
         """Crea una regola da dict tollerando chiavi mancanti (default) ed extra
         (ignorate: forward-compatibilità con schema più recenti)."""
+        if not isinstance(data, dict):
+            raise ValueError(f"regola non è un oggetto JSON: {type(data).__name__}")
         known = {f.name for f in dataclasses.fields(cls)}
         kwargs = {k: data[k] for k in known if k in data}
         if "target" not in kwargs:
@@ -126,6 +128,8 @@ class CustomParserDef:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CustomParserDef":
+        if not isinstance(data, dict):
+            raise ValueError(f"parser JSON non è un oggetto: {type(data).__name__}")
         rules = [FieldRule.from_dict(r) for r in data.get("rules", [])]
         version = data.get("version", SCHEMA_VERSION)
         try:

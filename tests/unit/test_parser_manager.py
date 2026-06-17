@@ -77,6 +77,25 @@ def test_load_active_carica_il_parser(tmp_path):
     assert defn is not None and defn.name == "Yangon"
 
 
+def test_load_config_non_condivide_parser_by_chat(tmp_path):
+    # deepcopy dei DEFAULTS: mutare la config restituita non deve toccare DEFAULTS
+    # né i load successivi.
+    from xtrader_bridge import config_store
+    missing = str(tmp_path / "non_esiste.json")
+    cfg1 = config_store.load_config(missing)
+    cfg1["parser_by_chat"]["123"] = "X"
+    cfg2 = config_store.load_config(missing)
+    assert cfg2["parser_by_chat"] == {}
+    assert config_store.DEFAULTS["parser_by_chat"] == {}
+
+
+def test_load_active_file_non_oggetto_e_none(tmp_path):
+    # File JSON valido ma non-oggetto (es. "[]"): fail-safe → None, non crash.
+    bad = tmp_path / "Rotto.json"
+    bad.write_text("[]", encoding="utf-8")
+    assert pm.load_active({"active_parser": "Rotto"}, dir_path=str(tmp_path)) is None
+
+
 def test_load_active_override_per_chat(tmp_path):
     _save_parser("Globale", str(tmp_path))
     _save_parser("PerChat", str(tmp_path))
