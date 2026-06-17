@@ -6,6 +6,7 @@ config) vive in moduli separati ed è testabile headless.
 
 import asyncio
 import threading
+import time
 from datetime import datetime
 
 import customtkinter as ctk
@@ -18,16 +19,16 @@ from .config_store import (
     migrate_legacy_config,
     save_config,
 )
-from .csv_writer import init_csv, write_csv
+from .csv_writer import init_csv, write_rows
 from . import (
     event_log,
     live_guard,
     safety_guard,
     settings_validation,
     signal_dedupe,
+    signal_queue,
     signal_router,
 )
-from .signal_gate import SignalGate
 
 try:
     from telegram import Update
@@ -50,14 +51,18 @@ class App(ctk.CTk):
         self._config = self._load_config()
         self._running = False
         self._bot_thread = None
-        self._clear_timer = None
         self._tg_app = None
         self._loop = None
-        self._gate = SignalGate()   # evita che un clear obsoleto cancelli un nuovo segnale
         # Guardrail del percorso di scrittura (PR-21), creati allo START dalla config:
         # tracker = dedup + limite/minuto (PR-15); daily = limite/giorno (PR-19).
         self._tracker = None
         self._daily = None
+        # Coda dei segnali attivi (PR-22): determina quali righe sono nel CSV e
+        # gestisce i timeout per-segnale. Mutata sia dal thread del bot (add) sia dal
+        # timer di scadenza → protetta da un lock. Sostituisce il vecchio SignalGate.
+        self._queue = None
+        self._queue_lock = threading.Lock()
+        self._expire_timer = None
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -243,6 +248,17 @@ class App(ctk.CTk):
             self._log(f"⚠️ max_per_day non valido in config: uso "
                       f"{safety_guard.DEFAULT_MAX_PER_DAY}.")
         self._load_daily_state()
+        # Coda dei segnali attivi (PR-22): il timeout per-segnale è `clear_delay`
+        # (stesso valore dell'auto-clear), così OVERWRITE_LAST replica il
+        # comportamento storico (un segnale, svuotato dopo il timeout).
+        mode = signal_queue.normalize_mode(cfg.get("queue_mode"))
+        delay = cfg.get("clear_delay", settings_validation.DEFAULT_TIMEOUT)
+        try:
+            self._queue = signal_queue.SignalQueue(mode=mode, default_timeout=delay)
+        except ValueError:
+            self._queue = signal_queue.SignalQueue(mode=mode)
+            self._log(f"⚠️ clear_delay non valido per la coda: uso il default.")
+        self._log(f"🧮 Modalità coda: {mode}")
 
     def _load_daily_state(self) -> None:
         """Ripristina il conteggio giornaliero (persistenza same-day tra START/STOP).
@@ -336,8 +352,8 @@ class App(ctk.CTk):
                     self._tg_app.stop(), self._loop)
             except Exception:
                 pass
-        if self._clear_timer:
-            self._clear_timer.cancel()
+        if self._expire_timer:
+            self._expire_timer.cancel()
         self._status_lbl.configure(text="⬤  OFFLINE", text_color="#ef5350")
         self._btn_start.configure(state="normal")
         self._btn_stop.configure(state="disabled")
@@ -418,15 +434,24 @@ class App(ctk.CTk):
                 self._after_non_write(decision, row)
                 return
 
-        # Registra la generazione PRIMA di scrivere: invalida eventuali clear in
-        # coda di segnali precedenti, così non cancellano questo nuovo segnale.
-        gen = self._gate.begin()
+        # Coda dei segnali attivi (PR-22): aggiunge il segnale (OVERWRITE_LAST
+        # sostituisce l'attivo; APPEND_ACTIVE/QUEUE_UNTIL_CONFIRMED accodano) e
+        # riscrive TUTTE le righe attive in modo atomico. `expire` prima dell'add
+        # rimuove i segnali già scaduti.
+        path = cfg["csv_path"]
+        delay = cfg.get("clear_delay", settings_validation.DEFAULT_TIMEOUT)
+        now = time.time()
+        with self._queue_lock:
+            self._queue.expire(now=now)
+            sid = self._queue.add(row, now=now)
+            rows = self._queue.active_rows()
         try:
-            write_csv(row, cfg["csv_path"])
+            write_rows(rows, path)
         except Exception as ex:
-            # Scrittura fallita (es. CSV bloccato oltre i retry): annulla il consumo
-            # dei guardrail, così lo stesso segnale può essere ritentato e NON resta
-            # soppresso come "duplicato" o conteggiato nel tetto giornaliero.
+            # Scrittura fallita: togli dalla coda il segnale appena aggiunto e annulla
+            # il consumo dei guardrail → il segnale è riprovabile e non resta soppresso.
+            with self._queue_lock:
+                self._queue.remove(sid)
             if self._tracker is not None:
                 self._tracker.restore_state(tracker_snap)
                 if self._daily is not None and daily_snap is not None:
@@ -446,16 +471,13 @@ class App(ctk.CTk):
         self.after(0, lambda: self._log(
             f"📱 Segnale ({result.source}): {row.get('EventName', '')}  |  "
             f"{row.get('SelectionName', '')}  q.{row.get('Price', '')}"))
-        self.after(0, lambda: self._log("✅ CSV aggiornato → XTrader può piazzare la scommessa"))
+        self.after(0, lambda n=len(rows): self._log(
+            f"✅ CSV aggiornato ({n} attiv{'o' if n == 1 else 'i'}) → XTrader può piazzare"))
 
-        # Auto-clear
-        delay = cfg.get("clear_delay", 90)
-        if self._clear_timer:
-            self._clear_timer.cancel()
-        self._clear_timer = threading.Timer(
-            delay, lambda g=gen: self._do_clear(cfg["csv_path"], g))
-        self._clear_timer.start()
-        self.after(0, lambda: self._log(f"⏱️  CSV verrà svuotato tra {delay}s"))
+        # Scadenza per-segnale: (ri)programma il tick che rimuove i segnali scaduti
+        # e riscrive le righe rimaste (o svuota se non ne resta nessuno).
+        self._schedule_expiry(path, delay)
+        self.after(0, lambda d=delay: self._log(f"⏱️  Scadenza segnale tra {d}s"))
 
     def _after_non_write(self, decision: str, row: dict) -> None:
         """Gestisce gli esiti che NON scrivono il CSV (PR-21): log chiaro e, in
@@ -478,20 +500,51 @@ class App(ctk.CTk):
             self.after(0, lambda: self._log(
                 "🚦 Limite giornaliero raggiunto: segnale ignorato."))
 
-    def _do_clear(self, path: str, gen: int):
-        # Svuota solo se nessun segnale più recente è arrivato nel frattempo.
-        if self._gate.clear_if_current(gen, lambda: init_csv(path)):
-            self.after(0, lambda: self._log("🗑️  CSV svuotato → pronto per il prossimo segnale"))
-        else:
-            self.after(0, lambda: self._log("⏭️  Clear obsoleto ignorato (segnale più recente presente)"))
+    def _schedule_expiry(self, path: str, delay) -> None:
+        """(Ri)programma il tick di scadenza per-segnale (PR-22)."""
+        if self._expire_timer:
+            self._expire_timer.cancel()
+        self._expire_timer = threading.Timer(delay, lambda: self._expire_tick(path, delay))
+        self._expire_timer.daemon = True
+        self._expire_timer.start()
+
+    def _expire_tick(self, path: str, delay) -> None:
+        """Rimuove i segnali scaduti e riscrive le righe rimaste (o svuota il CSV
+        se non ne resta nessuno). Riusa la scadenza basata sul tempo della coda:
+        non cancella mai un segnale ancora valido. Si riprogramma finché la coda
+        non è vuota."""
+        now = time.time()
+        with self._queue_lock:
+            if self._queue is None:
+                return
+            expired = self._queue.expire(now=now)
+            rows = self._queue.active_rows()
+            empty = self._queue.is_empty()
+        try:
+            write_rows(rows, path)        # rows vuota → solo header (CSV svuotato)
+        except Exception as ex:
+            self.after(0, lambda e=ex: self._log(
+                f"❌ Aggiornamento CSV alla scadenza fallito: {e}"))
+            return
+        if expired:
+            self.after(0, lambda n=len(expired): self._log(
+                f"🗑️  {n} segnale/i scaduto/i rimosso/i dal CSV"))
+        if not empty:
+            self._schedule_expiry(path, delay)
 
     def _manual_clear(self):
         path = self._e_csv.get().strip()
-        if path:
-            # begin() invalida eventuali timer pendenti, poi svuota subito.
-            self._gate.begin()
-            init_csv(path)
-            self._log("🗑️  CSV svuotato manualmente")
+        if not path:
+            return
+        # Ferma il tick di scadenza, svuota la coda e il CSV subito (PR-22).
+        if self._expire_timer:
+            self._expire_timer.cancel()
+        with self._queue_lock:
+            if self._queue is not None:
+                for sid in self._queue.active_ids():
+                    self._queue.remove(sid)
+        init_csv(path)
+        self._log("🗑️  CSV svuotato manualmente")
 
     def _open_parser_builder(self):
         """Apre la finestra del costruttore di Parser Personalizzati (CP-06).
