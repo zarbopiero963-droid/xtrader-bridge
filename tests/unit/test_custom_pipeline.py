@@ -34,7 +34,7 @@ def test_riga_valida_piazzabile():
     assert list(res.row.keys()) == CSV_HEADER          # 14 colonne, ordine contratto
     assert res.row["EventName"] == "Inter v Milan"
     assert res.row["BetType"] == "PUNTA"               # value-map applicata
-    assert res.row["Price"] == "1,85"
+    assert res.row["Price"] == "1.85"                  # virgola → punto (contratto)
     assert res.row["Handicap"] == "0"                  # default contratto
     assert res.row["Points"] == ""                     # default contratto (vuoto)
 
@@ -43,6 +43,7 @@ def test_handicap_points_non_sovrascritti_se_impostati():
     # Se il parser valorizza Handicap/Points, i default del contratto NON devono
     # sovrascriverli (guardia anti-regressione su _with_contract_defaults).
     defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
         cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
         cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
         cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
@@ -76,6 +77,7 @@ def test_invalid_bettype_lato_sconosciuto():
     # BetType opzionale con value-map: lato non riconosciuto → "" → INVALID_BETTYPE
     # (non NOT_READY, perché qui BetType non è obbligatorio della regola).
     defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
         cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
         cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
         cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
@@ -91,6 +93,7 @@ def test_invalid_missing_fields_modalita_nome():
     # Parser non marca MarketType obbligatorio, ma NAME_ONLY lo richiede →
     # passa il gate parser ma il validator scarta per campo nome mancante.
     defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
         cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
         cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
         cp.FieldRule(target="Price", fixed_value="2.0", required=True),
@@ -104,6 +107,7 @@ def test_invalid_missing_fields_modalita_nome():
 def test_require_price_false_bypassa_prezzo():
     msg = "Match: Inter v Milan\nSel: Sì\nLato: BACK"   # nessun prezzo
     defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
         cp.FieldRule(target="EventName", start_after="Match:", end_before="\n", required=True),
         cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
         cp.FieldRule(target="SelectionName", start_after="Sel:", end_before="\n", required=True),
@@ -112,6 +116,53 @@ def test_require_price_false_bypassa_prezzo():
     res = pipe.build_validated_row(defn, msg, require_price=False)
     assert res.status == validator.VALID
     assert res.placeable is True
+
+
+def test_bettype_minuscolo_normalizzato():
+    # BetType "punta" (senza value-map) → normalizzato a "PUNTA" nel contratto.
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
+        cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
+        cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
+        cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
+        cp.FieldRule(target="Price", fixed_value="2.0", required=True),
+        cp.FieldRule(target="BetType", fixed_value="punta", required=True),
+    ])
+    res = pipe.build_validated_row(defn, "qualsiasi")
+    assert res.status == validator.VALID
+    assert res.row["BetType"] == "PUNTA"
+
+
+def test_provider_dal_runtime_se_assente():
+    # Una regola senza Provider: il provider del runtime riempie la colonna.
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
+        cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
+        cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
+        cp.FieldRule(target="Price", fixed_value="2.0", required=True),
+        cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+    ])
+    ok = pipe.build_validated_row(defn, "x", provider="TelegramBot")
+    assert ok.status == validator.VALID
+    assert ok.row["Provider"] == "TelegramBot"
+    # senza provider e senza regola Provider → non piazzabile
+    ko = pipe.build_validated_row(defn, "x")
+    assert ko.status == pipe.INVALID_MISSING_PROVIDER
+    assert ko.placeable is False
+
+
+def test_prezzo_virgola_normalizzato_a_punto():
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
+        cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
+        cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
+        cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
+        cp.FieldRule(target="Price", start_after="Quota:", required=True),
+        cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+    ])
+    res = pipe.build_validated_row(defn, "Quota: 2,50")
+    assert res.status == validator.VALID
+    assert res.row["Price"] == "2.50"
 
 
 def test_is_placeable_scorciatoia():

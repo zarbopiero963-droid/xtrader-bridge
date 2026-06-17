@@ -24,6 +24,10 @@ from .custom_parser import CustomParserDef
 from .custom_parser_engine import apply_parser
 
 NOT_READY = "NOT_READY"   # gate parser: manca un campo obbligatorio della regola
+INVALID_MISSING_PROVIDER = "INVALID_MISSING_PROVIDER"  # Provider assente (contratto)
+
+# Colonne quota: il contratto XTrader usa il punto decimale (es. "1.85").
+_PRICE_COLS = ("Price", "MinPrice", "MaxPrice")
 
 
 @dataclass
@@ -41,36 +45,58 @@ class PipelineResult:
         return self.status == validator.VALID
 
 
-def _with_contract_defaults(row: dict) -> dict:
-    """Applica i default del contratto alle colonne non valorizzate dalle regole:
-    `Handicap` = "0" (come negli esempi XTrader), `Points` resta vuoto. Non tocca
-    i valori già impostati."""
+def _normalize_to_contract(row: dict, provider: str) -> dict:
+    """Porta la riga al formato del contratto XTrader, senza sovrascrivere i
+    valori già impostati dalle regole:
+
+    - `Provider`: dal runtime/config (`provider`) se la regola non lo imposta;
+    - `Handicap` = "0" se vuoto/None; `Points` resta vuoto;
+    - `Price`/`MinPrice`/`MaxPrice`: virgola → punto (es. "1,85" → "1.85");
+    - `BetType`: maiuscolo (il contratto emette esattamente PUNTA/BANCA).
+    """
     out = dict(row)
+    if provider and not str(out.get("Provider", "")).strip():
+        out["Provider"] = provider
     hcap = out.get("Handicap")
-    # None o stringa vuota → default; evita str(None)=="None" (truthy) che
-    # impedirebbe l'applicazione del default.
+    # None o stringa vuota → default; evita str(None)=="None" (truthy).
     if hcap is None or not str(hcap).strip():
         out["Handicap"] = DEFAULT_HANDICAP
-    # Points: default solo se assente o None; un valore esplicito (anche "") resta.
     if out.get("Points") is None:
         out["Points"] = DEFAULT_POINTS
+    for col in _PRICE_COLS:
+        v = out.get(col)
+        if v is not None and str(v).strip():
+            out[col] = str(v).replace(",", ".")
+    bt = out.get("BetType")
+    if bt is not None and str(bt).strip():
+        out["BetType"] = str(bt).strip().upper()
     return out
 
 
 def build_validated_row(defn: CustomParserDef, text: str, *,
                         value_maps_registry: dict = None,
+                        provider: str = "",
                         mode: str = recognition.DEFAULT_MODE,
                         require_price: bool = True) -> PipelineResult:
     """Applica il parser al messaggio e valida la riga risultante.
 
+    `provider` è fornito dal runtime/config (come per il parser hardcoded) e
+    riempie la colonna `Provider` se la regola non la imposta.
+
     Ritorna un `PipelineResult`: `placeable` True solo se supera il gate "Non
-    pronto" del parser E la validazione (modalità + prezzo + BetType)."""
+    pronto" del parser, ha un `Provider` E passa la validazione (modalità +
+    prezzo + BetType). La riga è già in formato contratto (quota col punto,
+    BetType maiuscolo)."""
     res = apply_parser(defn, text, value_maps_registry)
-    row = _with_contract_defaults(res.as_csv_row())
+    row = _normalize_to_contract(res.as_csv_row(), provider)
 
     if not res.ready:
         # Manca un obbligatorio della regola: non si costruisce un segnale.
         return PipelineResult(NOT_READY, row, list(res.missing_required))
+
+    if not str(row.get("Provider", "")).strip():
+        # Provider è obbligatorio per il contratto; il runtime lo passa da config.
+        return PipelineResult(INVALID_MISSING_PROVIDER, row, list(res.missing_required))
 
     status, detail = validator.validate(row, mode, require_price)
     return PipelineResult(status, row, list(res.missing_required), detail)
