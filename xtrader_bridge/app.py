@@ -16,10 +16,8 @@ from .config_store import (
     migrate_legacy_config,
     save_config,
 )
-from .csv_writer import build_csv_row, init_csv, write_csv
-from .parser import parse_message
-from . import recognition
-from . import validator
+from .csv_writer import init_csv, write_csv
+from . import signal_router
 from .signal_gate import SignalGate
 
 try:
@@ -242,12 +240,23 @@ class App(ctk.CTk):
                 if not msg:
                     return
                 text = msg.text or msg.caption or ''
-                cid = cfg.get("chat_id", "").strip()
-                if cid and str(msg.chat_id) != cid:
+                runtime_chat = str(msg.chat_id)
+                # Guardia unica delle chat ammesse (CP-09): chat configurata
+                # (`chat_id`) ∪ chiavi `parser_by_chat`. Gatea sia il percorso
+                # custom sia l'hardcoded, così un override per-chat è ammesso
+                # anche con `chat_id` singolo impostato, e nessuna chat non
+                # autorizzata può scrivere. Se nulla è configurato → legacy.
+                if not signal_router.is_chat_allowed(cfg, runtime_chat):
                     return
-                if 'P.Bet.' not in text and '📊' not in text:
-                    return
-                self._process(text, cfg)
+                # Il prefiltro legacy (P.Bet./📊) vale SOLO per il parser hardcoded.
+                # Se per la chat di origine (approvata) è attivo un Parser
+                # Personalizzato (CP-09), deve ricevere ogni messaggio (i formati
+                # custom non hanno quei marker). active_custom_parser approva solo
+                # la chat configurata o le voci parser_by_chat esplicite.
+                if signal_router.active_custom_parser(cfg, runtime_chat) is None:
+                    if 'P.Bet.' not in text and '📊' not in text:
+                        return
+                self._process(text, cfg, chat_id=runtime_chat)
 
             self._tg_app.add_handler(MessageHandler(filters.ALL, _handle))
             await self._tg_app.initialize()
@@ -266,34 +275,32 @@ class App(ctk.CTk):
             self.after(0, self._stop)
 
     # ── PROCESS SIGNAL ────────────────────────
-    def _process(self, text: str, cfg: dict):
-        parsed = parse_message(text)
-        row    = build_csv_row(parsed, cfg["provider"])
-
-        # Non scrivere righe non riconoscibili o non piazzabili da XTrader:
-        # meglio scartare un segnale incompleto che generare una riga ambigua.
-        # Il validatore controlla campi-nome (modalità), BetType e prezzo (> 1.0).
-        mode = recognition.normalize_mode(cfg.get("recognition_mode", "NAME_ONLY"))
-        require_price = validator.require_price_enabled(cfg)
-        status, detail = validator.validate(row, mode, require_price=require_price)
-        if status != validator.VALID:
+    def _process(self, text: str, cfg: dict, chat_id: str = None):
+        # CP-09: instrada al Parser Personalizzato attivo (autoritativo) o, in
+        # assenza, al parser hardcoded. Non scrive righe non piazzabili: meglio
+        # scartare un segnale incompleto che generare una riga ambigua.
+        result = signal_router.resolve_row(text, cfg, chat_id=chat_id)
+        if not result.placeable:
+            detail = (", ".join(result.missing_required)
+                      if result.missing_required else result.detail)
             self.after(0, lambda: self._log(
-                f"⚠️ Segnale scartato ({status}, modalità {mode}): {detail}"))
+                f"⚠️ Segnale scartato ({result.source}/{result.status}): {detail}"))
             return
 
+        row = result.row
         # Registra la generazione PRIMA di scrivere: invalida eventuali clear in
         # coda di segnali precedenti, così non cancellano questo nuovo segnale.
         gen = self._gate.begin()
         write_csv(row, cfg["csv_path"])
 
-        info = (f"🏆 {parsed['teams']}  |  "
-                f"{parsed['signal_type']}  |  "
-                f"q.{parsed['quota']}  |  "
-                f"{parsed['probability']}%")
+        info = (f"🏆 {row.get('EventName', '')}  |  "
+                f"{row.get('SelectionName', '')}  |  "
+                f"q.{row.get('Price', '')}")
 
         self.after(0, lambda: self._sig_lbl.configure(text=info, text_color="white"))
-        self.after(0, lambda: self._log(f"📱 Segnale ricevuto: {parsed['teams']}"))
-        self.after(0, lambda: self._log(f"   Mercato: {parsed['signal_type']}  Quota: {parsed['quota']}"))
+        self.after(0, lambda: self._log(
+            f"📱 Segnale ({result.source}): {row.get('EventName', '')}  |  "
+            f"{row.get('SelectionName', '')}  q.{row.get('Price', '')}"))
         self.after(0, lambda: self._log("✅ CSV aggiornato → XTrader può piazzare la scommessa"))
 
         # Auto-clear
