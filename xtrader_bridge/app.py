@@ -270,7 +270,8 @@ class App(ctk.CTk):
         # scartare un segnale incompleto che generare una riga ambigua.
         result = signal_router.resolve_row(text, cfg)
         if not result.placeable:
-            detail = result.missing_required or result.detail
+            detail = (", ".join(result.missing_required)
+                      if result.missing_required else result.detail)
             self.after(0, lambda: self._log(
                 f"⚠️ Segnale scartato ({result.source}/{result.status}): {detail}"))
             return
