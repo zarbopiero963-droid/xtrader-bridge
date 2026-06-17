@@ -205,8 +205,11 @@ def skeleton(name: str = "Nuovo parser") -> CustomParserDef:
         rules=[
             FieldRule(target="Provider", fixed_value="TG_CUSTOM"),
             FieldRule(target="EventName", required=True),
-            FieldRule(target="MarketName", required=True),
-            FieldRule(target="SelectionName", required=True),
+            # NAME_ONLY (recognition) richiede MarketType: obbligatorio nello
+            # skeleton così, una volta configurato, la riga è riconoscibile.
+            FieldRule(target="MarketType", required=True, value_map="markettype"),
+            FieldRule(target="MarketName", value_map="marketname"),  # etichetta (opz.)
+            FieldRule(target="SelectionName", required=True, value_map="selectionname"),
             FieldRule(target="Price", required=True),
             FieldRule(target="BetType", required=True, value_map="bettype"),
             FieldRule(target="Handicap", fixed_value="0"),

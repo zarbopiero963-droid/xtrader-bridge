@@ -14,9 +14,16 @@ raggiungere XTrader. Il validatore non modifica la riga: la accetta o la scarta.
 `Points` resta come arriva (vuoto di default): NON va normalizzato a "1".
 """
 
+import re
+
 from . import recognition
 
 VALID = "VALID"
+
+# Quota = decimale "semplice": cifre con al più un separatore (punto o virgola).
+# Esclude esponenti ("1e2"), inf/nan, segni, separatori multipli: il contratto
+# XTrader documenta quote decimali punto-normalizzate, non notazioni arbitrarie.
+_DECIMAL_PRICE = re.compile(r"^\d+(?:[.,]\d+)?$")
 INVALID_MISSING_FIELDS = "INVALID_MISSING_FIELDS"   # campi nome/ID per la modalità
 INVALID_MISSING_PRICE = "INVALID_MISSING_PRICE"
 INVALID_PRICE = "INVALID_PRICE"
@@ -35,10 +42,11 @@ def _price_status(value) -> str:
     s = str(value).strip()
     if not s:
         return INVALID_MISSING_PRICE
-    try:
-        price = float(s.replace(",", "."))
-    except ValueError:
+    # Forma decimale stretta: niente esponenti/inf/nan/testo (il parser custom
+    # può estrarre testo arbitrario, es. "1e2"/"inf"/"abc").
+    if not _DECIMAL_PRICE.match(s):
         return INVALID_PRICE
+    price = float(s.replace(",", "."))
     return VALID if price > 1.0 else INVALID_PRICE
 
 
@@ -59,10 +67,25 @@ def validate(row: dict, mode: str, require_price: bool = True):
     if bet_type not in _VALID_BETTYPES:
         return (INVALID_BETTYPE, bet_type)
 
-    if require_price:
-        status = _price_status(row.get("Price", ""))
+    # Un `Price` valorizzato va SEMPRE validato; `require_price` governa solo se
+    # un `Price` VUOTO è ammesso (flag = "prezzo opzionale", non "non validato").
+    price_raw = str(row.get("Price", "")).strip()
+    if price_raw:
+        status = _price_status(price_raw)
         if status != VALID:
-            return (status, str(row.get("Price", "")).strip())
+            return (status, price_raw)
+    elif require_price:
+        return (INVALID_MISSING_PRICE, "")
+
+    # MinPrice/MaxPrice sono opzionali (possono restare vuoti), ma se valorizzati
+    # devono essere quote valide: un limite malformato ("abc") o sotto/uguale a
+    # 1.0 non deve raggiungere XTrader. (Il percorso hardcoded li lascia vuoti.)
+    for col in ("MinPrice", "MaxPrice"):
+        v = str(row.get(col, "")).strip()
+        if v:
+            status = _price_status(v)
+            if status != VALID:
+                return (status, v)
 
     return (VALID, None)
 

@@ -164,7 +164,7 @@ def test_skeleton_non_configurato_non_e_pronto():
     # a un messaggio NON deve diventare "pronto" con dati fasulli. [Codex P2]
     res = eng.apply_parser(cp.skeleton("X"), "Inter v Milan\nQuota 1,85")
     assert res.ready is False
-    assert set(res.missing_required) == {"EventName", "MarketName", "SelectionName", "Price", "BetType"}
+    assert set(res.missing_required) == {"EventName", "MarketType", "SelectionName", "Price", "BetType"}
     assert res.values["Provider"] == "TG_CUSTOM"  # i fixed restano valorizzati
 
 
