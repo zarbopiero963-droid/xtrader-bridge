@@ -13,6 +13,8 @@ from xtrader_bridge import transforms as tr
     ("2-3", "Over 5,5"),
     ("0-0", "Over 0,5"),
     (" 1 - 2 ", "Over 3,5"),
+    ("1x2", "Over 3,5"),
+    ("1X2", "Over 3,5"),
 ])
 def test_score_to_over(score, atteso):
     assert tr.apply(score, "score_to_over") == atteso
@@ -63,6 +65,20 @@ def test_apply_parser_usa_la_trasformazione():
     ])
     res = eng.apply_parser(defn, "Risultato: 6-0\naltro")
     assert res.values["SelectionName"] == "Over 6,5"
+
+
+def test_apply_parser_ordine_transform_poi_value_map():
+    # Blinda l'ordine estrazione → trasformazione → value-map: la value-map deve
+    # ricevere il risultato della trasformazione ("Over 6,5"), non il grezzo.
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="SelectionName", start_after="Risultato:", end_before="\n",
+                     transform="score_to_over", value_map="over_map", required=True),
+    ])
+    # Registry nel formato reale: nome → {alias_normalizzato: valore}. La chiave è
+    # normalizzata come fa value_maps.resolve ("Over 6,5" → "over 6.5").
+    reg = {"over_map": {"over 6.5": "Over 6,5 gol"}}
+    res = eng.apply_parser(defn, "Risultato: 6-0\n", value_maps_registry=reg)
+    assert res.values["SelectionName"] == "Over 6,5 gol"
 
 
 def test_apply_parser_transform_input_non_valido_non_pronto():
