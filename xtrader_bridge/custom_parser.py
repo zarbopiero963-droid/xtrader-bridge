@@ -88,6 +88,8 @@ class FieldRule:
     def from_dict(cls, data: dict) -> "FieldRule":
         """Crea una regola da dict tollerando chiavi mancanti (default) ed extra
         (ignorate: forward-compatibilità con schema più recenti)."""
+        if not isinstance(data, dict):
+            raise ValueError(f"regola non è un oggetto JSON: {type(data).__name__}")
         known = {f.name for f in dataclasses.fields(cls)}
         kwargs = {k: data[k] for k in known if k in data}
         if "target" not in kwargs:
@@ -126,7 +128,14 @@ class CustomParserDef:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CustomParserDef":
-        rules = [FieldRule.from_dict(r) for r in data.get("rules", [])]
+        if not isinstance(data, dict):
+            raise ValueError(f"parser JSON non è un oggetto: {type(data).__name__}")
+        rules_data = data.get("rules", [])
+        if rules_data is None:
+            rules_data = []
+        if not isinstance(rules_data, list):
+            raise ValueError(f"'rules' non è una lista: {type(rules_data).__name__}")
+        rules = [FieldRule.from_dict(r) for r in rules_data]
         version = data.get("version", SCHEMA_VERSION)
         try:
             version = int(version)
@@ -160,6 +169,10 @@ def validate_parser_def(defn: CustomParserDef) -> list:
 
     if not defn.name or not str(defn.name).strip():
         errors.append("Il parser deve avere un nome non vuoto.")
+    elif str(defn.name) != str(defn.name).strip():
+        # Spazi iniziali/finali rendono incoerenti filename (normalizzato) e
+        # selezione (strippata): il parser non si ricaricherebbe (fallback muto).
+        errors.append("Il nome non deve avere spazi iniziali o finali.")
 
     if not isinstance(defn.version, int) or defn.version < 1:
         errors.append(f"Versione schema non valida: {defn.version!r} (atteso intero >= 1).")

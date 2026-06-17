@@ -7,6 +7,7 @@ esiste un vecchio `config.json` accanto all'eseguibile, viene migrato.
 Un file corrotto viene messo da parte (`.bak`) e si riparte dai default.
 """
 
+import copy
 import json
 import os
 import shutil
@@ -27,6 +28,10 @@ DEFAULTS = {
     "recognition_mode": "NAME_ONLY",
     # Se True (default sicuro) un segnale senza quota valida (> 1.0) viene scartato.
     "require_price":     True,
+    # Parser Personalizzato attivo (nome; "" = usa il parser hardcoded). CP-07.
+    "active_parser":    "",
+    # Override per chat sorgente: {chat_id: nome_parser}. Vuoto = usa active_parser.
+    "parser_by_chat":   {},
 }
 
 
@@ -99,7 +104,10 @@ def load_config(path: str = CONFIG_FILE) -> dict:
     Se il file esiste ma è corrotto (JSON non valido), ne fa un backup `.bak`
     e riparte dai default, così una config rotta non blocca l'avvio.
     """
-    cfg = dict(DEFAULTS)
+    # deepcopy: i default contengono valori mutabili nested (es. parser_by_chat
+    # {}); una copia shallow li condividerebbe con DEFAULTS e una mutazione
+    # in-place della config restituita corromperebbe i load successivi.
+    cfg = copy.deepcopy(DEFAULTS)
     if os.path.exists(path):
         try:
             with open(path, 'r', encoding='utf-8') as f:
