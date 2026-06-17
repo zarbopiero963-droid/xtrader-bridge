@@ -41,6 +41,11 @@ except ImportError:
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+# Ritardo (s) di retry quando una riscrittura del CSV fallisce (es. file bloccato da
+# XTrader oltre i retry atomici): breve, per non lasciare una riga stantia per un
+# intero intervallo di timeout (PR-23, finding Codex).
+_WRITE_RETRY_DELAY = 5
+
 
 class App(ctk.CTk):
     def __init__(self):
@@ -326,6 +331,19 @@ class App(ctk.CTk):
             return
 
         cfg = self._save_config()
+        # Fail-fast (PR-23): la chat notifiche XTrader NON deve coincidere con una chat
+        # sorgente (chat_id o un override parser_by_chat); altrimenti i segnali di quella
+        # chat finirebbero nel percorso di conferma e verrebbero ignorati silenziosamente.
+        notif = str(cfg.get("xtrader_notification_chat_id", "") or "").strip()
+        if notif:
+            sources = {str(cfg.get("chat_id", "") or "").strip()}
+            sources.update(str(k).strip() for k in (cfg.get("parser_by_chat") or {}))
+            sources.discard("")
+            if notif in sources:
+                self._log("❌ La Chat notifiche XTrader coincide con una chat sorgente: "
+                          "cambiala (i segnali verrebbero scambiati per conferme). Avvio annullato.")
+                return
+
         self._running = True
         self._status_lbl.configure(text="⬤  ATTIVO", text_color="#66bb6a")
         self._btn_start.configure(state="disabled")
@@ -527,8 +545,8 @@ class App(ctk.CTk):
         - UNKNOWN (associato ma esito non chiaro) / UNMATCHED (di un'altra scommessa)
           → solo log, nessuna modifica. Il TIMEOUT è già coperto dalla scadenza coda.
         """
-        confirm_kw = cfg.get("confirmation_keywords") or None
-        reject_kw = cfg.get("rejection_keywords") or None
+        confirm_kw = confirmation_reader.normalize_keywords(cfg.get("confirmation_keywords"))
+        reject_kw = confirmation_reader.normalize_keywords(cfg.get("rejection_keywords"))
         with self._queue_lock:
             pending = self._queue.pending() if self._queue is not None else []
         # interpret è puro: lo si chiama fuori dal lock (nessuna mutazione qui).
@@ -549,9 +567,12 @@ class App(ctk.CTk):
                      if result.status == confirmation_reader.CONFIRMED
                      else "rifiutato (REJECTED)")
             if write_error is not None:
+                # Il segnale è già rimosso dalla coda ma il CSV (write fallita) ha
+                # ancora la riga: riprova PRESTO (non a timeout pieno, che terrebbe la
+                # riga stantia un intero intervallo) così la riga sparisce in fretta.
                 self.after(0, lambda e=write_error: self._log(
-                    f"❌ Aggiornamento CSV dopo conferma fallito: {e}. Riprovo."))
-                self._schedule_expiry(path, delay=self._queue_timeout)   # converge su disco
+                    f"❌ Aggiornamento CSV dopo conferma fallito: {e}. Riprovo a breve."))
+                self._schedule_expiry(path, delay=_WRITE_RETRY_DELAY)
                 return
             self.after(0, lambda v=esito: self._log(
                 f"✅ XTrader: segnale {v} → rimosso dal CSV"))
@@ -604,8 +625,8 @@ class App(ctk.CTk):
             # → busy-loop), così il disco converge allo stato della coda. Riprogramma
             # anche a coda vuota (un segnale scaduto non deve restare nel CSV).
             self.after(0, lambda e=write_error: self._log(
-                f"❌ Aggiornamento CSV alla scadenza fallito: {e}. Riprovo."))
-            self._schedule_expiry(path, delay=self._queue_timeout)
+                f"❌ Aggiornamento CSV alla scadenza fallito: {e}. Riprovo a breve."))
+            self._schedule_expiry(path, delay=_WRITE_RETRY_DELAY)
             return
         if expired:
             self.after(0, lambda n=len(expired): self._log(
