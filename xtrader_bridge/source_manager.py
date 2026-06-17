@@ -19,8 +19,16 @@ parte resta interamente testabile headless e a rischio zero per il CSV.
 
 MODES = ("PRE", "LIVE")
 DEFAULT_MODE = "PRE"
-# Provider di default per modalità (usato se la sorgente non ne imposta uno).
-_MODE_PROVIDER = {"PRE": "TG_PRE", "LIVE": "TG_LIVE"}
+# Provider di default per modalità: DERIVATO da MODES (PRE → "TG_PRE", LIVE →
+# "TG_LIVE"), così aggiungere/cambiare una modalità non può desincronizzare la
+# mappa (fonte unica = MODES).
+_MODE_PROVIDER = {m: "TG_" + m for m in MODES}
+
+
+def is_valid_mode(mode) -> bool:
+    """True se `mode` (case/spazi-insensibile) è una modalità ammessa. Fonte unica
+    usata sia dalla normalizzazione runtime sia dalla validazione, per non divergere."""
+    return str(mode or "").strip().upper() in MODES
 
 
 def _as_bool(value) -> bool:
@@ -33,9 +41,11 @@ def _as_bool(value) -> bool:
 
 
 def normalize_mode(mode) -> str:
-    """Normalizza la modalità a PRE/LIVE; valore mancante/ignoto → DEFAULT_MODE."""
+    """Normalizza la modalità a PRE/LIVE; valore mancante/ignoto → DEFAULT_MODE
+    (coercizione difensiva a runtime; la validazione invece RIFIUTA un valore
+    ignoto, vedi `validate_sources`)."""
     m = str(mode or "").strip().upper()
-    return m if m in MODES else DEFAULT_MODE
+    return m if is_valid_mode(m) else DEFAULT_MODE
 
 
 def _normalize_source(raw: dict) -> dict:
@@ -118,8 +128,10 @@ def validate_sources(raw_sources) -> list:
                 f"{where}: chat_id duplicato {chat!r} (ogni chat una sola sorgente).")
         else:
             seen_ids.add(chat)
-        raw_mode = str(raw.get("mode", "") or "").strip().upper()
-        if raw_mode and raw_mode not in MODES:
+        raw_mode = str(raw.get("mode", "") or "").strip()
+        # La validazione RIFIUTA una modalità ignota (a differenza di
+        # normalize_mode che la coercizza a default): qui vogliamo avvisare l'utente.
+        if raw_mode and not is_valid_mode(raw_mode):
             errors.append(
                 f"{where}: modalità non valida {raw_mode!r}; ammesse {', '.join(MODES)}.")
     return errors

@@ -25,6 +25,21 @@ def test_normalize_mode():
     assert sm.normalize_mode(None) == "PRE"
 
 
+def test_is_valid_mode():
+    assert sm.is_valid_mode("LIVE") is True
+    assert sm.is_valid_mode(" pre ") is True
+    assert sm.is_valid_mode("boh") is False
+    assert sm.is_valid_mode("") is False
+
+
+def test_mode_provider_coerente_con_modes():
+    # _MODE_PROVIDER è derivato da MODES: ogni modalità ha un provider TG_<MODE>,
+    # così aggiungere una modalità non può desincronizzare la mappa.
+    for mode in sm.MODES:
+        cfg = _cfg({"chat_id": "1", "mode": mode})
+        assert sm.provider_for_chat(cfg, "1") == "TG_" + mode
+
+
 def test_source_chats_ritorna_copia():
     cfg = _cfg({"chat_id": "42"})
     sm.source_chats(cfg)[0]["chat_id"] = "999"
