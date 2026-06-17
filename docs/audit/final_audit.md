@@ -58,8 +58,8 @@ manuali su Windows/XTrader e l'attivazione esplicita della modalità reale.
 | 15 | Build EXE | PR-18 | ⚠️ workflow pronto, build manuale |
 
 > **Nota:** "Chiuso da" indica la PR che ha implementato la logica. Anti-duplicato (#5)
-> e DRY_RUN/limiti sono ora **agganciati al runtime** (PR-21). Restano logica pura non
-> ancora collegata: coda (#2 residuo), conferma XTrader, multi-chat; il filtro chat (#8)
+> e DRY_RUN/limiti sono ora **agganciati al runtime** (PR-21). Restano logiche pure non
+> ancora collegate: coda (#2 residuo), conferma XTrader, multi-chat; il filtro chat (#8)
 > è effettivo solo con `chat_id` configurato — vedi §4.
 
 ---
