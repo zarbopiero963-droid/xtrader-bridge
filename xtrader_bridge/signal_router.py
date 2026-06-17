@@ -64,6 +64,28 @@ def active_custom_parser(cfg: dict, chat: str, parsers_dir: str = None):
     return parser_manager.load_active(cfg, chat, parsers_dir)
 
 
+# Marker del formato P.Bet. storico: il prefiltro legacy vale SOLO per il parser
+# hardcoded (i formati custom non hanno questi marker).
+_LEGACY_MARKERS = ("P.Bet.", "📊")
+
+
+def should_process(cfg: dict, chat: str, text: str, parsers_dir: str = None) -> bool:
+    """Decide se un messaggio live va instradato (PR-11). Logica pura e testabile,
+    estratta dal listener Telegram:
+
+    - chat non ammessa (`is_chat_allowed`) → mai (non si indebolisce il filtro chat);
+    - chat ammessa con un Parser Personalizzato attivo → sempre (i formati custom
+      non hanno i marker `P.Bet.`/📊, quindi il prefiltro legacy non si applica);
+    - chat ammessa senza custom (percorso hardcoded) → solo se il testo contiene un
+      marker legacy, per non passare al parser storico messaggi non pertinenti."""
+    if not is_chat_allowed(cfg, chat):
+        return False
+    if active_custom_parser(cfg, chat, parsers_dir) is not None:
+        return True
+    text = text or ""
+    return any(marker in text for marker in _LEGACY_MARKERS)
+
+
 @dataclass
 class RouteResult:
     """Esito dell'instradamento. `row` è valorizzata SOLO se piazzabile."""
