@@ -140,9 +140,17 @@ comportamento legacy (tutte le chat ammesse — responsabilità dell'utente).
 
 ## 5. Persistenza, import/export
 
-- I parser sono salvati **per-parser** in `data/parsers/<nome>.json`. La cartella
-  `data/parsers/` è in `.gitignore`: sono **configurazione utente**, non si
-  committano.
+- I parser sono salvati **per-parser** in una **cartella utente persistente**:
+  `custom_parser.default_parsers_dir()` → `<config_dir>/parsers/<nome>.json`,
+  cioè `config_store.config_dir()/parsers`. Su Windows è
+  `%APPDATA%\XTraderBridge\parsers`; in dev/Linux/macOS è
+  `~/.config/XTraderBridge/parsers` (o `$XDG_CONFIG_HOME/XTraderBridge/parsers`).
+  È questa la cartella da editare/backuppare per l'app reale (i test passano
+  invece una `dir_path` temporanea esplicita). La scelta della cartella utente
+  fa sopravvivere i parser a reinstallazioni/spostamenti dell'EXE.
+- Nota: `.gitignore` esclude anche `data/parsers/` (voce difensiva, sono
+  configurazione utente e non si committano), ma **non** è il percorso usato a
+  runtime: quello di default è `<config_dir>/parsers/` qui sopra.
 - Scrittura **atomica** e rifiuto di nomi che collidono o non fanno round-trip col
   filename (anti path-traversal).
 - `parser_io.export_parser` / `import_parser` per condividere i file (valida prima
