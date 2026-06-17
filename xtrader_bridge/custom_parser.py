@@ -130,7 +130,12 @@ class CustomParserDef:
     def from_dict(cls, data: dict) -> "CustomParserDef":
         if not isinstance(data, dict):
             raise ValueError(f"parser JSON non è un oggetto: {type(data).__name__}")
-        rules = [FieldRule.from_dict(r) for r in data.get("rules", [])]
+        rules_data = data.get("rules", [])
+        if rules_data is None:
+            rules_data = []
+        if not isinstance(rules_data, list):
+            raise ValueError(f"'rules' non è una lista: {type(rules_data).__name__}")
+        rules = [FieldRule.from_dict(r) for r in rules_data]
         version = data.get("version", SCHEMA_VERSION)
         try:
             version = int(version)

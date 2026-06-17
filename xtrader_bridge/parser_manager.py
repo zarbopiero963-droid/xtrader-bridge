@@ -77,6 +77,15 @@ def load_active(cfg: dict, chat_id: str = "", dir_path: str = None):
         return None
     path = custom_parser.parser_path(name, dir_path)
     try:
-        return custom_parser.load_parser(path)
+        defn = custom_parser.load_parser(path)
     except (OSError, ValueError):
         return None
+    # Fail-closed (alimenta il live, CP-09):
+    # - il file caricato deve essere PROPRIO il parser richiesto: nomi diversi che
+    #   si sanitizzano allo stesso file (es. "A/B" → AB.json) non devono caricare
+    #   il parser sbagliato;
+    # - la definizione dev'essere valida (un file modificato a mano con, es.,
+    #   BetType duplicato non deve raggiungere il CSV).
+    if defn.name != name or not custom_parser.is_valid(defn):
+        return None
+    return defn

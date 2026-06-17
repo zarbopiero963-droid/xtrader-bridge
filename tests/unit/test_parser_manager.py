@@ -96,6 +96,32 @@ def test_load_active_file_non_oggetto_e_none(tmp_path):
     assert pm.load_active({"active_parser": "Rotto"}, dir_path=str(tmp_path)) is None
 
 
+def test_load_active_rifiuta_nome_che_collide(tmp_path):
+    # Esiste solo il parser "AB"; richiedere "A/B" (che si sanitizza ad AB.json)
+    # NON deve caricare "AB": fail-closed → None.
+    _save_parser("AB", str(tmp_path))
+    assert pm.load_active({"active_parser": "A/B"}, dir_path=str(tmp_path)) is None
+
+
+def test_load_active_rifiuta_parser_invalido(tmp_path):
+    # File scritto a mano, valido come JSON ma semanticamente invalido (target
+    # duplicato): load_active deve ritornare None, non un parser ambiguo.
+    import json
+    bad = {"name": "Dup", "rules": [
+        {"target": "BetType", "fixed_value": "PUNTA"},
+        {"target": "BetType", "fixed_value": "BANCA"},
+    ]}
+    (tmp_path / "Dup.json").write_text(json.dumps(bad), encoding="utf-8")
+    assert pm.load_active({"active_parser": "Dup"}, dir_path=str(tmp_path)) is None
+
+
+def test_load_active_rules_malformato_none(tmp_path):
+    # rules:null non deve crashare (TypeError) ma fallire chiuso.
+    (tmp_path / "Nullo.json").write_text('{"name":"Nullo","rules":null}', encoding="utf-8")
+    # rules None → [] → parser senza regole → invalido → None.
+    assert pm.load_active({"active_parser": "Nullo"}, dir_path=str(tmp_path)) is None
+
+
 def test_load_active_override_per_chat(tmp_path):
     _save_parser("Globale", str(tmp_path))
     _save_parser("PerChat", str(tmp_path))
