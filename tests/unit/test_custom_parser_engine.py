@@ -119,3 +119,33 @@ def test_apply_parser_testo_vuoto_non_pronto():
     assert res.ready is False
     # tutti gli obbligatori non-fixed risultano mancanti
     assert set(res.missing_required) == {"EventName", "Price", "BetType"}
+
+
+def test_required_soddisfatto_da_fixed_value():
+    # Un obbligatorio con fixed_value è sempre soddisfatto, anche a testo vuoto.
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG_CUSTOM", required=True),
+    ])
+    res = eng.apply_parser(defn, "")
+    assert res.ready is True
+    assert res.missing_required == []
+    assert res.values["Provider"] == "TG_CUSTOM"
+
+
+def test_apply_parser_target_duplicato_ultimo_vince_senza_doppioni():
+    # Difesa: due regole stesso target (vietate da validate, ma il motore non
+    # deve produrre stati incoerenti). L'ultima vince; missing_required dedup.
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Price", start_after="A:", end_before="\n", required=True),
+        cp.FieldRule(target="Price", start_after="B:", end_before="\n", required=True),
+    ])
+    res = eng.apply_parser(defn, "B: 2,10")  # solo il secondo trova valore
+    assert res.values["Price"] == "2,10"
+    assert res.ready is True
+    assert res.missing_required == []  # niente "Price" doppio né falso mancante
+
+
+def test_extract_value_robusto_a_none():
+    # Costruzione "a mano" con None: niente crash su .find().
+    r = cp.FieldRule(target="EventName", start_after=None, end_before=None)
+    assert eng.extract_value("Inter v Milan\nx", r) == "Inter v Milan"

@@ -27,26 +27,34 @@ Semantica di una regola (`FieldRule`):
 
 from dataclasses import dataclass, field
 
-from .custom_parser import VALID_TARGETS, CustomParserDef, FieldRule
+from .csv_writer import CSV_HEADER
+from .custom_parser import CustomParserDef, FieldRule
 
 
 def extract_value(text: str, rule: FieldRule) -> str:
     """Estrae il valore di UNA regola dal testo (vedi semantica nel docstring
-    del modulo). Non solleva eccezioni: un delimitatore mancante → valore vuoto."""
-    if rule.fixed_value != "":
-        return rule.fixed_value
+    del modulo). Non solleva eccezioni: un delimitatore mancante → valore vuoto.
+
+    I campi della regola sono normalizzati con `or ""`: anche se costruita a mano
+    con `None` (la persistenza JSON forza già `str`), `.find()` non esplode."""
+    fixed = rule.fixed_value or ""
+    if fixed != "":
+        return fixed
     if not text:
         return ""
 
+    start_after = rule.start_after or ""
+    end_before = rule.end_before or ""
+
     start = 0
-    if rule.start_after != "":
-        idx = text.find(rule.start_after)
+    if start_after != "":
+        idx = text.find(start_after)
         if idx == -1:
             return ""
-        start = idx + len(rule.start_after)
+        start = idx + len(start_after)
 
-    if rule.end_before != "":
-        end = text.find(rule.end_before, start)
+    if end_before != "":
+        end = text.find(end_before, start)
         if end == -1:
             end = len(text)
     else:
@@ -61,15 +69,17 @@ class ExtractionResult:
     """Esito dell'applicazione di un parser a un messaggio."""
 
     ready: bool                              # True se nessun obbligatorio è vuoto
-    values: dict = field(default_factory=dict)        # target → valore estratto
-    missing_required: list = field(default_factory=list)  # obbligatori vuoti
+    values: "dict[str, str]" = field(default_factory=dict)        # target → valore
+    missing_required: "list[str]" = field(default_factory=list)   # obbligatori vuoti
 
-    def as_csv_row(self) -> dict:
+    def as_csv_row(self) -> "dict[str, str]":
         """Riga completa a 14 colonne: le colonne senza regola restano vuote.
 
-        NB: i valori sono quelli grezzi estratti (nessuna value-map/trasformazione,
-        quelle arrivano in CP-03/CP-05). Usare solo a parser `ready`."""
-        row = {col: "" for col in VALID_TARGETS}
+        Le colonne sono quelle del contratto (`csv_writer.CSV_HEADER`, fonte
+        unica) per evitare drift. NB: i valori sono quelli grezzi estratti
+        (nessuna value-map/trasformazione, quelle arrivano in CP-03/CP-05).
+        Usare solo a parser `ready`."""
+        row = {col: "" for col in CSV_HEADER}
         for target, value in self.values.items():
             if target in row:
                 row[target] = value
@@ -81,12 +91,16 @@ def apply_parser(defn: CustomParserDef, text: str) -> ExtractionResult:
 
     Ritorna i valori estratti per ogni regola e lo stato di "piazzabilità":
     `ready=False` con l'elenco `missing_required` se un campo obbligatorio è
-    risultato vuoto (→ niente CSV, è il gate "Non pronto")."""
+    risultato vuoto (→ niente CSV, è il gate "Non pronto").
+
+    `validate_parser_def` (CP-01) vieta già i target duplicati; qui il motore è
+    comunque robusto: per ogni target vince l'ultima regola e `missing_required`
+    è calcolato sul valore FINALE (dedup, niente doppioni o falsi mancanti)."""
     values = {}
-    missing = []
+    required_targets = []
     for rule in defn.rules:
-        value = extract_value(text, rule)
-        values[rule.target] = value
-        if rule.required and value == "":
-            missing.append(rule.target)
+        values[rule.target] = extract_value(text, rule)
+        if rule.required and rule.target not in required_targets:
+            required_targets.append(rule.target)
+    missing = [t for t in required_targets if values.get(t, "") == ""]
     return ExtractionResult(ready=not missing, values=values, missing_required=missing)
