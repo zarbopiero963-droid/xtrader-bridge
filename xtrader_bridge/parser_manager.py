@@ -60,16 +60,22 @@ def set_for_chat(cfg: dict, chat_id: str, name: str) -> dict:
 def available_parser_names(dir_path: str = None) -> list:
     """Nomi dei parser salvati (dal campo `name`), per i menu di selezione.
     I file illeggibili vengono saltati."""
+    import os
     names = []
     for path in custom_parser.list_parser_files(dir_path):
         try:
             defn = custom_parser.load_parser(path)
         except (OSError, ValueError):
             continue
-        # Elenca solo i parser che load_active accetterebbe (validi): un nome
-        # invalido nel menu porterebbe altrimenti a un fallback silenzioso.
-        if custom_parser.is_valid(defn):
-            names.append(defn.name)
+        # Elenca solo i nomi che load_active() saprebbe ricaricare: il parser
+        # dev'essere valido E il suo nome deve ri-mappare proprio a questo file
+        # (un file rinominato a mano, es. Wrong.json con name "Shown", offrirebbe
+        # altrimenti un nome che porta a un fallback silenzioso).
+        if not custom_parser.is_valid(defn):
+            continue
+        if os.path.abspath(custom_parser.parser_path(defn.name, dir_path)) != os.path.abspath(path):
+            continue
+        names.append(defn.name)
     return sorted(names)
 
 

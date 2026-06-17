@@ -75,6 +75,15 @@ def test_available_parser_names_esclude_invalidi(tmp_path):
     assert pm.available_parser_names(str(tmp_path)) == ["Buono"]
 
 
+def test_available_parser_names_esclude_file_rinominato(tmp_path):
+    import json
+    # File il cui nome interno NON ri-mappa al filename: load_active non lo
+    # troverebbe → non va offerto nel menu.
+    good = {"name": "Shown", "rules": [{"target": "Price", "required": True}]}
+    (tmp_path / "Wrong.json").write_text(json.dumps(good), encoding="utf-8")
+    assert pm.available_parser_names(str(tmp_path)) == []
+
+
 def test_set_active_copia_parser_by_chat():
     cfg = {"active_parser": "", "parser_by_chat": {"123": "X"}}
     out = pm.set_active(cfg, "Nuovo")
