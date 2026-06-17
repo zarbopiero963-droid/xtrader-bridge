@@ -300,7 +300,7 @@ versione, nessuna regola), skeleton valido, save/load tmp, filename anti-travers
 - **CP-06** — costruttore GUI (Inizia dopo / Finisce prima di / obbligatorio /
   value-map a tendina / test live su messaggio incollato).
 - **CP-07** — gestione parser: selezione/attivazione per chat sorgente, default.
-- **CP-08** — import/export + fixture di test su messaggi reali (skeleton es.).
+- **CP-08** — import/export + fixture di test su messaggi reali (skeleton di esempio).
 - **CP-09** — il Parser Personalizzato diventa il percorso principale; hardcoded
   come fallback.
 - **CP-10** — `CUSTOM_PARSER_READY`: audit completo, test hard, documentazione.

@@ -44,6 +44,28 @@ SCHEMA_VERSION = 1
 # non può andare in drift rispetto al contratto.
 VALID_TARGETS = tuple(CSV_HEADER)
 
+# Token booleani riconosciuti nei file JSON scritti/modificati a mano.
+_TRUE_TOKENS = {"true", "1", "yes", "si", "sì", "y", "on"}
+_FALSE_TOKENS = {"false", "0", "no", "n", "off", ""}
+
+
+def _as_bool(v) -> bool:
+    """Normalizza un valore JSON in bool senza la trappola di `bool(v)` (che
+    tratterebbe la stringa "false"/"0" come True). Accetta bool, numeri e le
+    rappresentazioni testuali comuni; su un valore ambiguo solleva ValueError
+    invece di indovinare (un parser è safety-critical)."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in _TRUE_TOKENS:
+            return True
+        if s in _FALSE_TOKENS:
+            return False
+    raise ValueError(f"valore booleano non riconosciuto per 'required': {v!r}")
+
 
 @dataclass
 class FieldRule:
@@ -70,7 +92,7 @@ class FieldRule:
         rule = cls(target=str(kwargs.pop("target")))
         for k, v in kwargs.items():
             if k == "required":
-                setattr(rule, k, bool(v))
+                setattr(rule, k, _as_bool(v))
             else:
                 setattr(rule, k, "" if v is None else str(v))
         return rule
@@ -89,7 +111,7 @@ class CustomParserDef:
     name: str
     description: str = ""
     version: int = SCHEMA_VERSION
-    rules: list = field(default_factory=list)  # list[FieldRule]
+    rules: "list[FieldRule]" = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {

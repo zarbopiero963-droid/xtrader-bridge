@@ -62,6 +62,22 @@ def test_from_dict_tollera_chiavi_mancanti_ed_extra():
 def test_from_dict_required_normalizzato_a_bool():
     assert cp.FieldRule.from_dict({"target": "Price", "required": 1}).required is True
     assert cp.FieldRule.from_dict({"target": "Price", "required": 0}).required is False
+    assert cp.FieldRule.from_dict({"target": "Price", "required": True}).required is True
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("true", True), ("True", True), ("1", True), ("yes", True), ("si", True), ("on", True),
+    ("false", False), ("False", False), ("0", False), ("no", False), ("off", False), ("", False),
+])
+def test_from_dict_required_stringhe_truthy_falsy(value, expected):
+    # Niente trappola bool("false")==True: le stringhe note sono normalizzate.
+    assert cp.FieldRule.from_dict({"target": "Price", "required": value}).required is expected
+
+
+def test_from_dict_required_valore_ambiguo_errore():
+    # Un valore booleano non riconosciuto NON viene indovinato (safety-critical).
+    with pytest.raises(ValueError):
+        cp.FieldRule.from_dict({"target": "Price", "required": "forse"})
 
 
 def test_from_dict_rule_senza_target_errore():
@@ -113,6 +129,17 @@ def test_versione_non_valida_invalido():
     d = _valid_def()
     d.version = 0
     assert any("Versione" in e for e in cp.validate_parser_def(d))
+
+
+@pytest.mark.parametrize("raw, expected", [("2", 2), ("abc", 1), (None, 1), (3, 3)])
+def test_from_dict_version_coercion(raw, expected):
+    # from_dict coerce le versioni non intere; "abc"/None ripiegano sullo schema.
+    d_dict = _valid_def().to_dict()
+    d_dict["version"] = raw
+    parsed = cp.CustomParserDef.from_dict(d_dict)
+    assert parsed.version == expected
+    # con versione >= 1 e regole valide, la definizione resta valida
+    assert cp.validate_parser_def(parsed) == []
 
 
 def test_required_targets():
