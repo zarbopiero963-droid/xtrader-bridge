@@ -442,21 +442,22 @@ class App(ctk.CTk):
         # riscrive TUTTE le righe attive in modo atomico. `expire` prima dell'add
         # rimuove i segnali già scaduti.
         path = cfg["csv_path"]
-        delay = self._queue_timeout
         now = time.time()
         # Lock tenuto ATTRAVERSO la scrittura: stato della coda e contenuto del CSV
         # evolvono in modo monotòno (nessuna corsa con il tick di scadenza).
         write_error = None
         with self._queue_lock:
+            queue_snap = self._queue.state()      # snapshot per rollback su write fallita
             self._queue.expire(now=now)
-            sid = self._queue.add(row, now=now)
+            self._queue.add(row, now=now)
             rows = self._queue.active_rows()
             try:
                 write_rows(rows, path)
             except Exception as ex:   # noqa: BLE001 — esito riportato a log, no crash
-                # Scrittura fallita: togli dalla coda il segnale appena aggiunto, così
-                # memoria e disco restano allineati e il segnale è riprovabile.
-                self._queue.remove(sid)
+                # Scrittura fallita: RIPRISTINA la coda allo stato precedente (allineato
+                # al CSV ancora su disco). In OVERWRITE_LAST il segnale precedente NON
+                # va perso e il nuovo è riprovabile.
+                self._queue.restore_state(queue_snap)
                 write_error = ex
         if write_error is not None:
             # Annulla anche il consumo dei guardrail → il segnale non resta soppresso.
@@ -466,6 +467,7 @@ class App(ctk.CTk):
                     self._daily.restore_state(daily_snap)
             self.after(0, lambda e=write_error: self._log(
                 f"❌ Scrittura CSV fallita: {e}. Segnale non registrato (riprovabile)."))
+            self._schedule_expiry(path)           # i segnali ripristinati devono comunque scadere
             return
         # Scrittura riuscita: ora è sicuro persistere lo stato dei guardrail.
         if self._tracker is not None:
@@ -482,10 +484,10 @@ class App(ctk.CTk):
         self.after(0, lambda n=len(rows): self._log(
             f"✅ CSV aggiornato ({n} attiv{'o' if n == 1 else 'i'}) → XTrader può piazzare"))
 
-        # Scadenza per-segnale: (ri)programma il tick che rimuove i segnali scaduti
-        # e riscrive le righe rimaste (o svuota se non ne resta nessuno).
-        self._schedule_expiry(path, delay)
-        self.after(0, lambda d=delay: self._log(f"⏱️  Scadenza segnale tra {d}s"))
+        # Scadenza per-segnale: (ri)programma il tick alla scadenza più vicina (non un
+        # ritardo fisso, così un segnale più vecchio non resta oltre il suo timeout).
+        self._schedule_expiry(path)
+        self.after(0, lambda d=self._queue_timeout: self._log(f"⏱️  Scadenza segnale tra ~{d}s"))
 
     def _after_non_write(self, decision: str, row: dict) -> None:
         """Gestisce gli esiti che NON scrivono il CSV (PR-21): log chiaro e, in
@@ -508,19 +510,28 @@ class App(ctk.CTk):
             self.after(0, lambda: self._log(
                 "🚦 Limite giornaliero raggiunto: segnale ignorato."))
 
-    def _schedule_expiry(self, path: str, delay) -> None:
-        """(Ri)programma il tick di scadenza per-segnale (PR-22)."""
+    def _schedule_expiry(self, path: str, delay=None) -> None:
+        """(Ri)programma il tick di scadenza (PR-22). Con `delay=None` lo programma
+        alla **scadenza più vicina** della coda (così un segnale più vecchio non
+        resta oltre il suo timeout quando ne arrivano di nuovi); con un `delay`
+        esplicito lo usa come ritardo (retry dopo un errore di scrittura)."""
+        if delay is None:
+            with self._queue_lock:
+                nxt = self._queue.next_expiry() if self._queue is not None else None
+            if nxt is None:
+                return                       # niente di attivo: nessun tick da programmare
+            delay = max(0.0, nxt - time.time())
         if self._expire_timer:
             self._expire_timer.cancel()
-        self._expire_timer = threading.Timer(delay, lambda: self._expire_tick(path, delay))
+        self._expire_timer = threading.Timer(delay, lambda: self._expire_tick(path))
         self._expire_timer.daemon = True
         self._expire_timer.start()
 
-    def _expire_tick(self, path: str, delay) -> None:
+    def _expire_tick(self, path: str) -> None:
         """Rimuove i segnali scaduti e riscrive le righe rimaste (o svuota il CSV
-        se non ne resta nessuno). Riusa la scadenza basata sul tempo della coda:
-        non cancella mai un segnale ancora valido. Si riprogramma finché la coda
-        non è vuota."""
+        se non ne resta nessuno). La scadenza è basata sul tempo della coda: non
+        cancella mai un segnale ancora valido. Si riprogramma alla scadenza più
+        vicina finché la coda non è vuota."""
         now = time.time()
         # Lock tenuto ATTRAVERSO la scrittura (monotòno con _process).
         write_error = None
@@ -536,17 +547,18 @@ class App(ctk.CTk):
                 write_error = ex
         if write_error is not None:
             # La coda (memoria) ha già rimosso gli scaduti ma il CSV è rimasto indietro:
-            # RIPROVA, così il disco converge allo stato della coda (un segnale scaduto
-            # non deve restare nel CSV). Riprogramma anche se la coda è vuota.
+            # RIPROVA con un ritardo limitato (non a scadenza, che sarebbe nel passato
+            # → busy-loop), così il disco converge allo stato della coda. Riprogramma
+            # anche a coda vuota (un segnale scaduto non deve restare nel CSV).
             self.after(0, lambda e=write_error: self._log(
                 f"❌ Aggiornamento CSV alla scadenza fallito: {e}. Riprovo."))
-            self._schedule_expiry(path, delay)
+            self._schedule_expiry(path, delay=self._queue_timeout)
             return
         if expired:
             self.after(0, lambda n=len(expired): self._log(
                 f"🗑️  {n} segnale/i scaduto/i rimosso/i dal CSV"))
         if not empty:
-            self._schedule_expiry(path, delay)
+            self._schedule_expiry(path)
 
     def _manual_clear(self):
         path = self._e_csv.get().strip()
