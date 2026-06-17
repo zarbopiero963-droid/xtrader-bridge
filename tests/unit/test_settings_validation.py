@@ -46,6 +46,15 @@ def test_timeout_non_numerico_blocca():
     assert any("Timeout" in e for e in errors)
 
 
+def test_timeout_non_positivo_blocca():
+    # validate_settings si appoggia a parse_timeout: anche un timeout <= 0 deve
+    # essere un errore bloccante (un auto-clear a 0/negativo è pericoloso).
+    for bad in ("0", "-5"):
+        raw = {"bot_token": "T", "csv_path": "x.csv", "clear_delay": bad}
+        errors = sv.validate_settings(raw)
+        assert any("Timeout" in e for e in errors), bad
+
+
 def test_token_assente_non_e_errore_di_validazione():
     # Il token vuoto NON è un errore "rosso" del form: disabilita START (can_start),
     # ma validate_settings resta vuoto se il resto è valido.
@@ -73,3 +82,10 @@ def test_can_start_csv_mancante_disabilita():
 def test_can_start_timeout_invalido_disabilita():
     raw = {"bot_token": "T", "csv_path": "x.csv", "clear_delay": "boh"}
     assert sv.can_start(raw) is False
+
+
+def test_can_start_timeout_non_positivo_disabilita():
+    # Timeout numerico ma <= 0: parse_timeout lo rifiuta → can_start False.
+    for bad in ("0", "-1"):
+        raw = {"bot_token": "T", "csv_path": "x.csv", "clear_delay": bad}
+        assert sv.can_start(raw) is False, bad
