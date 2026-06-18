@@ -76,7 +76,12 @@ def test_clear_stale_csv_rimuove_riga_orfana(tmp_path):
     # All'avvio/STOP la riga orfana deve sparire (resta solo header).
     p = tmp_path / "segnali.csv"
     csv_writer.write_csv(ROW, str(p))                 # riga "stantia" lasciata sul disco
-    assert len(_read(str(p))) == 2
+    # Stato di partenza esplicito (header + riga attesa): se il writer cambiasse
+    # comportamento (es. righe extra), questo test lo farebbe emergere subito.
+    rows_prima = _read(str(p))
+    assert rows_prima[0] == csv_writer.CSV_HEADER
+    assert rows_prima[1] == [ROW[col] for col in csv_writer.CSV_HEADER]
+    assert len(rows_prima) == 2
     assert csv_writer.clear_stale_csv(str(p)) is True
     assert _read(str(p)) == [csv_writer.CSV_HEADER]   # solo header
     assert _no_tmp_left(str(tmp_path))
