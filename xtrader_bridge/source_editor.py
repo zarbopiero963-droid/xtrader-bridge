@@ -93,21 +93,25 @@ class SourceEditor:
         errors, warnings = self.validate()
         if errors:
             return base, errors, warnings
-        # Chat "gestite" dall'editor: le sorgenti GIÀ in config (prima di questo
-        # salvataggio) PIÙ le righe correnti. Si azzerano TUTTI i loro override e si
-        # ri-aggiungono solo quelli delle righe attuali. Così l'override di una sorgente
-        # RIMOSSA viene tolto — altrimenti la chat resterebbe autorizzata via
-        # parser_by_chat (`is_chat_allowed`) e potrebbe ancora scrivere (finding Codex
-        # P1) — mentre gli override di chat NON gestite qui (es. `chat_id` globale o
-        # voci manuali) sono preservati.
-        managed = {s["chat_id"] for s in source_manager.source_chats(base)}
-        managed |= {s["chat_id"] for s in self.sources}
+        global_chat = str(base.get("chat_id", "") or "").strip()
+        row_ids = {s["chat_id"] for s in self.sources}
+        old_source_ids = {s["chat_id"] for s in source_manager.source_chats(base)}
         base["source_chats"] = [self._source_only(s) for s in self.sources]
         by_chat = parser_manager.parser_by_chat(base)
-        for chat in managed:
-            by_chat.pop(chat, None)
+        # Sorgenti RIMOSSE/rinominate: togli l'override, così la chat non resta
+        # autorizzata via parser_by_chat (`is_chat_allowed`) dopo la rimozione (Codex P1).
+        # MA conserva l'override della chat `chat_id` GLOBALE: resta autorizzata di suo,
+        # e il suo parser per-chat è ancora valido (Codex P2-a).
+        for chat in (old_source_ids - row_ids):
+            if chat and chat != global_chat:
+                by_chat.pop(chat, None)
+        # Righe correnti: azzera il vecchio override e ri-impostalo SOLO per le righe
+        # ATTIVE. Una sorgente disattivata non deve lasciare una chiave parser_by_chat:
+        # il runtime la deny-lista comunque, ma il check chat-notifiche di `_start`
+        # conta ogni chiave come sorgente e bloccherebbe l'avvio (Codex P2-b).
         for s in self.sources:
-            if s["parser"]:
+            by_chat.pop(s["chat_id"], None)
+            if s["parser"] and s["enabled"]:
                 by_chat[s["chat_id"]] = s["parser"]
         base["parser_by_chat"] = by_chat
         return base, [], warnings

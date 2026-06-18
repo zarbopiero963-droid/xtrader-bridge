@@ -156,3 +156,24 @@ def test_apply_rinomina_chat_id_sposta_override():
     assert errors == []
     assert "111" not in new_cfg["parser_by_chat"]       # vecchia chat non più autorizzata
     assert new_cfg["parser_by_chat"]["222"] == "X"
+
+
+def test_apply_preserva_override_della_chat_globale_se_sorgente_rimossa():
+    # Codex P2-a: la chat è sia chat_id globale sia una sorgente; rimuovendo la
+    # sorgente, l'override NON va perso (la chat resta autorizzata via chat_id).
+    cfg = {"chat_id": "111", "source_chats": [{"chat_id": "111"}],
+           "parser_by_chat": {"111": "X"}}
+    ed = SourceEditor()                       # nessuna riga: 111 rimossa come sorgente
+    new_cfg, errors, _ = ed.apply(cfg)
+    assert errors == []
+    assert new_cfg["parser_by_chat"]["111"] == "X"   # preservato (è il chat_id globale)
+
+
+def test_apply_riga_disattivata_non_scrive_override():
+    # Codex P2-b: una sorgente disattivata non deve lasciare una chiave parser_by_chat
+    # (altrimenti il check chat-notifiche di _start la conterebbe come sorgente).
+    ed = SourceEditor()
+    ed.add_source(chat_id="222", enabled=False, parser="X")
+    new_cfg, errors, _ = ed.apply({})
+    assert errors == []
+    assert "222" not in new_cfg.get("parser_by_chat", {})
