@@ -29,6 +29,7 @@ from . import (
     event_log,
     live_guard,
     log_view,
+    message_freshness,
     reconnect_policy,
     safety_guard,
     settings_controller,
@@ -746,6 +747,18 @@ class App(ctk.CTk):
             async def _handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 msg = update.message or update.channel_post
                 if not msg:
+                    return
+                # Anti-segnale-stantio (Codex P1): se la rete è caduta durante il
+                # polling, PTB riconnette da solo e RECUPERA gli arretrati. Un
+                # messaggio troppo vecchio (più di max_signal_age) va scartato: non è
+                # un segnale "live" ma un arretrato dell'outage.
+                msg_date = getattr(msg, "date", None)
+                msg_epoch = msg_date.timestamp() if msg_date is not None else None
+                max_age = cfg.get("max_signal_age", message_freshness.DEFAULT_MAX_AGE)
+                if message_freshness.is_stale(msg_epoch, time.time(), max_age):
+                    self.after(0, lambda: self._log(
+                        "⏳ Messaggio ignorato: troppo vecchio (probabile arretrato "
+                        "dopo una disconnessione)."))
                     return
                 text = msg.text or msg.caption or ''
                 runtime_chat = str(msg.chat_id)

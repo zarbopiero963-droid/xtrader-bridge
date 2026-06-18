@@ -52,6 +52,10 @@ DEFAULTS = {
     # attivo alla volta) / APPEND_ACTIVE / QUEUE_UNTIL_CONFIRMED. Le ultime due
     # producono PIÙ righe attive nel CSV (più scommesse simultanee).
     "queue_mode":                   "OVERWRITE_LAST",
+    # Anti-segnale-stantio (PR reconnect): un messaggio Telegram più vecchio di questi
+    # secondi viene SCARTATO all'arrivo (probabile recupero dopo una disconnessione,
+    # quando la connessione torna e arretrati vengono rifetchati). 0 = filtro disattivo.
+    "max_signal_age":               120,
 }
 
 
