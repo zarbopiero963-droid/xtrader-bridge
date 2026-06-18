@@ -325,8 +325,13 @@ aggiornamenti dell'EXE):
 **Devo tenere il programma aperto?** Sì, deve girare in background mentre vuoi
 ricevere segnali. Puoi minimizzarlo.
 
-**Cosa succede se cade la connessione?** Il bridge si riconnette; i messaggi vecchi
-accumulati durante l'avvio vengono scartati (`drop_pending_updates`).
+**Cosa succede se cade la connessione?** Il listener **si riconnette da solo** con
+attese crescenti (backoff: 2s, 4s, 8s… fino a 60s) finché resta avviato; durante
+l'attesa lo stato mostra **RICONNESSIONE…**, poi torna **ATTIVO**. Ad ogni
+riconnessione i messaggi accumulati mentre era offline vengono **scartati**
+(`drop_pending_updates`), così non parte un segnale vecchio. Un errore **non**
+recuperabile (es. **token non valido**) non viene ritentato all'infinito: il bridge
+si ferma e mostra l'errore. Lo STOP manuale interrompe subito, senza riconnessioni.
 
 **Posso usare più canali?** Sì, con `source_chats` (vedi
 [Più chat sorgenti](#più-chat-sorgenti-multi-chat)).
