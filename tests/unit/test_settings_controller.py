@@ -17,7 +17,7 @@ def test_current_values_default_sicuri_su_config_vuota():
     assert v["require_price"] is True                           # default sicuro
     assert v["dry_run"] is True                                 # default sicuro (simulazione)
     assert v["max_per_day"] == safety_guard.DEFAULT_MAX_PER_DAY
-    assert v["confirmation_timeout"] == 120
+    assert v["confirmation_timeout"] == sc.DEFAULT_CONFIRMATION_TIMEOUT
     assert v["xtrader_notification_chat_id"] == ""
 
 
@@ -40,7 +40,7 @@ def test_current_values_legge_la_config():
 def test_current_values_int_invalido_ricade_su_default():
     v = sc.current_values({"max_per_day": "abc", "confirmation_timeout": -5})
     assert v["max_per_day"] == safety_guard.DEFAULT_MAX_PER_DAY
-    assert v["confirmation_timeout"] == 120
+    assert v["confirmation_timeout"] == sc.DEFAULT_CONFIRMATION_TIMEOUT
 
 
 def test_apply_valido_fonde_preservando_le_altre_chiavi():

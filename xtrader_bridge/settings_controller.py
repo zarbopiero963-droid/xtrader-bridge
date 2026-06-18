@@ -22,8 +22,11 @@ chiavi: ogni altra impostazione (token, chat, sorgenti, parser, ecc.) è preserv
 
 import copy
 
-from . import recognition, safety_guard, signal_queue, validator
-from .settings_validation import parse_timeout
+from . import config_store, recognition, safety_guard, signal_queue, validator
+
+# Default del timeout conferme: fonte UNICA = config_store.DEFAULTS (niente 120
+# hard-coded sparso, così cambiarlo in un posto solo basta — finding Sourcery).
+DEFAULT_CONFIRMATION_TIMEOUT = config_store.DEFAULTS["confirmation_timeout"]
 
 # Le chiavi gestite da questo controller (per documentazione/test).
 MANAGED_KEYS = (
@@ -65,7 +68,8 @@ def current_values(cfg: dict) -> dict:
         "dry_run": safety_guard.is_dry_run(cfg),
         "max_per_day": _coerce_int_display(cfg.get("max_per_day"), safety_guard.DEFAULT_MAX_PER_DAY),
         "xtrader_notification_chat_id": str(cfg.get("xtrader_notification_chat_id", "") or "").strip(),
-        "confirmation_timeout": _coerce_int_display(cfg.get("confirmation_timeout"), 120),
+        "confirmation_timeout": _coerce_int_display(
+            cfg.get("confirmation_timeout"), DEFAULT_CONFIRMATION_TIMEOUT),
     }
 
 
@@ -150,14 +154,16 @@ def _as_bool(value) -> bool:
 
 
 def _parse_positive_int(value, label: str):
-    """`(intero>0, None)` oppure `(None, messaggio)`. Riusa `parse_timeout`, che già
-    gestisce vuoto→default, non numerico e `<= 0` (qui un valore mancante è un
-    errore: questi campi non hanno un default "vuoto" sensato in input)."""
+    """Parser generico di un intero > 0 → `(intero, None)` oppure `(None, messaggio)`.
+
+    Autonomo (non riusa `parse_timeout`, che è semanticamente legato all'auto-clear):
+    vuoto, non numerico, decimale o `<= 0` sono errori — questi campi (limite/giorno,
+    timeout conferme) non hanno un default "vuoto" sensato in input."""
     s = str(value if value is not None else "").strip()
-    if s == "":
-        return None, f"{label}: inserisci un numero intero di secondi/segnali."
-    parsed, err = parse_timeout(s)
-    if err:
-        # Rendi il messaggio specifico del campo (parse_timeout parla di "Timeout").
+    try:
+        n = int(s)
+    except ValueError:
         return None, f"{label}: deve essere un intero maggiore di 0."
-    return parsed, None
+    if n <= 0:
+        return None, f"{label}: deve essere un intero maggiore di 0."
+    return n, None
