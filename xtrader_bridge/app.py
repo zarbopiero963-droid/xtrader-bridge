@@ -26,6 +26,7 @@ from . import (
     dashboard_stats,
     event_log,
     live_guard,
+    log_view,
     safety_guard,
     settings_controller,
     settings_validation,
@@ -49,6 +50,12 @@ ctk.set_default_color_theme("blue")
 # XTrader oltre i retry atomici): breve, per non lasciare una riga stantia per un
 # intero intervallo di timeout (PR-23, finding Codex).
 _WRITE_RETRY_DELAY = 5
+
+# Cap delle righe di log tenute in memoria per il filtro (PR-14b): una sessione
+# lunga non deve far crescere il log all'infinito. Si trima con isteresi (a
+# _LOG_TRIM_AT si torna a _LOG_MAX) per non rifare il render a ogni riga.
+_LOG_MAX = 1000
+_LOG_TRIM_AT = 1200
 
 
 class App(ctk.CTk):
@@ -84,6 +91,8 @@ class App(ctk.CTk):
         self._adv_errors = []
         # Contatori di sessione per la dashboard (PR-14): azzerati a ogni START.
         self._stats = dashboard_stats.DashboardStats()
+        # Righe di log formattate tenute in memoria, per il filtro per livello (PR-14b).
+        self._log_entries = []
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -266,12 +275,19 @@ class App(ctk.CTk):
             val.pack(anchor="w")
             self._stat_lbls[name] = val
 
-        # Log
+        # Log + filtro per livello (PR-14b)
         log_frame = ctk.CTkFrame(self, corner_radius=10)
         log_frame.pack(fill="both", expand=True, padx=15, pady=(5, 12))
-        ctk.CTkLabel(log_frame, text="📋  LOG",
-                     font=ctk.CTkFont(size=12, weight="bold")).pack(
-            anchor="w", padx=12, pady=(8, 2))
+        log_hdr = ctk.CTkFrame(log_frame, fg_color="transparent")
+        log_hdr.pack(fill="x", padx=12, pady=(8, 2))
+        ctk.CTkLabel(log_hdr, text="📋  LOG",
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
+        ctk.CTkLabel(log_hdr, text="Mostra:", font=ctk.CTkFont(size=11),
+                     text_color="gray").pack(side="left", padx=(12, 4))
+        self._log_filter = tk.StringVar(master=self, value=log_view.ALL)
+        ctk.CTkOptionMenu(log_hdr, values=list(log_view.OPTIONS), width=130,
+                          variable=self._log_filter,
+                          command=lambda _v: self._render_log()).pack(side="left")
         self._log_box = ctk.CTkTextbox(
             log_frame, font=ctk.CTkFont(size=11, family="Courier"), height=130)
         self._log_box.pack(fill="both", expand=True, padx=12, pady=(0, 10))
@@ -321,14 +337,38 @@ class App(ctk.CTk):
         # (es. nel testo di un'eccezione del bot) non finisce mai nel log, né a
         # schermo né su file (invariante: mai token nei log).
         safe = event_log.redact_secrets(msg)
-        ts = datetime.now().strftime("%H:%M:%S")
-        self._log_box.insert("end", f"[{ts}] {safe}\n")
+        # Livello: se non passato, derivato dal marker del messaggio (❌/⚠️/📱).
+        lvl = event_log.normalize_level(level or event_log.classify(safe))
+        # Riga formattata `[HH:MM:SS] [LEVEL] msg`: stessa forma dello storico, così
+        # il filtro per livello (PR-14b) legge il campo header.
+        entry = event_log.format_entry(safe, lvl)
+        self._log_entries.append(entry)
+        # Storico persistente in AppData (#11): sopravvive al riavvio. Best-effort:
+        # un errore di filesystem non deve interrompere la GUI.
+        event_log.append_entry(safe, lvl)
+        # Cap con isteresi: oltre la soglia si trima ai più recenti e si rifà il
+        # render una volta (non a ogni riga).
+        if len(self._log_entries) > _LOG_TRIM_AT:
+            del self._log_entries[:-_LOG_MAX]
+            self._render_log()
+            return
+        # Inserimento incrementale: aggiungo a schermo solo se la riga passa il
+        # filtro corrente (altrimenti resta in memoria, visibile cambiando filtro).
+        if self._entry_visible(entry):
+            self._log_box.insert("end", entry + "\n")
+            self._log_box.see("end")
+
+    def _entry_visible(self, entry: str) -> bool:
+        """True se `entry` passa il filtro di livello selezionato (PR-14b)."""
+        return bool(log_view.filter_lines([entry], self._log_filter.get()))
+
+    def _render_log(self) -> None:
+        """Ri-disegna il riquadro log applicando il filtro di livello corrente."""
+        visible = log_view.filter_lines(self._log_entries, self._log_filter.get())
+        self._log_box.delete("1.0", "end")
+        if visible:
+            self._log_box.insert("end", "\n".join(visible) + "\n")
         self._log_box.see("end")
-        # Storico persistente in AppData (#11): sopravvive al riavvio. Il livello,
-        # se non passato, è derivato dal marker del messaggio (❌/⚠️/📱) così lo
-        # storico distingue errori/segnali. Best-effort: un errore di filesystem
-        # non deve interrompere la GUI.
-        event_log.append_entry(safe, level or event_log.classify(safe))
 
     # ── GUARDRAIL (PR-21) ─────────────────────
     def _dedupe_state_path(self) -> str:

@@ -177,7 +177,9 @@ TOTALE       536 passed, 2 skipped (marcatore "manual" escluso)
    collegato a runtime (no-op). ✅ **PR-14**: dashboard con **contatori di sessione**
    (ricevuti/scritti/scartati/duplicati/limitati/simulati/errori, modulo puro
    `dashboard_stats` testato in CI; agganciati in `_process`/`_after_non_write`).
-   Restano da verificare a mano i widget su Windows.
+   ✅ **PR-14b**: **filtro del log per livello** (Tutti/INFO/WARNING/ERROR/SIGNAL)
+   nel riquadro log (logica pura `log_view` su `event_log.filter_by_level`, testata
+   in CI). Restano da verificare a mano i widget su Windows.
 3. **Build EXE**: workflow pronto, build reale non eseguibile qui.
 4. **XTrader live**: lettura CSV, segnale verde, conferma Telegram sono passi manuali in
    **simulazione** (vedi `xtrader_simulation_test.md`).
