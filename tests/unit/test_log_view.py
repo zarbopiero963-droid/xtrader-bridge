@@ -41,6 +41,20 @@ def test_valore_ignoto_o_vuoto_ritorna_tutto():
     assert log_view.filter_lines(lines, None) == lines
 
 
+def test_matches_predicato_riga_per_riga():
+    info = event_log.format_entry("avvio", "INFO")
+    err = event_log.format_entry("boom", "ERROR")
+    # ALL / ignoto / vuoto → sempre True.
+    for sel in (log_view.ALL, "PINCO", "", None):
+        assert log_view.matches(info, sel) is True
+    # Livello noto → True solo se combacia.
+    assert log_view.matches(err, "ERROR") is True
+    assert log_view.matches(info, "ERROR") is False
+    # filter_lines è coerente con matches.
+    lines = [info, err]
+    assert log_view.filter_lines(lines, "ERROR") == [l for l in lines if log_view.matches(l, "ERROR")]
+
+
 def test_filtro_legge_header_non_il_testo():
     # Un "[ERROR]" nel TESTO non deve far passare la riga col filtro ERROR
     # (filter_by_level legge solo il campo header strutturale).

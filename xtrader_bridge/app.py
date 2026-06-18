@@ -359,8 +359,9 @@ class App(ctk.CTk):
             self._log_box.see("end")
 
     def _entry_visible(self, entry: str) -> bool:
-        """True se `entry` passa il filtro di livello selezionato (PR-14b)."""
-        return bool(log_view.filter_lines([entry], self._log_filter.get()))
+        """True se `entry` passa il filtro di livello selezionato (PR-14b).
+        Check riga-per-riga economico (nessuna allocazione): `log_view.matches`."""
+        return log_view.matches(entry, self._log_filter.get())
 
     def _render_log(self) -> None:
         """Ri-disegna il riquadro log applicando il filtro di livello corrente."""
