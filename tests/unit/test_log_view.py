@@ -28,7 +28,10 @@ def test_filtro_tutti_ritorna_tutte_le_righe():
 def test_filtro_per_livello_noto():
     lines = _entries()
     only_err = log_view.filter_lines(lines, "ERROR")
-    assert only_err == [event_log.format_entry("scrittura fallita", "ERROR")]
+    # Confronto con la riga GIÀ creata (lines[2]), non con un nuovo format_entry:
+    # quest'ultimo userebbe un timestamp now() che, a cavallo del secondo, divergerebbe
+    # → test flaky (finding Codex). filter_lines ritorna gli stessi oggetti di `lines`.
+    assert only_err == [lines[2]]
     only_info = log_view.filter_lines(lines, "INFO")
     assert len(only_info) == 2
     assert all(event_log.entry_level(l) == "INFO" for l in only_info)
