@@ -7,6 +7,8 @@ conferma esplicita dell'utente: il bridge non deve mettersi a scrivere scommesse
 solo senza consenso. Qui solo la decisione; il dialog e l'avvio vivono in `app`.
 """
 
+import math
+
 from . import config_store, safety_guard
 
 
@@ -29,7 +31,9 @@ def is_enabled(cfg: dict) -> bool:
     if isinstance(val, bool):
         return val
     if isinstance(val, (int, float)):
-        return val != 0
+        # NaN/Infinity (da un config.json editato a mano) NON devono abilitare:
+        # un numero non finito non è un "true" esplicito → fail-closed.
+        return math.isfinite(val) and val != 0
     return str(val).strip().lower() in _TRUTHY
 
 
