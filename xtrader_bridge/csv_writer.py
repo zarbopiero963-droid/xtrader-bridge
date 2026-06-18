@@ -169,6 +169,42 @@ def init_csv(path: str):
     _atomic_write(path, lambda writer: None)
 
 
+def clear_stale_csv(path: str) -> bool:
+    """Svuota il CSV (solo header) **se il file esiste già**: rimuove una riga
+    lasciata da una sessione precedente terminata male (crash, blackout, chiusura).
+
+    Ritorna ``True`` se ha ripulito un file esistente, ``False`` se non c'era nulla
+    da fare (``path`` vuoto o file assente). **Non crea** il file se manca: all'avvio
+    non si tocca un path non ancora usato.
+
+    Difesa anti-segnale-stantio: se il processo muore mentre nel CSV c'è una riga
+    attiva, il timer di auto-clear non può girare. Richiamando questa funzione
+    all'avvio dell'app (prima che il listener riparta) e alla chiusura/STOP, il CSV
+    torna a solo header, così XTrader non legge un segnale orfano.
+
+    **Sicurezza (anti data-loss):** ripulisce SOLO un file che è già un CSV del
+    bridge, cioè la cui prima riga è esattamente `CSV_HEADER`. Se `csv_path` punta
+    per errore a un file NON-bridge (typo/path riusato in config), il file **non**
+    viene toccato: aprire/chiudere l'app non deve poter distruggere un file
+    arbitrario dell'utente."""
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            first_row = next(csv.reader(f), None)
+    except (UnicodeDecodeError, csv.Error):
+        # File non decodificabile/non parsabile (CSV ANSI, binario scelto per
+        # errore…) → non è un CSV del bridge: non toccarlo (e niente crash).
+        return False
+    # NB: un OSError (permessi/lock di Windows, es. file tenuto aperto) NON è
+    # catturato qui: si propaga al chiamante, che lo segnala come cleanup fallito
+    # invece di silenziarlo come se il file fosse assente/non-bridge.
+    if first_row != CSV_HEADER:
+        return False   # non è un CSV del bridge → non sovrascrivere
+    init_csv(path)
+    return True
+
+
 def write_rows(rows, path: str):
     """Scrive PIÙ segnali nel CSV (header + una riga per ciascuno), sovrascrivendo
     in modo atomico. `rows` vuota → solo header (equivale a `init_csv`). Usato dalla

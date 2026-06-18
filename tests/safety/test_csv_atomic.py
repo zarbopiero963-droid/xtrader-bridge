@@ -5,10 +5,13 @@ eventuale riga), senza lasciare file temporanei, e che concorrenza write/clear
 non corrompa il file (lock condiviso). Chiude #2 (race) e #6 (scrittura atomica).
 """
 
+import builtins
 import csv
 import glob
 import os
 import threading
+
+import pytest
 
 from xtrader_bridge import csv_writer
 
@@ -67,6 +70,88 @@ def test_clear_dopo_write_lascia_solo_header(tmp_path):
     csv_writer.write_csv(ROW, str(p))
     csv_writer.init_csv(str(p))
     assert _read(str(p)) == [csv_writer.CSV_HEADER]
+
+
+# ── anti-segnale-stantio: clear_stale_csv (recovery dopo crash/blackout) ─────
+
+def test_clear_stale_csv_rimuove_riga_orfana(tmp_path):
+    # Scenario blackout: una sessione precedente ha lasciato una riga attiva nel CSV.
+    # All'avvio/STOP la riga orfana deve sparire (resta solo header).
+    p = tmp_path / "segnali.csv"
+    csv_writer.write_csv(ROW, str(p))                 # riga "stantia" lasciata sul disco
+    # Stato di partenza esplicito (header + riga attesa): se il writer cambiasse
+    # comportamento (es. righe extra), questo test lo farebbe emergere subito.
+    rows_prima = _read(str(p))
+    assert rows_prima[0] == csv_writer.CSV_HEADER
+    assert rows_prima[1] == [ROW[col] for col in csv_writer.CSV_HEADER]
+    assert len(rows_prima) == 2
+    assert csv_writer.clear_stale_csv(str(p)) is True
+    assert _read(str(p)) == [csv_writer.CSV_HEADER]   # solo header
+    assert _no_tmp_left(str(tmp_path))
+
+
+def test_clear_stale_csv_non_tocca_file_non_bridge(tmp_path):
+    # Sicurezza (Codex P2): un file esistente che NON è un CSV del bridge (prima
+    # riga diversa da CSV_HEADER) non deve mai essere sovrascritto/distrutto.
+    p = tmp_path / "documento_utente.csv"
+    contenuto = "colonnaA,colonnaB\nvalore1,valore2\n"
+    p.write_text(contenuto, encoding="utf-8")
+    assert csv_writer.clear_stale_csv(str(p)) is False
+    assert p.read_text(encoding="utf-8") == contenuto   # intatto
+    # Anche un file di testo non-CSV resta intatto.
+    q = tmp_path / "note.txt"
+    q.write_text("appunti importanti", encoding="utf-8")
+    assert csv_writer.clear_stale_csv(str(q)) is False
+    assert q.read_text(encoding="utf-8") == "appunti importanti"
+
+
+def test_clear_stale_csv_file_non_decodificabile_non_bridge(tmp_path):
+    # Codex P2: un file esistente non-UTF8 (CSV ANSI, binario scelto per errore)
+    # non deve far crashare l'avvio: trattato come non-bridge e lasciato intatto.
+    p = tmp_path / "ansi_o_binario.csv"
+    raw = b"\xff\xfe\x00dati binari\x80\x81 non utf8"
+    p.write_bytes(raw)
+    assert csv_writer.clear_stale_csv(str(p)) is False
+    assert p.read_bytes() == raw   # intatto
+
+
+def test_clear_stale_csv_errore_io_si_propaga(tmp_path, monkeypatch):
+    # Codex P2: un errore di I/O reale (permessi/lock Windows) NON deve essere
+    # silenziato come "assente/non-bridge": si propaga, così il chiamante lo segnala.
+    p = tmp_path / "segnali.csv"
+    csv_writer.write_csv(ROW, str(p))           # file bridge valido
+    real_open = builtins.open
+
+    def fake_open(file, *a, **k):
+        if str(file) == str(p):
+            raise PermissionError("file bloccato (simulato)")
+        return real_open(file, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    with pytest.raises(PermissionError):
+        csv_writer.clear_stale_csv(str(p))
+
+
+def test_clear_stale_csv_non_crea_file_assente(tmp_path):
+    # Se il CSV non esiste ancora (primo avvio), NON va creato a sproposito.
+    p = tmp_path / "mai_esistito.csv"
+    assert csv_writer.clear_stale_csv(str(p)) is False
+    assert not p.exists()
+
+
+def test_clear_stale_csv_path_vuoto(tmp_path):
+    # Path vuoto/None: nessuna operazione, nessun errore.
+    assert csv_writer.clear_stale_csv("") is False
+    assert csv_writer.clear_stale_csv(None) is False
+
+
+def test_clear_stale_csv_idempotente_su_header(tmp_path):
+    # Un CSV già a solo header resta valido (idempotente) e non lascia .tmp.
+    p = tmp_path / "segnali.csv"
+    csv_writer.init_csv(str(p))
+    assert csv_writer.clear_stale_csv(str(p)) is True
+    assert _read(str(p)) == [csv_writer.CSV_HEADER]
+    assert _no_tmp_left(str(tmp_path))
 
 
 def test_concorrenza_write_clear_non_corrompe(tmp_path):
