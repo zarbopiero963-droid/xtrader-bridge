@@ -96,6 +96,11 @@ class App(ctk.CTk):
         # Segnale di STOP per interrompere SUBITO l'attesa del backoff (senza
         # busy-poll): impostato in _stop, azzerato a ogni START.
         self._stop_event = threading.Event()
+        # Epoch della sessione listener: incrementato a ogni START. Il supervisor
+        # gira solo finché il SUO epoch è quello corrente, così un riavvio rapido
+        # durante un backoff non lascia vivo il vecchio supervisor (Codex P1:
+        # niente due poller sulla stessa chat).
+        self._listener_epoch = 0
         # CSV effettivamente scritto nella sessione corrente, catturato a START: lo
         # STOP pulisce QUESTO, non un csv_path eventualmente cambiato in GUI dopo
         # l'avvio (Codex P1). None = nessuna sessione attiva.
@@ -683,8 +688,11 @@ class App(ctk.CTk):
             self._log("⚠️ Modalità REALE: i segnali validi verranno scritti nel CSV.")
         self._log("👂 In ascolto su Telegram...")
 
+        # Nuovo epoch: invalida un eventuale vecchio supervisor ancora in backoff.
+        self._listener_epoch += 1
+        epoch = self._listener_epoch
         self._bot_thread = threading.Thread(
-            target=self._run_bot, args=(cfg,), daemon=True)
+            target=self._run_bot, args=(cfg, epoch), daemon=True)
         self._bot_thread.start()
 
     def _stop(self):
@@ -724,9 +732,13 @@ class App(ctk.CTk):
         self.after(500, self.destroy)
 
     # ── BOT TELEGRAM ──────────────────────────
-    def _run_bot(self, cfg: dict):
+    def _run_bot(self, cfg: dict, epoch: int):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+
+        def _is_current():
+            # Sessione ancora valida: bridge attivo E nessun nuovo START intervenuto.
+            return self._running and self._listener_epoch == epoch
 
         async def _async_run():
             self._tg_app = ApplicationBuilder().token(cfg["bot_token"]).build()
@@ -767,7 +779,7 @@ class App(ctk.CTk):
             # i messaggi accumulati mentre eravamo offline → niente segnali vecchi.
             self._reconnect_attempt = 0
             self.after(0, self._set_status_connected)
-            while self._running:
+            while _is_current():
                 await asyncio.sleep(1)
             await self._tg_app.updater.stop()
             await self._tg_app.stop()
@@ -778,25 +790,35 @@ class App(ctk.CTk):
         # permanente (es. token invalido). La decisione è in `reconnect_policy` (pura,
         # testata in CI); qui solo I/O: shutdown pulito del vecchio updater (no doppio
         # polling) e attesa interrompibile.
-        while self._running:
+        while _is_current():
             try:
                 self._loop.run_until_complete(_async_run())
                 break                      # uscita pulita: STOP richiesto
             except Exception as ex:        # noqa: BLE001 — gestito sotto
                 self._safe_shutdown_tg()   # chiude il vecchio updater prima di ritentare
+                # Un nuovo START (epoch cambiato) o uno STOP invalidano QUESTA
+                # sessione: esci senza ritentare (Codex P1, niente doppio poller).
+                if not _is_current():
+                    break
                 if not reconnect_policy.should_reconnect(self._running, ex):
-                    if self._running:      # errore non recuperabile mentre eravamo attivi
-                        tb = traceback.format_exc()
-                        self.after(0, lambda e=ex: self._set_last("error", f"bot: {e}"))
-                        self.after(0, lambda e=ex: self._log(
-                            f"❌ Errore non recuperabile del listener: {e}. Bridge fermato."))
-                        # Traceback completo nel log per la diagnostica (redatto dal
-                        # log handler): aiuta a capire un errore inatteso.
-                        self.after(0, lambda t=tb: self._log(t))
-                        self.after(0, self._stop)
+                    # errore non recuperabile mentre eravamo attivi (es. token invalido)
+                    tb = traceback.format_exc()
+                    self.after(0, lambda e=ex: self._set_last("error", f"bot: {e}"))
+                    self.after(0, lambda e=ex: self._log(
+                        f"❌ Errore non recuperabile del listener: {e}. Bridge fermato."))
+                    # Traceback completo nel log per la diagnostica (redatto dal
+                    # log handler): aiuta a capire un errore inatteso.
+                    self.after(0, lambda t=tb: self._log(t))
+                    self.after(0, self._stop)
                     break
                 self._reconnect_attempt += 1
                 delay = reconnect_policy.backoff_delay(self._reconnect_attempt)
+                # Rispetta il flood-control di Telegram: se l'errore porta un
+                # `retry_after` più lungo del backoff locale, attendi quello (Codex P2),
+                # così non si riprova prima del tempo richiesto dal server.
+                retry_after = getattr(ex, "retry_after", None)
+                if isinstance(retry_after, (int, float)) and retry_after > delay:
+                    delay = float(retry_after)
                 self.after(0, lambda e=ex: self._set_last("error", f"rete: {e}"))
                 self.after(0, lambda e=ex, d=delay, n=self._reconnect_attempt: self._log(
                     f"🔌 Connessione persa ({type(e).__name__}): riconnessione tra "

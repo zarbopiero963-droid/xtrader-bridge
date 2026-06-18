@@ -25,6 +25,13 @@ def test_backoff_attempt_non_valido_trattato_come_primo():
     assert rp.backoff_delay(-5) == 2.0
 
 
+def test_backoff_attempt_enorme_non_va_in_overflow():
+    # Codex P2: dopo molte ore di tentativi `attempt` diventa grande; 2**(attempt-1)
+    # andrebbe in OverflowError. Deve invece restare al cap senza eccezioni.
+    assert rp.backoff_delay(10_000) == rp.DEFAULT_MAX_DELAY
+    assert rp.backoff_delay(10**9) == rp.DEFAULT_MAX_DELAY
+
+
 # ── classificazione errori (whitelist transitori) ────────────────────────────
 
 class NetworkError(Exception):

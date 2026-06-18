@@ -36,7 +36,12 @@ def backoff_delay(attempt: int, base: float = DEFAULT_BASE_DELAY,
     `attempt < 1` sono trattati come 1 (mai un ritardo negativo o nullo)."""
     if attempt < 1:
         attempt = 1
-    delay = base * (2 ** (attempt - 1))
+    # Cappa l'ESPONENTE prima di elevare: dopo molte ore di tentativi `attempt`
+    # diventa grande e `2 ** (attempt-1)` causerebbe OverflowError (uccidendo il
+    # supervisor). Una volta raggiunto il cap il delay vi resta comunque, quindi
+    # un esponente limitato (2**30 · base ≫ cap) non cambia il risultato.
+    exponent = min(attempt - 1, 30)
+    delay = base * (2 ** exponent)
     return float(min(delay, cap))
 
 
