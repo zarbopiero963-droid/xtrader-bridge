@@ -180,11 +180,24 @@ def clear_stale_csv(path: str) -> bool:
     Difesa anti-segnale-stantio: se il processo muore mentre nel CSV c'è una riga
     attiva, il timer di auto-clear non può girare. Richiamando questa funzione
     all'avvio dell'app (prima che il listener riparta) e alla chiusura/STOP, il CSV
-    torna a solo header, così XTrader non legge un segnale orfano."""
-    if path and os.path.exists(path):
-        init_csv(path)
-        return True
-    return False
+    torna a solo header, così XTrader non legge un segnale orfano.
+
+    **Sicurezza (anti data-loss):** ripulisce SOLO un file che è già un CSV del
+    bridge, cioè la cui prima riga è esattamente `CSV_HEADER`. Se `csv_path` punta
+    per errore a un file NON-bridge (typo/path riusato in config), il file **non**
+    viene toccato: aprire/chiudere l'app non deve poter distruggere un file
+    arbitrario dell'utente."""
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            first_row = next(csv.reader(f), None)
+    except OSError:
+        return False
+    if first_row != CSV_HEADER:
+        return False   # non è un CSV del bridge → non sovrascrivere
+    init_csv(path)
+    return True
 
 
 def write_rows(rows, path: str):

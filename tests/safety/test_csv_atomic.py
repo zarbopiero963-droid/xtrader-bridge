@@ -87,6 +87,21 @@ def test_clear_stale_csv_rimuove_riga_orfana(tmp_path):
     assert _no_tmp_left(str(tmp_path))
 
 
+def test_clear_stale_csv_non_tocca_file_non_bridge(tmp_path):
+    # Sicurezza (Codex P2): un file esistente che NON è un CSV del bridge (prima
+    # riga diversa da CSV_HEADER) non deve mai essere sovrascritto/distrutto.
+    p = tmp_path / "documento_utente.csv"
+    contenuto = "colonnaA,colonnaB\nvalore1,valore2\n"
+    p.write_text(contenuto, encoding="utf-8")
+    assert csv_writer.clear_stale_csv(str(p)) is False
+    assert p.read_text(encoding="utf-8") == contenuto   # intatto
+    # Anche un file di testo non-CSV resta intatto.
+    q = tmp_path / "note.txt"
+    q.write_text("appunti importanti", encoding="utf-8")
+    assert csv_writer.clear_stale_csv(str(q)) is False
+    assert q.read_text(encoding="utf-8") == "appunti importanti"
+
+
 def test_clear_stale_csv_non_crea_file_assente(tmp_path):
     # Se il CSV non esiste ancora (primo avvio), NON va creato a sproposito.
     p = tmp_path / "mai_esistito.csv"

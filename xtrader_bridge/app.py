@@ -88,6 +88,10 @@ class App(ctk.CTk):
         self._bot_thread = None
         self._tg_app = None
         self._loop = None
+        # CSV effettivamente scritto nella sessione corrente, catturato a START: lo
+        # STOP pulisce QUESTO, non un csv_path eventualmente cambiato in GUI dopo
+        # l'avvio (Codex P1). None = nessuna sessione attiva.
+        self._active_csv_path = None
         # Guardrail del percorso di scrittura (PR-21), creati allo START dalla config:
         # tracker = dedup + limite/minuto (PR-15); daily = limite/giorno (PR-19).
         self._tracker = None
@@ -115,10 +119,14 @@ class App(ctk.CTk):
         # → riportiamo il CSV a solo header PRIMA di un eventuale START.
         self._clear_stale_csv("all'avvio")
 
-    def _clear_stale_csv(self, quando: str) -> None:
-        """Riporta il CSV a solo header se esiste (difesa anti-segnale-stantio).
-        Best-effort: un errore di I/O non deve impedire avvio/chiusura."""
-        path = str((self._config or {}).get("csv_path", "") or "").strip()
+    def _clear_stale_csv(self, quando: str, path: str = None) -> None:
+        """Riporta il CSV a solo header se è un CSV del bridge (difesa
+        anti-segnale-stantio). Best-effort: un errore di I/O non deve impedire
+        avvio/chiusura. Se `path` è None usa quello in config (caso avvio)."""
+        if path is None:
+            path = str((self._config or {}).get("csv_path", "") or "").strip()
+        else:
+            path = str(path or "").strip()
         try:
             if clear_stale_csv(path):
                 # Messaggio neutro: clear_stale_csv ripristina l'header per qualsiasi
@@ -647,6 +655,8 @@ class App(ctk.CTk):
         self._btn_stop.configure(state="normal")
 
         init_csv(cfg["csv_path"])
+        # Path attivo della sessione: lo STOP pulirà questo (Codex P1).
+        self._active_csv_path = cfg["csv_path"]
         self._init_guards(cfg)
         self._stats.reset()           # contatori di sessione azzerati a ogni START (PR-14)
         self._refresh_dashboard()
@@ -681,8 +691,13 @@ class App(ctk.CTk):
         if self._expire_timer:
             self._expire_timer.cancel()
         # Anti-segnale-stantio: una chiusura/STOP normale non deve lasciare una riga
-        # attiva nel CSV (il timer di auto-clear è appena stato cancellato).
-        self._clear_stale_csv("allo stop")
+        # attiva nel CSV (il timer di auto-clear è appena stato cancellato). Si pulisce
+        # il CSV della SESSIONE (catturato a START, Codex P1) sotto il queue_lock, così
+        # un'ultima scrittura del bot in volo è serializzata col clear e non lascia una
+        # riga dopo lo svuotamento (Codex P2): _process scrive solo se ancora _running.
+        with self._queue_lock:
+            self._clear_stale_csv("allo stop", path=self._active_csv_path)
+        self._active_csv_path = None
         self._status_lbl.configure(text="⬤  OFFLINE", text_color="#ef5350")
         self._btn_start.configure(state="normal")
         self._btn_stop.configure(state="disabled")
@@ -746,6 +761,10 @@ class App(ctk.CTk):
 
     # ── PROCESS SIGNAL ────────────────────────
     def _process(self, text: str, cfg: dict, chat_id: str = None):
+        # Stop in corso: non processare/consumare stato né scrivere (Codex P2). Il
+        # check definitivo anti-race con il clear è dentro il queue_lock, sotto.
+        if not self._running:
+            return
         # CP-09: instrada al Parser Personalizzato attivo (autoritativo) o, in
         # assenza, al parser hardcoded. Non scrive righe non piazzabili: meglio
         # scartare un segnale incompleto che generare una riga ambigua.
@@ -786,6 +805,10 @@ class App(ctk.CTk):
         # evolvono in modo monotòno (nessuna corsa con il tick di scadenza).
         write_error = None
         with self._queue_lock:
+            # Anti-race con il clear allo stop (Codex P2): se nel frattempo è stato
+            # premuto STOP, non scrivere — il clear ha (o sta per) svuotare il CSV.
+            if not self._running:
+                return
             queue_snap = self._queue.state()      # snapshot per rollback su write fallita
             self._queue.expire(now=now)
             self._queue.add(row, now=now)
