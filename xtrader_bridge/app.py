@@ -95,6 +95,9 @@ class App(ctk.CTk):
         # Contatore dei tentativi di riconnessione (supervisor del listener): cresce
         # ad ogni caduta di rete e si azzera a connessione stabilita.
         self._reconnect_attempt = 0
+        # Chiusura in corso: impedisce all'auto-start ritardato di avviare il listener
+        # dopo che la finestra è stata chiusa (Codex P2).
+        self._closing = False
         # Segnale di STOP per interrompere SUBITO l'attesa del backoff (senza
         # busy-poll): impostato in _stop, azzerato a ogni START.
         self._stop_event = threading.Event()
@@ -141,9 +144,10 @@ class App(ctk.CTk):
         """Avvia il listener all'apertura se `auto_start_listener` è attivo e la config
         minima c'è. In modalità REALE chiede conferma esplicita (niente scommesse
         automatiche senza consenso)."""
-        # Il callback è ritardato: se nel frattempo l'utente ha già premuto AVVIA,
-        # non avviare una seconda sessione (Codex P2: niente doppio polling).
-        if self._running:
+        # Il callback è ritardato: non avviare se nel frattempo l'utente ha già
+        # premuto AVVIA (doppia sessione) o ha chiuso la finestra (Codex P2: niente
+        # polling avviato durante la chiusura).
+        if self._running or self._closing:
             return
         ok, reason = autostart.can_auto_start(self._config)
         if not ok:
@@ -763,6 +767,7 @@ class App(ctk.CTk):
         self._log("🛑 Bridge fermato.")
 
     def _on_close(self):
+        self._closing = True   # blocca un auto-start ritardato ancora pendente (Codex P2)
         self._stop()
         self.after(500, self.destroy)
 

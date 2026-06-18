@@ -10,11 +10,27 @@ solo senza consenso. Qui solo la decisione; il dialog e l'avvio vivono in `app`.
 from . import config_store, safety_guard
 
 
+# Valori stringa che abilitano esplicitamente l'auto-start (fail-closed).
+_TRUTHY = frozenset({"true", "1", "yes", "on", "si", "sì"})
+
+
 def is_enabled(cfg: dict) -> bool:
     """`True` se l'avvio automatico è attivo in config (helper pubblico, così la GUI
-    non deve reimplementare la coercizione né toccare interni)."""
+    non deve reimplementare la coercizione né toccare interni).
+
+    **Fail-closed** (Codex P2): essendo un toggle safety-critical con default OFF, si
+    abilita SOLO su un valore esplicitamente affermativo (`True`, numero ≠ 0, o una
+    stringa in `_TRUTHY`). Un valore malformato o sconosciuto (`None`/`null` da JSON,
+    `"boh"`, …) NON deve far partire il listener da solo: vale come disattivato.
+    NB: non si usa `config_store.as_bool` qui perché è fail-OPEN sulle stringhe
+    sconosciute (sicuro per i toggle con default True, non per questo)."""
     cfg = cfg if isinstance(cfg, dict) else {}
-    return config_store.as_bool(cfg.get("auto_start_listener", False))
+    val = cfg.get("auto_start_listener", False)
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    return str(val).strip().lower() in _TRUTHY
 
 
 def _has_admitted_chat(cfg: dict) -> bool:

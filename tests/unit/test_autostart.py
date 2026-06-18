@@ -14,6 +14,18 @@ def test_disattivato_di_default():
     assert ok is False and "disattivato" in reason
 
 
+def test_fail_closed_su_valori_malformati():
+    # Codex P2: un valore non esplicitamente affermativo NON deve abilitare l'auto-start
+    # (toggle safety-critical, default OFF). null/None/"boh"/"" → disattivato.
+    for bad in (None, "", "boh", "maybe", "2x", [], {}):
+        assert autostart.is_enabled({"auto_start_listener": bad}) is False, bad
+    # Solo valori esplicitamente veri abilitano.
+    for good in (True, 1, "true", "True", "1", "yes", "on", "sì"):
+        assert autostart.is_enabled({"auto_start_listener": good}) is True, good
+    # E un valore malformato non rende avviabile il bridge.
+    assert autostart.can_auto_start(_cfg(auto_start_listener=None))[0] is False
+
+
 def test_avviabile_con_token_e_chat():
     ok, reason = autostart.can_auto_start(_cfg())
     assert ok is True and reason == ""
