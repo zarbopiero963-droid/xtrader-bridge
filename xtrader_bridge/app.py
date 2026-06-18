@@ -696,6 +696,12 @@ class App(ctk.CTk):
         # un'ultima scrittura del bot in volo è serializzata col clear e non lascia una
         # riga dopo lo svuotamento (Codex P2): _process scrive solo se ancora _running.
         with self._queue_lock:
+            # Svuota anche la coda IN MEMORIA: così un writer tardivo che riprende il
+            # lock dopo lo STOP (conferma o tick di scadenza già scattato) riscrive al
+            # più solo l'header, mai una riga rimasta in coda (Codex P2).
+            if self._queue is not None:
+                for sid in self._queue.active_ids():
+                    self._queue.remove(sid)
             self._clear_stale_csv("allo stop", path=self._active_csv_path)
         self._active_csv_path = None
         self._status_lbl.configure(text="⬤  OFFLINE", text_color="#ef5350")
@@ -890,6 +896,9 @@ class App(ctk.CTk):
         - UNKNOWN (associato ma esito non chiaro) / UNMATCHED (di un'altra scommessa)
           → solo log, nessuna modifica. Il TIMEOUT è già coperto dalla scadenza coda.
         """
+        # Stop in corso: non riscrivere il CSV dopo che lo STOP l'ha svuotato (Codex P2).
+        if not self._running:
+            return
         confirm_kw = confirmation_reader.normalize_keywords(cfg.get("confirmation_keywords"))
         reject_kw = confirmation_reader.normalize_keywords(cfg.get("rejection_keywords"))
         with self._queue_lock:
@@ -959,6 +968,10 @@ class App(ctk.CTk):
         write_error = None
         with self._queue_lock:
             if self._queue is None:
+                return
+            # Stop in corso: un tick già schedulato non deve riscrivere il CSV dopo
+            # che lo STOP l'ha svuotato e azzerato la coda (Codex P2).
+            if not self._running:
                 return
             expired = self._queue.expire(now=now)
             rows = self._queue.active_rows()

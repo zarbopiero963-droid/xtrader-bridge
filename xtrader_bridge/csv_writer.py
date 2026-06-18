@@ -192,8 +192,13 @@ def clear_stale_csv(path: str) -> bool:
     try:
         with open(path, newline="", encoding="utf-8-sig") as f:
             first_row = next(csv.reader(f), None)
-    except OSError:
+    except (UnicodeDecodeError, csv.Error):
+        # File non decodificabile/non parsabile (CSV ANSI, binario scelto per
+        # errore…) → non è un CSV del bridge: non toccarlo (e niente crash).
         return False
+    # NB: un OSError (permessi/lock di Windows, es. file tenuto aperto) NON è
+    # catturato qui: si propaga al chiamante, che lo segnala come cleanup fallito
+    # invece di silenziarlo come se il file fosse assente/non-bridge.
     if first_row != CSV_HEADER:
         return False   # non è un CSV del bridge → non sovrascrivere
     init_csv(path)
