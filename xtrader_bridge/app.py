@@ -373,6 +373,13 @@ class App(ctk.CTk):
         self._last_lbls[kind].configure(
             text=f"{_LAST_PREFIX[kind]}: {safe or '—'}", text_color=color)
 
+    def _note_csv(self, path: str, n: int) -> None:
+        """Aggiorna il campo "Ultimo CSV" con path, righe attive e ora. Va chiamato su
+        OGNI riscrittura/svuotamento riuscito (scrittura, conferma, scadenza, clear
+        manuale) così il pannello/diagnostica riflette lo stato reale del CSV (Codex)."""
+        state = "svuotato" if n == 0 else f"{n} attiv{'o' if n == 1 else 'i'}"
+        self._set_last("csv", f"{path} ({state}) @ {datetime.now():%H:%M:%S}")
+
     def _open_log_folder(self):
         """Apre nel file manager la cartella dei log persistenti (PR-14c)."""
         import os
@@ -775,8 +782,7 @@ class App(ctk.CTk):
         if self._tracker is not None:
             self._save_guard_state()
         self.after(0, lambda: self._bump("written"))   # PR-14: riga scritta nel CSV
-        self.after(0, lambda p=path, n=len(rows): self._set_last(
-            "csv", f"{p} ({n} attiv{'o' if n == 1 else 'i'}) @ {datetime.now():%H:%M:%S}"))
+        self.after(0, lambda p=path, n=len(rows): self._note_csv(p, n))
 
         info = (f"🏆 {row.get('EventName', '')}  |  "
                 f"{row.get('SelectionName', '')}  |  "
@@ -862,6 +868,7 @@ class App(ctk.CTk):
                 return
             self.after(0, lambda v=esito: self._log(
                 f"✅ XTrader: segnale {v} → rimosso dal CSV"))
+            self.after(0, lambda p=path, n=len(rows): self._note_csv(p, n))
             self._schedule_expiry(path)   # riprogramma per i segnali eventualmente rimasti
         elif result.status == confirmation_reader.UNKNOWN:
             self.after(0, lambda: self._log(
@@ -917,6 +924,7 @@ class App(ctk.CTk):
             self._schedule_expiry(path, delay=_WRITE_RETRY_DELAY)
             return
         if expired:
+            self.after(0, lambda p=path, n=len(rows): self._note_csv(p, n))
             self.after(0, lambda n=len(expired): self._log(
                 f"🗑️  {n} segnale/i scaduto/i rimosso/i dal CSV"))
         if not empty:
@@ -934,6 +942,7 @@ class App(ctk.CTk):
                 for sid in self._queue.active_ids():
                     self._queue.remove(sid)
         init_csv(path)
+        self._note_csv(path, 0)
         self._log("🗑️  CSV svuotato manualmente")
 
     def _open_parser_builder(self):
