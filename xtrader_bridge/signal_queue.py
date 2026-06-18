@@ -29,6 +29,10 @@ APPEND_ACTIVE = "APPEND_ACTIVE"
 QUEUE_UNTIL_CONFIRMED = "QUEUE_UNTIL_CONFIRMED"
 MODES = (OVERWRITE_LAST, APPEND_ACTIVE, QUEUE_UNTIL_CONFIRMED)
 DEFAULT_MODE = OVERWRITE_LAST
+# Fail-safe del timeout per-segnale quando il config non fornisce un valore valido.
+# Coincide *intenzionalmente* con il default dell'auto-clear (settings_validation.
+# DEFAULT_TIMEOUT = 90): è lo stesso "default timeout" del bridge. Resta una costante
+# PROPRIA di questo modulo (pura, autocontenuta) per non dipendere dal layer settings.
 DEFAULT_TIMEOUT = 90        # secondi di vita di un segnale se non confermato/sostituito
 
 
