@@ -121,8 +121,9 @@ class App(ctk.CTk):
         path = str((self._config or {}).get("csv_path", "") or "").strip()
         try:
             if clear_stale_csv(path):
-                self._log(f"🧹 CSV riportato a solo header {quando} "
-                          f"(rimossa una riga di una sessione precedente): {path}")
+                # Messaggio neutro: clear_stale_csv ripristina l'header per qualsiasi
+                # file esistente, anche se era già a solo header (niente riga rimossa).
+                self._log(f"🧹 CSV riportato a solo header {quando}: {path}")
         except OSError as exc:
             self._log(f"⚠️ Impossibile ripulire il CSV {quando}: {exc}")
 
