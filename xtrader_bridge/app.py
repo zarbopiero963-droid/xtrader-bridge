@@ -55,8 +55,14 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"XTrader Signal Bridge v{__version__}")
-        self.geometry("720x860")
-        self.resizable(False, False)
+        # Altezza contenuta + altezza RIDIMENSIONABILE (larghezza fissa: il layout è
+        # tarato in larghezza). Su schermi bassi (768/800px) il log — unico widget che
+        # si espande — si riduce e nulla finisce fuori schermo; i comandi (START/STOP,
+        # config) stanno sopra e restano sempre visibili (finding Codex). minsize evita
+        # un collasso eccessivo.
+        self.geometry("720x740")
+        self.resizable(False, True)
+        self.minsize(720, 560)
 
         self._config = self._load_config()
         self._running = False
@@ -139,7 +145,7 @@ class App(ctk.CTk):
         # Config a tab (PR-13): impostazioni base + avanzate. Le avanzate erano prima
         # modificabili solo a mano in config.json; la logica vive nel controller puro
         # `settings_controller` (testato in CI), qui solo i widget.
-        tabs = ctk.CTkTabview(self, height=240)
+        tabs = ctk.CTkTabview(self, height=210)
         tabs.pack(fill="x", padx=15, pady=5)
         tab_gen = tabs.add("⚙️ Generale")
         tab_rec = tabs.add("🎯 Riconoscimento")
@@ -267,7 +273,7 @@ class App(ctk.CTk):
                      font=ctk.CTkFont(size=12, weight="bold")).pack(
             anchor="w", padx=12, pady=(8, 2))
         self._log_box = ctk.CTkTextbox(
-            log_frame, font=ctk.CTkFont(size=11, family="Courier"), height=160)
+            log_frame, font=ctk.CTkFont(size=11, family="Courier"), height=130)
         self._log_box.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
     # ── widget helper per le impostazioni avanzate (PR-13) ────────────────
