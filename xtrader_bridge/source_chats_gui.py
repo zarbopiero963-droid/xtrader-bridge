@@ -16,8 +16,19 @@ import customtkinter as ctk
 from . import config_store
 from .source_editor import SourceEditor
 
-# Voce del menu Parser che significa "nessun override" (= "" = parser hardcoded/attivo).
-_NO_PARSER = "(nessuno)"
+# Etichetta base della voce "nessun override" (= "" = parser hardcoded/attivo).
+_NO_PARSER_BASE = "(nessuno)"
+
+
+def _none_sentinel(names) -> str:
+    """Sentinella "nessuno" GARANTITA diversa da ogni nome di parser reale: se per
+    assurdo un parser si chiama "(nessuno)", aggiunge spazi finché è unica. Evita la
+    collisione che renderebbe ambiguo "nessun override" vs il parser omonimo (Codex)."""
+    existing = set(names or [])
+    label = _NO_PARSER_BASE
+    while label in existing:
+        label += " "
+    return label
 
 
 class SourceChatsWindow(ctk.CTkToplevel):
@@ -33,10 +44,11 @@ class SourceChatsWindow(ctk.CTkToplevel):
         self._on_saved = on_saved
         self._editor = SourceEditor(config_store.load_config(config_store.CONFIG_FILE))
         self._modes = self._editor.mode_options()
-        # Nomi reali dei parser + opzioni del menu ("(nessuno)" davanti). La dedup
-        # evita una doppia voce se per assurdo un parser si chiamasse come la sentinella.
+        # Nomi reali dei parser + sentinella "nessuno" unica (non collide mai con un
+        # nome reale). Opzioni menu: sentinella davanti, poi i nomi reali.
         self._parser_names = self._editor.parser_options()
-        self._parser_options = [_NO_PARSER] + [n for n in self._parser_names if n != _NO_PARSER]
+        self._no_parser = _none_sentinel(self._parser_names)
+        self._parser_options = [self._no_parser] + self._parser_names
         self._rows = []   # widget refs per sorgente
         self._build_ui()
         for src in self._editor.sources:
@@ -92,8 +104,8 @@ class SourceChatsWindow(ctk.CTkToplevel):
         provider = ctk.CTkEntry(row, width=150)
         provider.insert(0, str(source.get("provider", "")))
         provider.pack(side="left", padx=3)
-        # Parser override per questa chat: "" → voce "(nessuno)".
-        parser = ctk.StringVar(value=str(source.get("parser", "")) or _NO_PARSER)
+        # Parser override per questa chat: "" → voce "nessuno"; un nome reale resta tale.
+        parser = ctk.StringVar(value=str(source.get("parser", "")) or self._no_parser)
         ctk.CTkOptionMenu(row, width=160, values=self._parser_options,
                           variable=parser).pack(side="left", padx=3)
         refs = {"frame": row, "enabled": enabled, "name": name,
@@ -110,16 +122,15 @@ class SourceChatsWindow(ctk.CTkToplevel):
     def _save(self):
         # Ricostruisce l'editor dallo stato corrente dei widget (niente sync per-campo).
         editor = SourceEditor()
-        real_names = set(self._parser_names)
         for r in self._rows:
-            # È un override SOLO se la voce è un nome di parser reale; tutto il resto
-            # (la sentinella "(nessuno)") → nessun override. Robusto anche se un parser
-            # si chiamasse "(nessuno)": resterebbe trattato come override, non perso.
+            # Solo la sentinella unica significa "nessun override" → ""; qualsiasi
+            # altra voce è un nome di parser reale (anche un parser chiamato "(nessuno)",
+            # perché la sentinella in quel caso è diversa: "(nessuno) ").
             parser = r["parser"].get()
             editor.add_source(name=r["name"].get(), chat_id=r["chat_id"].get(),
                               enabled=r["enabled"].get(), mode=r["mode"].get(),
                               provider=r["provider"].get(),
-                              parser=parser if parser in real_names else "")
+                              parser="" if parser == self._no_parser else parser)
         cfg = config_store.load_config(config_store.CONFIG_FILE)
         new_cfg, errors, warnings = editor.apply(cfg)
         if errors:
