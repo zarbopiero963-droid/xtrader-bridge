@@ -160,7 +160,15 @@ def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str =
         # prefiltro marker, scriverebbe lo stesso bet su ogni messaggio. Scartiamo.
         if not custom_parser_engine.matches_message(defn, text):
             return RouteResult(None, NO_CONTENT_MATCH, CUSTOM, "no_content_match")
-        return RouteResult(res.row, validator.VALID, CUSTOM)
+        row = res.row
+        # PR-24: per una chat che è una **sorgente attiva**, il provider della
+        # sorgente (esplicito o PRE/LIVE) VINCE sull'eventuale Provider fisso del
+        # parser custom — così il routing per-chat del Provider vale anche per i
+        # formati custom. Per le chat non-sorgente il Provider del parser resta.
+        if source_manager.source_for_chat(cfg, chat) is not None:
+            row = dict(row)
+            row["Provider"] = provider
+        return RouteResult(row, validator.VALID, CUSTOM)
 
     # Fallback: parser hardcoded storico.
     parsed = parse_message(text)

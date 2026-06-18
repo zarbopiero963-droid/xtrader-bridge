@@ -199,6 +199,22 @@ def test_is_chat_allowed_sorgenti_multichat():
     assert signal_router.is_chat_allowed(cfg, "999") is False   # non configurata → no
 
 
+def test_provider_sorgente_vince_su_parser_custom(tmp_path):
+    # PR-24 (finding Codex): per una chat che è una SORGENTE attiva, il provider
+    # della sorgente (qui mode LIVE → TG_LIVE) VINCE sul Provider fisso del parser
+    # custom (l'esempio fissa TG_CUSTOM). Per una chat NON-sorgente il Provider
+    # del parser resta invariato.
+    _save_example(str(tmp_path), "Esempio P.Bet.")
+    cfg = {"provider": "GLOBAL",
+           "parser_by_chat": {"111": "Esempio P.Bet.", "222": "Esempio P.Bet."},
+           "source_chats": [{"chat_id": "111", "enabled": True, "mode": "LIVE"}]}
+    msg = parser_io.fixture_message()
+    r_src = signal_router.resolve_row(msg, cfg, chat_id="111", parsers_dir=str(tmp_path))
+    assert r_src.placeable and r_src.row["Provider"] == "TG_LIVE"      # sorgente vince
+    r_nosrc = signal_router.resolve_row(msg, cfg, chat_id="222", parsers_dir=str(tmp_path))
+    assert r_nosrc.placeable and r_nosrc.row["Provider"] == "TG_CUSTOM"  # parser resta
+
+
 def test_sorgente_attiva_approvata_per_parser_globale(tmp_path):
     # Setup source_chats-only con active_parser GLOBALE: una sorgente attiva è
     # approvata per il custom (non cade sull'hardcoded perdendo i messaggi custom).
