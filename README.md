@@ -13,7 +13,7 @@
 - [Guida rapida (5 passi)](#guida-rapida-5-passi)
 - [Configurazione dalla GUI](#configurazione-dalla-gui)
 - [Configurazione avanzata (`config.json`)](#configurazione-avanzata-configjson)
-- [Più chat sorgente (multi-chat)](#più-chat-sorgente-multi-chat)
+- [Più chat sorgenti (multi-chat)](#più-chat-sorgenti-multi-chat)
 - [Parser Personalizzato](#parser-personalizzato)
 - [Conferma da XTrader](#conferma-da-xtrader)
 - [Sicurezza: simulazione, duplicati e limiti](#sicurezza-simulazione-duplicati-e-limiti)
@@ -135,7 +135,7 @@ Pulsanti aggiuntivi:
 > deciso dalla sorgente (esplicito, oppure derivato dalla modalità: `PRE → TG_PRE`,
 > `LIVE → TG_LIVE`) e in quel caso **ha la precedenza** sul Provider globale e su un
 > eventuale valore fisso del parser custom. Per le chat senza sorgente vale il
-> Provider globale qui sopra. Vedi [Più chat sorgente](#più-chat-sorgente-multi-chat).
+> Provider globale qui sopra. Vedi [Più chat sorgenti](#più-chat-sorgenti-multi-chat).
 
 ---
 
@@ -144,11 +144,12 @@ Pulsanti aggiuntivi:
 Queste impostazioni vivono in `config.json` (`%APPDATA%\XTraderBridge\config.json`).
 **Diverse sono ora modificabili anche dalla GUI**, nelle tab *Riconoscimento /
 Sicurezza / Conferme XTrader*: `recognition_mode`, `require_price`, `dry_run`,
-`max_per_day`, `queue_mode`, `xtrader_notification_chat_id`. Le restanti
-(`active_parser`, `parser_by_chat`, `source_chats`, `confirmation_keywords`,
-`rejection_keywords`) si modificano ancora **a mano** nel file (chiudi prima il
-bridge, poi riaprilo). Ogni chiave è comunque **preservata** quando salvi dalla GUI,
-quindi non si perde.
+`max_per_day`, `queue_mode`, `xtrader_notification_chat_id`. Le **chat sorgente**
+(`source_chats`) si modificano dal pulsante **"📡 Chat sorgenti"** (vedi
+[Più chat sorgenti](#più-chat-sorgenti-multi-chat)). Le restanti (`active_parser`,
+`parser_by_chat`, `confirmation_keywords`, `rejection_keywords`) si modificano ancora
+**a mano** nel file (chiudi prima il bridge, poi riaprilo). Ogni chiave è comunque
+**preservata** quando salvi dalla GUI, quindi non si perde.
 
 | Chiave | Default | Valori | A cosa serve |
 |---|---|---|---|
@@ -170,10 +171,12 @@ quindi non si perde.
 
 ---
 
-## Più chat sorgente (multi-chat)
+## Più chat sorgenti (multi-chat)
 
-Per ricevere segnali da **più chat/canali**, valorizza `source_chats` in
-`config.json`. È una lista di oggetti:
+Per ricevere segnali da **più chat/canali**, usa il pulsante **"📡 Chat sorgenti"**
+nella finestra principale (aggiungi/rimuovi righe, imposta nome, chat_id, attiva,
+modalità PRE/LIVE, provider, e salva) — oppure, in alternativa, valorizza a mano
+`source_chats` in `config.json`. È una lista di oggetti:
 
 ```json
 {
@@ -316,7 +319,7 @@ ricevere segnali. Puoi minimizzarlo.
 accumulati durante l'avvio vengono scartati (`drop_pending_updates`).
 
 **Posso usare più canali?** Sì, con `source_chats` (vedi
-[Più chat sorgente](#più-chat-sorgente-multi-chat)).
+[Più chat sorgenti](#più-chat-sorgenti-multi-chat)).
 
 **XTrader rischia di ripetere scommesse vecchie?** No: con un solo segnale attivo +
 timeout + svuotamento, XTrader vede sempre solo il segnale più recente o nessuno.
