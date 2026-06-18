@@ -171,6 +171,7 @@ chiave è comunque **preservata** quando salvi dalla GUI, quindi non si perde.
 | `source_chats` | `[]` | lista | Più chat sorgente (vedi sotto). |
 | `xtrader_notification_chat_id` | `""` | chat id | Chat **separata** su cui XTrader notifica l'esito (vedi [Conferma da XTrader](#conferma-da-xtrader)). |
 | `confirmation_timeout` | `120` | secondi | **In `QUEUE_UNTIL_CONFIRMED`**: per quanti secondi un segnale resta in attesa della conferma XTrader prima di scadere (timeout per-segnale della coda). Nelle altre modalità coda non si applica: vale `clear_delay`. |
+| `max_signal_age` | `120` | secondi | Un messaggio Telegram più vecchio di così viene **ignorato** all'arrivo (anti-segnale-stantio: evita che gli arretrati rifetchati dopo una disconnessione diventino scommesse vecchie). `0` = filtro disattivato. |
 | `confirmation_keywords` | `[]` | lista | Parole che indicano conferma (vuoto = default del modulo). Dalla GUI: stringa separata da virgola. |
 | `rejection_keywords` | `[]` | lista | Parole che indicano rifiuto (vuoto = default del modulo). Dalla GUI: stringa separata da virgola. |
 
@@ -325,8 +326,16 @@ aggiornamenti dell'EXE):
 **Devo tenere il programma aperto?** Sì, deve girare in background mentre vuoi
 ricevere segnali. Puoi minimizzarlo.
 
-**Cosa succede se cade la connessione?** Il bridge si riconnette; i messaggi vecchi
-accumulati durante l'avvio vengono scartati (`drop_pending_updates`).
+**Cosa succede se cade la connessione?** Il listener **si riconnette da solo** con
+attese crescenti (backoff: 2s, 4s, 8s… fino a 60s) finché resta avviato; durante
+l'attesa lo stato mostra **RICONNESSIONE…**, poi torna **ATTIVO**. All'avvio i
+messaggi accumulati mentre era offline vengono **scartati** (`drop_pending_updates`).
+Inoltre, **a prescindere** da come avviene la riconnessione, un messaggio Telegram
+**più vecchio di `max_signal_age` secondi** (default 120s) viene **ignorato**
+all'arrivo: così, se la rete è mancata a lungo, gli arretrati rifetchati non
+diventano scommesse vecchie. Un errore **non** recuperabile (es. **token non valido**)
+non viene ritentato all'infinito: il bridge si ferma e mostra l'errore. Lo STOP
+manuale interrompe subito, senza riconnessioni.
 
 **Posso usare più canali?** Sì, con `source_chats` (vedi
 [Più chat sorgenti](#più-chat-sorgenti-multi-chat)).
