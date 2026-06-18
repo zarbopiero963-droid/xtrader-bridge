@@ -23,7 +23,7 @@ chiavi: ogni altra impostazione (token, chat, sorgenti, parser, ecc.) è preserv
 
 import copy
 
-from . import config_store, recognition, safety_guard, signal_queue, validator
+from . import autostart, config_store, recognition, safety_guard, signal_queue, validator
 
 # Default del timeout conferme: fonte unica = config_store.DEFAULTS.
 DEFAULT_CONFIRMATION_TIMEOUT = config_store.DEFAULTS["confirmation_timeout"]
@@ -88,7 +88,9 @@ def current_values(cfg: dict) -> dict:
         # Keyword come stringa CSV per il campo di testo della GUI ("kw1, kw2").
         "confirmation_keywords": ", ".join(_keyword_list(cfg.get("confirmation_keywords"))),
         "rejection_keywords": ", ".join(_keyword_list(cfg.get("rejection_keywords"))),
-        "auto_start_listener": _as_bool(cfg.get("auto_start_listener", False)),
+        # Coerente col runtime: stessa logica fail-closed di autostart (un valore
+        # malformato/None NON deve mostrare il toggle come attivo).
+        "auto_start_listener": autostart.is_enabled(cfg),
     }
 
 

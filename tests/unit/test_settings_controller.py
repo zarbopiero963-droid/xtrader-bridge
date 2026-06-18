@@ -215,6 +215,9 @@ def test_auto_start_listener_default_off_e_round_trip():
     # Default sicuro: assente in config → False.
     assert sc.current_values({})["auto_start_listener"] is False
     assert sc.current_values({"auto_start_listener": True})["auto_start_listener"] is True
+    # Fail-closed coerente col runtime: un valore malformato (None) NON mostra il
+    # toggle come attivo (CodeRabbit: default-off safety).
+    assert sc.current_values({"auto_start_listener": None})["auto_start_listener"] is False
     # apply: il form lo gestisce come bool (default False se assente).
     new_cfg, errors = sc.apply_advanced({}, _valid_form(auto_start_listener=True))
     assert errors == []
