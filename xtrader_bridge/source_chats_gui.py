@@ -1,10 +1,11 @@
-"""PR-13b: vista customtkinter (sottile) dell'editor delle sorgenti multi-chat.
+"""PR-13b/13c: vista customtkinter (sottile) dell'editor delle sorgenti multi-chat.
 
 Tutta la logica sta nel controller `source_editor.SourceEditor` (testato in CI) e in
 `source_manager` (validazione); qui ci sono SOLO i widget. La finestra si apre da un
 pulsante nella GUI principale (`app.App`). Permette di aggiungere/rimuovere sorgenti
-`source_chats` (nome, chat_id, attiva, modalità PRE/LIVE, provider) e salvarle in
-`config.json`, senza editare il file a mano.
+`source_chats` (nome, chat_id, attiva, modalità PRE/LIVE, provider) e di assegnare a
+ciascuna un **Parser Personalizzato** dedicato (override `parser_by_chat`, PR-13c),
+salvando in `config.json` senza editare il file a mano.
 
 NB: questo modulo non è testato in CI (richiede un display). La logica che usa è
 coperta da `tests/unit/test_source_editor.py`. Verifica manuale su Windows.
@@ -14,6 +15,9 @@ import customtkinter as ctk
 
 from . import config_store
 from .source_editor import SourceEditor
+
+# Voce del menu Parser che significa "nessun override" (= "" = parser hardcoded/attivo).
+_NO_PARSER = "(nessuno)"
 
 
 class SourceChatsWindow(ctk.CTkToplevel):
@@ -25,10 +29,12 @@ class SourceChatsWindow(ctk.CTkToplevel):
     def __init__(self, master=None, on_saved=None):
         super().__init__(master)
         self.title("Chat sorgenti (multi-chat)")
-        self.geometry("900x560")
+        self.geometry("1080x560")
         self._on_saved = on_saved
         self._editor = SourceEditor(config_store.load_config(config_store.CONFIG_FILE))
         self._modes = self._editor.mode_options()
+        # Opzioni del menu Parser: "(nessuno)" + i parser disponibili in data/parsers.
+        self._parser_options = [_NO_PARSER] + self._editor.parser_options()
         self._rows = []   # widget refs per sorgente
         self._build_ui()
         for src in self._editor.sources:
@@ -48,8 +54,8 @@ class SourceChatsWindow(ctk.CTkToplevel):
         # Intestazione colonne
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.pack(fill="x", padx=12)
-        for text, w in (("Attiva", 60), ("Nome", 200), ("Chat ID", 180),
-                        ("Modalità", 110), ("Provider", 180), ("", 40)):
+        for text, w in (("Attiva", 60), ("Nome", 180), ("Chat ID", 160),
+                        ("Modalità", 100), ("Provider", 150), ("Parser", 160), ("", 40)):
             ctk.CTkLabel(head, text=text, width=w, anchor="w",
                          font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=3)
 
@@ -73,19 +79,23 @@ class SourceChatsWindow(ctk.CTkToplevel):
         row.pack(fill="x", pady=2)
         enabled = ctk.BooleanVar(value=bool(source.get("enabled", True)))
         ctk.CTkCheckBox(row, text="", width=60, variable=enabled).pack(side="left", padx=3)
-        name = ctk.CTkEntry(row, width=200)
+        name = ctk.CTkEntry(row, width=180)
         name.insert(0, str(source.get("name", "")))
         name.pack(side="left", padx=3)
-        chat_id = ctk.CTkEntry(row, width=180)
+        chat_id = ctk.CTkEntry(row, width=160)
         chat_id.insert(0, str(source.get("chat_id", "")))
         chat_id.pack(side="left", padx=3)
         mode = ctk.StringVar(value=source.get("mode", self._modes[0] if self._modes else "PRE"))
-        ctk.CTkOptionMenu(row, width=110, values=self._modes, variable=mode).pack(side="left", padx=3)
-        provider = ctk.CTkEntry(row, width=180)
+        ctk.CTkOptionMenu(row, width=100, values=self._modes, variable=mode).pack(side="left", padx=3)
+        provider = ctk.CTkEntry(row, width=150)
         provider.insert(0, str(source.get("provider", "")))
         provider.pack(side="left", padx=3)
+        # Parser override per questa chat: "" → voce "(nessuno)".
+        parser = ctk.StringVar(value=str(source.get("parser", "")) or _NO_PARSER)
+        ctk.CTkOptionMenu(row, width=160, values=self._parser_options,
+                          variable=parser).pack(side="left", padx=3)
         refs = {"frame": row, "enabled": enabled, "name": name,
-                "chat_id": chat_id, "mode": mode, "provider": provider}
+                "chat_id": chat_id, "mode": mode, "provider": provider, "parser": parser}
         ctk.CTkButton(row, text="✕", width=40, fg_color="#c62828", hover_color="#7f0000",
                       command=lambda r=refs: self._remove_row(r)).pack(side="left", padx=3)
         self._rows.append(refs)
@@ -99,9 +109,11 @@ class SourceChatsWindow(ctk.CTkToplevel):
         # Ricostruisce l'editor dallo stato corrente dei widget (niente sync per-campo).
         editor = SourceEditor()
         for r in self._rows:
+            parser = r["parser"].get()
             editor.add_source(name=r["name"].get(), chat_id=r["chat_id"].get(),
                               enabled=r["enabled"].get(), mode=r["mode"].get(),
-                              provider=r["provider"].get())
+                              provider=r["provider"].get(),
+                              parser="" if parser == _NO_PARSER else parser)
         cfg = config_store.load_config(config_store.CONFIG_FILE)
         new_cfg, errors, warnings = editor.apply(cfg)
         if errors:

@@ -24,7 +24,7 @@ def test_add_update_remove():
     ed = SourceEditor()
     ed.add_source(name="  X ", chat_id=" 42 ", enabled=True, mode="pre", provider=" TG_VIP ")
     assert ed.sources[0] == {"name": "X", "chat_id": "42", "enabled": True,
-                             "mode": "PRE", "provider": "TG_VIP"}
+                             "mode": "PRE", "provider": "TG_VIP", "parser": ""}
     ed.update_source(0, enabled=False, mode="LIVE")
     assert ed.sources[0]["enabled"] is False
     assert ed.sources[0]["mode"] == "LIVE"
@@ -87,3 +87,46 @@ def test_apply_non_muta_la_config_originale():
     assert errors == []
     assert cfg["source_chats"] == [{"chat_id": "old"}]   # originale intatto
     assert new_cfg["keep"] == "me"
+
+
+# ── PR-13c: override parser per chat (parser_by_chat) ───────────────────────
+
+def test_prefill_parser_per_chat_dalla_config():
+    cfg = {
+        "source_chats": [{"chat_id": "111"}, {"chat_id": "222"}],
+        "parser_by_chat": {"111": "Esempio", "999": "Orfano"},
+    }
+    ed = SourceEditor(cfg)
+    assert ed.sources[0]["parser"] == "Esempio"   # 111 prefillato
+    assert ed.sources[1]["parser"] == ""          # 222 nessun override
+
+
+def test_apply_setta_parser_by_chat_e_preserva_orfani():
+    cfg = {"parser_by_chat": {"999": "Orfano"}}   # 999 non è una riga → orfano
+    ed = SourceEditor()
+    ed.add_source(chat_id="111", parser="Esempio")
+    ed.add_source(chat_id="222", parser="")        # nessun override per 222
+    new_cfg, errors, _ = ed.apply(cfg)
+    assert errors == []
+    assert new_cfg["parser_by_chat"] == {"999": "Orfano", "111": "Esempio"}
+    # 222 senza override non compare; 999 (orfano) preservato.
+
+
+def test_apply_azzera_override_quando_parser_vuoto():
+    cfg = {"parser_by_chat": {"111": "Vecchio"}}
+    ed = SourceEditor(cfg)                          # 111 non è una sorgente → resta orfano
+    # Aggiungo 111 come sorgente SENZA parser → l'override va rimosso.
+    ed = SourceEditor()
+    ed.add_source(chat_id="111", parser="")
+    new_cfg, errors, _ = ed.apply(cfg)
+    assert errors == []
+    assert "111" not in new_cfg["parser_by_chat"]
+
+
+def test_apply_errore_non_tocca_parser_by_chat():
+    cfg = {"parser_by_chat": {"111": "X"}}
+    ed = SourceEditor()
+    ed.add_source(chat_id="")                       # chat_id mancante → errore
+    new_cfg, errors, _ = ed.apply(cfg)
+    assert errors
+    assert new_cfg["parser_by_chat"] == {"111": "X"}   # invariato
