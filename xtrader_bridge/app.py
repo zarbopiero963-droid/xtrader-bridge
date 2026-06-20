@@ -1174,26 +1174,33 @@ class App(ctk.CTk):
         # Ferma il tick di scadenza così non riscrive il CSV mentre lo svuotiamo (PR-22).
         if self._expire_timer:
             self._expire_timer.cancel()
-        # Svuota PRIMA il CSV su disco. Se l'I/O fallisce (file lockato da XTrader,
-        # path non scrivibile) NON azzeriamo la coda e RIPROGRAMMIAMO la scadenza:
-        # così la riga attiva rimasta sul disco viene comunque ripulita più tardi
-        # (o riprovata) invece di restare nel CSV per sempre senza tracciamento
-        # (P1 audit). In più non crasha il callback della GUI (come _save/_load).
-        try:
-            init_csv(path)
-        except OSError as exc:
+        # Svuotamento ATOMICO rispetto a _process: teniamo `_queue_lock` ATTRAVERSO sia
+        # la scrittura del CSV (init_csv) sia l'azzeramento della coda (come _process
+        # tiene il lock attraverso write_rows). Così un segnale che arriva in
+        # contemporanea resta o del tutto FUORI (CSV+coda già svuotati) o del tutto
+        # DENTRO (lo rimuoviamo qui): senza questo, _process potrebbe inserire una riga
+        # TRA init_csv e l'azzeramento e lasciarla sul disco senza tracciamento (P1).
+        # Se l'I/O fallisce (file lockato da XTrader, path non scrivibile) NON azzeriamo
+        # la coda e RIPROGRAMMIAMO la scadenza, così la riga rimasta sul disco viene
+        # comunque ripulita più tardi invece di restare orfana; e non crasha la GUI.
+        write_error = None
+        with self._queue_lock:
+            try:
+                init_csv(path)
+            except OSError as exc:
+                write_error = exc
+            else:
+                if self._queue is not None:
+                    for sid in self._queue.active_ids():
+                        self._queue.remove(sid)
+        if write_error is not None:
             # Path + tipo eccezione aiutano a diagnosticare lock/permessi.
             self._log(
                 f"❌ Svuotamento CSV fallito ({path}): "
-                f"{type(exc).__name__}: {exc}"
+                f"{type(write_error).__name__}: {write_error}"
             )
-            self._schedule_expiry(path)
+            self._schedule_expiry(path)   # fuori dal lock: _schedule_expiry lo riacquisisce
             return
-        # Scrittura riuscita: ora è sicuro azzerare la coda in memoria.
-        with self._queue_lock:
-            if self._queue is not None:
-                for sid in self._queue.active_ids():
-                    self._queue.remove(sid)
         self._note_csv(path, 0)
         self._log("🗑️  CSV svuotato manualmente")
 
