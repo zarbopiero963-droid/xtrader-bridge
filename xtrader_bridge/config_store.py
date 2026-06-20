@@ -140,8 +140,9 @@ def migrate_legacy_config(new_path: str = CONFIG_FILE,
             shutil.copyfile(legacy_path, new_path)
             return True
     except Exception as exc:   # noqa: BLE001 — best-effort, ma ora loggato (non silenzioso)
+        # exc_info=True: l'except è ampio, il traceback aiuta a capire la causa.
         logger.warning("Migrazione config legacy fallita (%s -> %s): %s",
-                       legacy_path, new_path, exc)
+                       legacy_path, new_path, exc, exc_info=True)
     return False
 
 
@@ -181,7 +182,8 @@ def save_config(cfg: dict, path: str = CONFIG_FILE) -> dict:
     except OSError as exc:
         # Persistenza fallita (disco pieno, permessi, path non scrivibile): l'app
         # continua con la config in memoria, ma l'utente deve poterlo sapere.
-        logger.error("Salvataggio config fallito (%s): %s", path, exc)
+        # exc_info=True: traceback completo per il post-mortem (più save point, stesso path).
+        logger.error("Salvataggio config fallito (%s): %s", path, exc, exc_info=True)
     return to_save
 
 
