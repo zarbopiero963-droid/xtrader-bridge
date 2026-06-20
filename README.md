@@ -326,20 +326,25 @@ aggiornamenti dell'EXE):
 ## Avvio automatico con Windows
 
 Vuoi che il bridge **riparta da solo dopo un riavvio del PC** (es. dopo un blackout)?
-Il bridge **non** si registra da solo nell'avvio di Windows (scelta voluta: niente
+Il bridge **non** si registra da solo all'avvio di Windows (scelta voluta: niente
 modifiche di sistema a sorpresa). Lo configuri **a mano** in pochi secondi, con uno
 dei due metodi qui sotto. Poi, per far partire **anche l'ascolto** senza premere
 AVVIA, abbina l'opzione **`auto_start_listener`** (tab *Sicurezza*).
 
-> ⚠️ **Sicurezza:** in **modalità reale** (DRY_RUN disattivato) l'avvio automatico del
-> listener chiede comunque **conferma** prima di iniziare a scrivere segnali. Se vuoi
-> che il PC operi davvero da solo senza nessuno davanti, valuta bene il rischio: con
-> `auto_start_listener` attivo + DRY_RUN off + XTrader in reale, il sistema piazza
-> scommesse senza intervento. Per le prove tieni **XTrader in simulazione**.
+> ⚠️ **Sicurezza — auto-start e modalità reale:** in **modalità reale** (DRY_RUN
+> disattivato) l'avvio automatico del listener chiede **sempre una conferma**
+> (finestra Sì/No) a **ogni** apertura, prima di iniziare a scrivere segnali. Quindi
+> in modalità reale **non è davvero "non presidiato"**: dopo un riavvio del PC l'app
+> si apre, ma resta **in attesa che qualcuno confermi** — non riparte a scommettere
+> da sola. Per un recupero dopo blackout **completamente automatico** devi restare in
+> **simulazione** (DRY_RUN attivo, oppure XTrader in simulazione); un avvio reale
+> senza conferma richiederebbe di rimuovere di proposito quella guardia. Per le prove
+> tieni comunque **XTrader in simulazione**.
 
 ### Metodo 1 — Cartella «Esecuzione automatica» (semplice)
 1. Premi `Win + R`, scrivi `shell:startup` e premi Invio: si apre la cartella di avvio.
-2. Trascina lì un **collegamento** all'eseguibile del bridge (`XTraderBridge.exe`):
+2. Trascina lì un **collegamento** all'eseguibile del bridge (`XTrader-Signal-Bridge.exe`,
+   lo stesso che scarichi/compili — vedi [Build dell'EXE](#build-dellexe-sviluppatori)):
    tasto destro sull'EXE → *Crea collegamento* → sposta il collegamento nella cartella.
 3. Al prossimo avvio di Windows l'app si apre da sola. La configurazione viene letta
    da `%APPDATA%\XTraderBridge\config.json` (vedi
@@ -352,7 +357,7 @@ non basta.
 1. Apri **Utilità di pianificazione** (*Task Scheduler*).
 2. *Crea attività di base…* → nome a piacere (es. «XTrader Bridge»).
 3. **Attivazione**: «All'accesso» (o «All'avvio del computer»).
-4. **Azione**: «Avvia programma» → seleziona `XTraderBridge.exe`.
+4. **Azione**: «Avvia programma» → seleziona `XTrader-Signal-Bridge.exe`.
 5. Fine. Opzionale: nelle proprietà dell'attività spunta «Esegui con i privilegi più
    elevati» solo se necessario.
 
