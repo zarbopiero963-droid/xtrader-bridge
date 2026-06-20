@@ -1,9 +1,7 @@
 """Test dell'instradamento del segnale (CP-09): custom attivo vs hardcoded."""
 
-import pytest
-
 from xtrader_bridge import custom_parser as cp
-from xtrader_bridge import parser_io, signal_router, validator
+from xtrader_bridge import parser_io, signal_router
 
 
 def _save_example(dir_path, name="Esempio P.Bet."):

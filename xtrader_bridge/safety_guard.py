@@ -19,7 +19,7 @@ wiring GUI/runtime (toggle, banner, blocco START) è un passo successivo.
 
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 DEFAULT_MAX_PER_DAY = 200      # tetto di segnali nuovi accettati in un giorno (UTC)
 

@@ -21,7 +21,6 @@ def _ou(line: str, half: bool):
     Ritorna coppie (chiave_shorthand_normalizzata) -> (market_alias, selection_alias)
     per FT (suffisso eliminato in normalizzazione) o HT (suffisso "ht" esplicito).
     """
-    code = line[0] + line[2]               # "2.5" -> "25"
     suffix = "ht" if half else "ft"
     market = f"over_under_{line}_{suffix}"
     out = {}

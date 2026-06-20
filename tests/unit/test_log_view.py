@@ -34,7 +34,7 @@ def test_filtro_per_livello_noto():
     assert only_err == [lines[2]]
     only_info = log_view.filter_lines(lines, "INFO")
     assert len(only_info) == 2
-    assert all(event_log.entry_level(l) == "INFO" for l in only_info)
+    assert all(event_log.entry_level(line) == "INFO" for line in only_info)
 
 
 def test_valore_ignoto_o_vuoto_ritorna_tutto():
@@ -55,7 +55,7 @@ def test_matches_predicato_riga_per_riga():
     assert log_view.matches(info, "ERROR") is False
     # filter_lines è coerente con matches.
     lines = [info, err]
-    assert log_view.filter_lines(lines, "ERROR") == [l for l in lines if log_view.matches(l, "ERROR")]
+    assert log_view.filter_lines(lines, "ERROR") == [line for line in lines if log_view.matches(line, "ERROR")]
 
 
 def test_filtro_legge_header_non_il_testo():

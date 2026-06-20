@@ -1,7 +1,5 @@
 """Test della gestione del Parser Personalizzato attivo (CP-07)."""
 
-import pytest
-
 from xtrader_bridge import custom_parser as cp
 from xtrader_bridge import parser_manager as pm
 from xtrader_bridge.config_store import DEFAULTS

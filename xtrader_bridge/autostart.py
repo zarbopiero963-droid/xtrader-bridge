@@ -9,7 +9,7 @@ solo senza consenso. Qui solo la decisione; il dialog e l'avvio vivono in `app`.
 
 import math
 
-from . import config_store, safety_guard
+from . import safety_guard
 
 
 # Valori stringa che abilitano esplicitamente l'auto-start (fail-closed).

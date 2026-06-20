@@ -13,7 +13,6 @@ Import/export non scrivono il CSV e non toccano il runtime: solo file dei parser
 Un file corrotto o invalido → `ValueError` (niente salvataggi parziali).
 """
 
-import json
 import os
 import tempfile
 

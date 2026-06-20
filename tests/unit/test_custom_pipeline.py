@@ -4,8 +4,6 @@ Esercitano `xtrader_bridge.custom_pipeline.build_validated_row`: i due gate
 (parser "Non pronto" + validator) e i default del contratto.
 """
 
-import pytest
-
 from xtrader_bridge import custom_parser as cp
 from xtrader_bridge import custom_pipeline as pipe
 from xtrader_bridge import validator

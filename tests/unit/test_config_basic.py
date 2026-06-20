@@ -173,3 +173,29 @@ def test_migrate_legacy_skip_se_nessun_legacy(tmp_path):
     new = tmp_path / "config.json"
     assert config_store.migrate_legacy_config(str(new), str(tmp_path / "assente.json")) is False
     assert not new.exists()
+
+
+def test_save_config_logga_errore_io_ma_resta_best_effort(tmp_path, caplog):
+    # Persistenza fallita (qui il path è una DIRECTORY → open('w') solleva OSError):
+    # l'app prosegue (ritorna la config in memoria) MA ora l'errore è LOGGATO,
+    # non più silenzioso (`except: pass`).
+    target = tmp_path / "sono_una_cartella"
+    target.mkdir()
+    with caplog.at_level("ERROR", logger="xtrader_bridge.config_store"):
+        out = config_store.save_config({"provider": "X"}, str(target))
+    assert out["provider"] == "X"                  # best-effort preservato
+    assert any("Salvataggio config fallito" in r.getMessage() for r in caplog.records)
+
+
+def test_migrate_legacy_logga_errore_ma_non_crasha(tmp_path, caplog):
+    # Migrazione fallita (la dir di destinazione è in realtà un FILE → makedirs
+    # solleva): ritorna False senza crashare, e ora logga il motivo.
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps({"provider": "VECCHIO"}))
+    blocker = tmp_path / "afile"
+    blocker.write_text("non sono una cartella")    # un file dove servirebbe una dir
+    new = blocker / "config.json"                  # dirname(new) è un FILE → makedirs fallisce
+    with caplog.at_level("WARNING", logger="xtrader_bridge.config_store"):
+        migrated = config_store.migrate_legacy_config(str(new), str(legacy))
+    assert migrated is False
+    assert any("Migrazione config legacy fallita" in r.getMessage() for r in caplog.records)

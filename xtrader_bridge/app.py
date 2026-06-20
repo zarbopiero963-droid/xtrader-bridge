@@ -592,7 +592,7 @@ class App(ctk.CTk):
             self._queue = signal_queue.SignalQueue(mode=mode, default_timeout=delay)
         except ValueError:
             self._queue = signal_queue.SignalQueue(mode=mode)
-            self._log(f"⚠️ clear_delay non valido per la coda: uso il default.")
+            self._log("⚠️ clear_delay non valido per la coda: uso il default.")
         # Fonte UNICA del timeout (validata dalla coda): usata anche dai timer di
         # scadenza, così coda e timer condividono lo stesso valore valido.
         self._queue_timeout = self._queue.default_timeout
