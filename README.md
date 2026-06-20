@@ -335,18 +335,24 @@ AVVIA, abbina l'opzione **`auto_start_listener`** (tab *Sicurezza*).
 > disattivato) l'avvio automatico del listener chiede **sempre una conferma**
 > (finestra Sì/No) a **ogni** apertura, prima di iniziare a scrivere segnali. Quindi
 > in modalità reale **non è davvero "non presidiato"**: dopo un riavvio del PC l'app
-> si apre, ma resta **in attesa che qualcuno confermi** — non riparte a scommettere
-> da sola. Per un recupero dopo blackout **completamente automatico** devi restare in
-> **simulazione** (DRY_RUN attivo, oppure XTrader in simulazione); un avvio reale
-> senza conferma richiederebbe di rimuovere di proposito quella guardia. Per le prove
-> tieni comunque **XTrader in simulazione**.
+> si apre, ma resta **in attesa che qualcuno confermi** — non riparte a scrivere da
+> sola. Importante: il bridge **non sa** se XTrader è in simulazione; la conferma
+> dipende dal **suo** DRY_RUN, non da quello di XTrader. L'unico avvio davvero
+> automatico (senza conferma) è con **DRY_RUN del bridge attivo** — ma in quel caso il
+> bridge **non scrive il CSV** (è il test del solo bridge). Per scrivere davvero —
+> anche solo per alimentare il **simulatore di XTrader** — serve DRY_RUN off, e quindi
+> la conferma compare a ogni avvio. Un recupero reale **completamente automatico**
+> richiederebbe di rimuovere di proposito quella guardia. Per le prove tieni comunque
+> **XTrader in simulazione**.
 
 ### Metodo 1 — Cartella «Esecuzione automatica» (semplice)
 1. Premi `Win + R`, scrivi `shell:startup` e premi Invio: si apre la cartella di avvio.
 2. Trascina lì un **collegamento** all'eseguibile del bridge (`XTrader-Signal-Bridge.exe`,
    lo stesso che scarichi/compili — vedi [Build dell'EXE](#build-dellexe-sviluppatori)):
    tasto destro sull'EXE → *Crea collegamento* → sposta il collegamento nella cartella.
-3. Al prossimo avvio di Windows l'app si apre da sola. La configurazione viene letta
+3. Al prossimo **accesso** a Windows (il **login** del tuo utente, non la sola
+   accensione: se il PC riavvia e resta alla schermata di login, l'app parte **dopo**
+   che fai login) l'app si apre da sola. La configurazione viene letta
    da `%APPDATA%\XTraderBridge\config.json` (vedi
    [Dove vengono salvati i file](#dove-vengono-salvati-i-file)), quindi token, chat e
    impostazioni sono già a posto: **non devi reinserire il token**.
@@ -356,7 +362,11 @@ Utile se vuoi che parta **all'accesso** anche in scenari in cui la cartella Star
 non basta.
 1. Apri **Utilità di pianificazione** (*Task Scheduler*).
 2. *Crea attività di base…* → nome a piacere (es. «XTrader Bridge»).
-3. **Attivazione**: «All'accesso» (o «All'avvio del computer»).
+3. **Attivazione**: «**All'accesso**». **Non** usare «All'avvio del computer»: il
+   bridge è un'app con interfaccia, ha bisogno di una **sessione utente interattiva**
+   per mostrare la finestra (e la conferma in modalità reale) e per leggere le
+   impostazioni del **tuo** profilo (`%APPDATA%`); avviato prima del login non
+   avrebbe GUI né il profilo giusto.
 4. **Azione**: «Avvia programma» → seleziona `XTrader-Signal-Bridge.exe`.
 5. Fine. Opzionale: nelle proprietà dell'attività spunta «Esegui con i privilegi più
    elevati» solo se necessario.
