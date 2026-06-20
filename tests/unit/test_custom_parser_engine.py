@@ -5,8 +5,6 @@ estrazione per singola regola (fixed/start_after/end_before/emoji/multiriga) e
 applicazione completa con gate "Non pronto" sugli obbligatori vuoti.
 """
 
-import pytest
-
 from xtrader_bridge import custom_parser as cp
 from xtrader_bridge import custom_parser_engine as eng
 from xtrader_bridge.csv_writer import CSV_HEADER

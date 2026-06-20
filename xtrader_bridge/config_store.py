@@ -9,12 +9,18 @@ Un file corrotto viene messo da parte (`.bak`) e si riparte dai default.
 
 import copy
 import json
+import logging
 import os
 import shutil
 import sys
 
 APP_DIR_NAME = "XTraderBridge"
 CONFIG_VERSION = 1
+
+# Logger di modulo: un salvataggio/migrazione config fallito NON deve restare
+# silenzioso (prima era `except: pass`). Resta comunque best-effort — l'app non
+# crasha e prosegue dai default — ma l'errore diventa visibile per la diagnosi.
+logger = logging.getLogger(__name__)
 
 DEFAULTS = {
     "config_version":   CONFIG_VERSION,
@@ -133,8 +139,10 @@ def migrate_legacy_config(new_path: str = CONFIG_FILE,
             _ensure_dir(new_path)
             shutil.copyfile(legacy_path, new_path)
             return True
-    except Exception:
-        pass
+    except Exception as exc:   # noqa: BLE001 — best-effort, ma ora loggato (non silenzioso)
+        # exc_info=True: l'except è ampio, il traceback aiuta a capire la causa.
+        logger.warning("Migrazione config legacy fallita (%s -> %s): %s",
+                       legacy_path, new_path, exc, exc_info=True)
     return False
 
 
@@ -171,8 +179,11 @@ def save_config(cfg: dict, path: str = CONFIG_FILE) -> dict:
         _ensure_dir(path)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(to_save, f, indent=2)
-    except OSError:
-        pass
+    except OSError as exc:
+        # Persistenza fallita (disco pieno, permessi, path non scrivibile): l'app
+        # continua con la config in memoria, ma l'utente deve poterlo sapere.
+        # exc_info=True: traceback completo per il post-mortem (più save point, stesso path).
+        logger.error("Salvataggio config fallito (%s): %s", path, exc, exc_info=True)
     return to_save
 
 
