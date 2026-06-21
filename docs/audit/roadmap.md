@@ -594,3 +594,80 @@ PHASE 9  PR-20 release-candidate
 > Prima dell'uso reale: sempre XTrader in **Modalità Simulazione**, stake basso, limiti
 > chiari, nessuna promessa di profitto. Il merge di ogni PR resta **manuale** del
 > proprietario.
+
+---
+
+# AUDIT POST-RELEASE — Claude + Codex (dopo PR #61/#62/#63)
+
+> Audit di controllo totale **read-only** eseguito dopo i merge della fase B
+> (B1 #61 chat ascoltate, B2 #62 catalogo parser, B3 #63 declutter GUI).
+> Unifica due audit indipendenti:
+> - **Claude** — line-by-line dei ~24 moduli safety-critical (tutti quelli che
+>   decidono scrittura CSV, filtro chat, dedup, persistenza, segreti, lifecycle).
+> - **Codex** — audit read-only con focus su svuotamento CSV manuale, persistenza
+>   config, path conferme XTrader, segreti, dipendenze.
+>
+> Verdetto generale: **codebase robusto e fortemente difensivo** (scritture atomiche,
+> rollback completi, fail-safe su bool/NaN/inf, redazione token al sink unico).
+> **Nessun rischio di doppia scommessa.** I difetti trovati sono pochi e puntuali; i
+> due bug di parsing causano *perdita* di un segnale, non una scommessa doppia.
+
+Legenda severità: 🔴 critico · 🟠 medio-alto/alto · 🟡 medio/basso.
+
+## Tabella consolidata (verifica incrociata)
+
+| # | Finding | Fonte | Verifica | Severità | Chiusa da |
+|---|---|---|---|---|---|
+| A1 | `config_store.save_config` **non atomico** (`open(path,'w')`) **e** riporta successo anche se la scrittura fallisce (GUI logga sempre "Configurazione salvata") | Claude + Codex | ✅ Confermato | 🟠 Medio | PR-A1 |
+| A2 | `_manual_clear` (`app.py:1222`) usa il path del **campo GUI**, non `_active_csv_path`: cambiando il path da running e premendo "Svuota CSV ora" resta una **riga orfana** nel CSV operativo reale | Codex | ✅ Confermato | 🟠 Medio | PR-A2 |
+| A3 | `_extract_quota` (`parser.py:62`): `"Quota X,Y FT"` senza `Prematch:` → quota persa (segnale non scritto) | Claude | ✅ Confermato* | 🟠 Medio/Alto* | PR-A3 |
+| A4 | `_find_teams` (`parser.py:112`): riga con `" v "` in testo libero (senza emoji) scambiata per squadre | Claude | ✅ Confermato | 🟡 Basso | PR-A3 |
+| A5 | `_score_to_over` (`transforms.py:18`): nessun cap sulla somma gol (`999-999` → `Over 1998,5`) | Claude | ✅ Confermato | 🟡 Basso | PR-A3 |
+| A6 | Token Telegram persistito in `config.json` in chiaro (da documentare) | Claude + Codex | ✅ Fatto (tradeoff accettato) | 🟡 Basso | PR-A4 |
+| A7 | Dipendenze runtime non pinnate (`requirements.txt` usa `>=`) | Codex | ✅ Confermato | 🟡 Basso | PR-A4 |
+| A8 | Cache globale lazy `_INDEX`/`_DEFAULT_REGISTRY` non sotto lock (doppia costruzione possibile al primo uso concorrente) | Claude | ✅ Confermato (benigno) | 🟡 Basso | PR-A4 (opz.) |
+
+\* **A3** — severità **Alta** se nei messaggi reali può arrivare `"Quota <quota> FT"` **senza**
+`"Prematch:"`; **Bassa** (difesa in profondità) se i messaggi hanno sempre `Prematch:`.
+**Richiede conferma del proprietario sul formato dei messaggi reali.**
+
+## Refutati / non-finding (con motivazione — NESSUNA modifica)
+
+| Finding Codex | Motivo del rifiuto |
+|---|---|
+| Path conferme (`_process_confirmation`): fare snapshot+restore della coda su write fallita, come `_process` | ❌ Lo snapshot+restore **re-inserirebbe la riga del segnale GIÀ confermato** (comportamento errato). Il design attuale è **corretto**: mantiene la rimozione e fa convergere il CSV via `_expire_tick` (retry `_WRITE_RETRY_DELAY`, ri-schedulato anche su fallimento ripetuto, `app.py:1199-1212`). Resta solo una finestra stantia **limitata**, identica al path di scadenza già accettato. |
+| `try/except ImportError` attorno agli import Telegram (`app.py:44-49`) | ❌ Idioma standard per **dipendenza opzionale**: la GUI deve poter partire senza `python-telegram-bot`, con errore chiaro al START tramite il flag `TELEGRAM_OK` (usato a `app.py:693`). Il `CLAUDE.md` del repo **non** lo vieta. Rimuoverlo romperebbe l'avvio GUI senza Telegram. Won't-fix con motivazione. |
+
+## Moduli verificati PULITI (line-by-line, nessun bug)
+
+`csv_writer` · `mapping` · `signal_dedupe` · `signal_gate` · `signal_router` · `signal_queue`
+· `validator` · `live_guard` · `safety_guard` · `custom_pipeline` · `custom_parser_engine`
+· `confirmation_reader` · `source_manager` · `profile_store` · `parser_io` · `event_log`
+· `diagnostics` · `recognition` · `value_maps` · `message_freshness` · `app.py` (lifecycle
+START/STOP/close, `_process`/rollback, `_log` con redazione token).
+
+**Non-finding chiusi durante l'audit:** token nel log persistente → già redatto al sink
+`_log`; `SignalTracker.register` senza lock → sicuro (solo il thread listener lo chiama);
+warning CodeRabbit "Docstring coverage" → advisory, non bloccante.
+
+**Coverage leggera** (visti via chiamanti, non riga-per-riga): `dizionario`,
+`settings_controller`, `settings_validation`, `source_editor`, `autostart`,
+`reconnect_policy`, `dashboard_stats`, `log_view`, `parser_manager`, `custom_parser`; GUI
+`custom_parser_gui`/`source_chats_gui`/`profiles_gui`. Nessun segnale d'allarme dai chiamanti.
+
+## Sequenza PR di chiusura
+
+```text
+PR-A0  audit-roadmap          → questa sezione (documentazione)                 [questa PR]
+PR-A1  config-atomic-save     → save_config atomico (tmp+fsync+os.replace) +    [da fare]
+                                 ritorna esito; GUI logga "salvata" solo se ok   (A1)
+PR-A2  manual-clear-active    → _manual_clear usa _active_csv_path se running    (A2)  [da fare]
+PR-A3  parser-hardening       → quota FT fallback (A3, se confermato) + guard    [da fare]
+                                 " v " (A4) + cap somma gol (A5) + test mirati
+PR-A4  hardening-minori       → doc token plaintext (A6) + pin deps (A7) +       [da fare]
+                                 lock cache lazy (A8, opzionale)
+```
+
+Ogni PR-Ax: branch dedicato, Phase 0, patch stretta, micro-audit, test hard veritieri,
+**una sola PR**, attesa fine check, triage review, merge **manuale** del proprietario.
+Obiettivo: a fine sequenza, audit Claude **e** Codex completamente chiusi (DONE).
