@@ -108,8 +108,13 @@ def _rows(rows=None):
 
 def market_catalog(rows=None) -> list:
     """Elenco ordinato e SENZA duplicati dei mercati nell'ordine di prima comparsa:
-    ``[{"MarketType": ..., "MarketName": ...}, …]``. Popola la tendina dei mercati
-    (l'utente sceglie il MarketName; il MarketType è accoppiato e ricavabile)."""
+    ``[{"MarketType": ..., "MarketName": ..., "dynamic": bool}, …]``. Popola la
+    tendina dei mercati (l'utente sceglie il MarketName; il MarketType è accoppiato).
+
+    ``dynamic=True`` marca un mercato il cui **MarketName contiene un placeholder**
+    squadra (es. handicap TEAM_A_1 ``"{HOME_TEAM} +1"``): quel nome NON è un valore
+    fisso sicuro: va completato con Home/Away (`fill_placeholders`) prima di finire
+    nel CSV, altrimenti resterebbe un ``{HOME_TEAM}`` non risolto (Codex P2)."""
     seen, out = set(), []
     for r in _rows(rows):
         mt = (r.get("MarketType_XTrader") or "").strip()
@@ -117,8 +122,20 @@ def market_catalog(rows=None) -> list:
         if not mt or mt in seen:
             continue
         seen.add(mt)
-        out.append({"MarketType": mt, "MarketName": mn})
+        out.append({"MarketType": mt, "MarketName": mn, "dynamic": has_placeholder(mn)})
     return out
+
+
+def market_is_dynamic(market, rows=None) -> bool:
+    """True se il MarketName del mercato (cercato per MarketType **o** MarketName)
+    contiene un placeholder squadra → il nome va completato, non usato come fisso."""
+    key = _norm(market)
+    if not key:
+        return False
+    for m in market_catalog(rows):
+        if _norm(m["MarketType"]) == key or _norm(m["MarketName"]) == key:
+            return bool(m["dynamic"])
+    return False
 
 
 def market_names(rows=None) -> list:

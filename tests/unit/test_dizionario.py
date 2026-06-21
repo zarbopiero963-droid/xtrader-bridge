@@ -110,6 +110,24 @@ def test_market_catalog_22_mercati_senza_duplicati():
     assert all(m["MarketType"] and m["MarketName"] for m in cat)  # mai vuoti
 
 
+def test_market_catalog_flag_dynamic_sui_mercati_handicap():
+    # Codex P2 (follow-up): anche il CATALOGO mercati espone `dynamic`, perché i
+    # MarketName degli handicap TEAM_A_1/TEAM_B_1 sono placeholder ("{HOME_TEAM} +1"):
+    # non sono valori fissi sicuri. I mercati normali restano dynamic=False.
+    cat = {m["MarketType"]: m for m in dz.market_catalog()}
+    assert all("dynamic" in m for m in cat.values())
+    assert cat["TEAM_A_1"]["dynamic"] is True
+    assert cat["TEAM_B_1"]["dynamic"] is True
+    assert cat["MATCH_ODDS"]["dynamic"] is False
+    assert cat["OVER_UNDER_25"]["dynamic"] is False
+    assert cat["CORRECT_SCORE"]["dynamic"] is False
+    # helper coerente, per MarketType e per MarketName
+    assert dz.market_is_dynamic("TEAM_A_1") is True
+    assert dz.market_is_dynamic("Esito Finale") is False
+    assert dz.market_is_dynamic("INESISTENTE") is False
+    assert dz.market_is_dynamic("") is False
+
+
 def test_market_name_type_roundtrip():
     assert dz.market_name_for_type("MATCH_ODDS") == "Esito Finale"
     assert dz.market_type_for_name("Esito Finale") == "MATCH_ODDS"
