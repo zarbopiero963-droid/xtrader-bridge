@@ -348,6 +348,10 @@ class App(ctk.CTk):
             tools_frame, text="📡  Chat sorgenti", width=180, height=38,
             fg_color="#00695c", hover_color="#004d40",
             command=self._open_source_chats).pack(side="left", padx=5)
+        ctk.CTkButton(
+            tools_frame, text="📁  Profili", width=140, height=38,
+            fg_color="#5d4037", hover_color="#3e2723",
+            command=self._open_profiles).pack(side="left", padx=5)
 
         # Stato + diagnostica (PR-14c): ultimo segnale/messaggio/CSV/errore + pulsanti
         # "Apri cartella log" e "Copia diagnostica" (per il supporto).
@@ -1225,3 +1229,37 @@ class App(ctk.CTk):
 
         win = SourceChatsWindow(self, on_saved=_on_saved)
         win.focus()
+
+    def _open_profiles(self):
+        """Apre la finestra dei profili di impostazioni (A3). Import lazy: la GUI dei
+        profili non serve all'avvio del bridge. Salvare un profilo persiste prima il
+        form (così il profilo riflette ciò che è a schermo); caricarne uno applica le
+        impostazioni preservando il token Telegram e ripopola il form."""
+        from .profiles_gui import ProfilesWindow
+
+        def _on_loaded(new_cfg):
+            saved = save_config(new_cfg, CONFIG_FILE)
+            self._config = saved
+            self._populate_form(saved)
+            self._log("📁 Profilo caricato e applicato (token invariato).")
+
+        win = ProfilesWindow(self, get_current_cfg=self._save_config, on_loaded=_on_loaded)
+        win.focus()
+
+    def _populate_form(self, cfg: dict) -> None:
+        """Ripopola i campi del form (base + avanzati) dalla config passata: usato dopo
+        il caricamento di un profilo, così i widget mostrano i valori applicati e un
+        salvataggio successivo non riscrive i valori vecchi sopra il profilo. Simmetrico
+        a `_build_ui` (stesse chiavi, stessa normalizzazione del controller)."""
+        cfg = cfg if isinstance(cfg, dict) else {}
+        for key, entry in self._entries.items():
+            entry.delete(0, "end")
+            entry.insert(0, str(cfg.get(key, "")))
+        adv = settings_controller.current_values(cfg)
+        for key, widget in self._adv.items():
+            value = adv[key]
+            if isinstance(widget, tk.Variable):
+                widget.set(value)
+            else:   # CTkEntry (campi di testo avanzati)
+                widget.delete(0, "end")
+                widget.insert(0, str(value))

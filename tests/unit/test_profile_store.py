@@ -1,0 +1,114 @@
+"""Test del profilo impostazioni con nome (A3): salva/carica/elenca/elimina, con la
+garanzia di sicurezza che i segreti (bot_token) NON finiscono mai in un profilo."""
+
+import json
+
+import pytest
+
+from xtrader_bridge import profile_store as ps
+
+
+# ── round-trip base ──────────────────────────────────────────────────────────
+
+def test_save_list_load_round_trip(tmp_path):
+    cfg = {"chat_id": "42", "clear_delay": 90, "queue_mode": "OVERWRITE_LAST"}
+    path = ps.save_profile("Prematch", cfg, dir_path=str(tmp_path))
+    assert path.endswith("Prematch.json")
+    assert ps.list_profiles(str(tmp_path)) == ["Prematch"]
+    assert ps.load_profile("Prematch", str(tmp_path)) == cfg
+
+
+def test_lista_vuota_se_cartella_inesistente(tmp_path):
+    assert ps.list_profiles(str(tmp_path / "nope")) == []
+
+
+def test_lista_ordinata_case_insensitive(tmp_path):
+    for n in ("zeta", "Alfa", "beta"):
+        ps.save_profile(n, {"chat_id": n}, dir_path=str(tmp_path))
+    assert ps.list_profiles(str(tmp_path)) == ["Alfa", "beta", "zeta"]
+
+
+# ── sicurezza: niente segreti nei profili ────────────────────────────────────
+
+def test_save_profile_non_scrive_il_bot_token(tmp_path):
+    cfg = {"bot_token": "123:SEGRETO", "chat_id": "42"}
+    path = ps.save_profile("ConToken", cfg, dir_path=str(tmp_path))
+    raw = json.loads(open(path, encoding="utf-8").read())
+    assert "bot_token" not in raw["config"]          # non sul disco
+    assert raw["config"] == {"chat_id": "42"}
+    assert "bot_token" not in ps.load_profile("ConToken", str(tmp_path))
+
+
+def test_load_profile_difesa_in_profondita_su_file_manomesso(tmp_path):
+    # Un file profilo editato a mano per inserire un token NON deve restituirlo.
+    path = ps.profile_path("Manomesso", str(tmp_path))
+    open(path, "w", encoding="utf-8").write(json.dumps(
+        {"name": "Manomesso", "config": {"bot_token": "x:y", "chat_id": "9"}}))
+    assert ps.load_profile("Manomesso", str(tmp_path)) == {"chat_id": "9"}
+
+
+def test_apply_profile_preserva_il_token_corrente(tmp_path):
+    current = {"bot_token": "LIVE:TOKEN", "chat_id": "1", "clear_delay": 90}
+    profile = {"chat_id": "999", "clear_delay": 30}
+    merged = ps.apply_profile(current, profile)
+    assert merged["bot_token"] == "LIVE:TOKEN"        # token NON sovrascritto
+    assert merged["chat_id"] == "999"                 # impostazioni applicate
+    assert merged["clear_delay"] == 30
+    assert current["chat_id"] == "1"                  # input non mutato
+
+
+def test_apply_profile_ignora_token_in_un_profilo_manomesso():
+    current = {"bot_token": "LIVE:TOKEN", "chat_id": "1"}
+    tampered = {"bot_token": "ATTACKER:TOKEN", "chat_id": "2"}
+    merged = ps.apply_profile(current, tampered)
+    assert merged["bot_token"] == "LIVE:TOKEN"        # il token vivo vince sempre
+
+
+# ── collisioni / nomi non validi ─────────────────────────────────────────────
+
+def test_collisione_filename_tra_nomi_diversi_rifiutata(tmp_path):
+    ps.save_profile("Live", {"chat_id": "1"}, dir_path=str(tmp_path))
+    with pytest.raises(ValueError, match="collide"):
+        ps.save_profile("Live!", {"chat_id": "2"}, dir_path=str(tmp_path))
+
+
+def test_update_stesso_profilo_consentito(tmp_path):
+    ps.save_profile("Live", {"chat_id": "1"}, dir_path=str(tmp_path))
+    ps.save_profile("Live", {"chat_id": "2"}, dir_path=str(tmp_path))   # update, no raise
+    assert ps.load_profile("Live", str(tmp_path)) == {"chat_id": "2"}
+    assert ps.list_profiles(str(tmp_path)) == ["Live"]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "!!!", "/", ".."])
+def test_nome_vuoto_o_non_valido_rifiutato(tmp_path, bad):
+    with pytest.raises(ValueError):
+        ps.save_profile(bad, {"chat_id": "1"}, dir_path=str(tmp_path))
+
+
+# ── delete / errori di load ──────────────────────────────────────────────────
+
+def test_delete_profile(tmp_path):
+    ps.save_profile("Tmp", {"chat_id": "1"}, dir_path=str(tmp_path))
+    assert ps.delete_profile("Tmp", str(tmp_path)) is True
+    assert ps.delete_profile("Tmp", str(tmp_path)) is False     # già rimosso
+    assert ps.list_profiles(str(tmp_path)) == []
+
+
+def test_load_profile_inesistente_solleva(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        ps.load_profile("NonEsiste", str(tmp_path))
+
+
+def test_load_profile_corrotto_solleva_valueerror(tmp_path):
+    path = ps.profile_path("Rotto", str(tmp_path))
+    open(path, "w", encoding="utf-8").write("{ non json")
+    with pytest.raises(ValueError):
+        ps.load_profile("Rotto", str(tmp_path))
+
+
+def test_lista_ignora_file_corrotti_e_temporanei(tmp_path):
+    ps.save_profile("Buono", {"chat_id": "1"}, dir_path=str(tmp_path))
+    open(tmp_path / "rotto.json", "w", encoding="utf-8").write("{ nope")
+    open(tmp_path / ".profile_tmp.json", "w", encoding="utf-8").write(
+        json.dumps({"name": "Fantasma", "config": {}}))
+    assert ps.list_profiles(str(tmp_path)) == ["Buono"]
