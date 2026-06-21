@@ -791,13 +791,23 @@ class App(ctk.CTk):
                     return
             self._log("▶️ Avvio automatico del listener (auto_start_listener attivo).")
 
+        # Svuota il CSV operativo PRIMA di mettere la sessione in stato ATTIVO: se il path
+        # non è scrivibile (lockato da XTrader, permessi, disco pieno) l'avvio va annullato
+        # SENZA lasciare la UI "attiva" col listener mai partito (A9). init_csv è l'unico
+        # I/O che può fallire qui prima dell'avvio del thread.
+        try:
+            init_csv(cfg["csv_path"])
+        except OSError as exc:
+            self._log(f"❌ Impossibile inizializzare il CSV ({cfg['csv_path']}): "
+                      f"{type(exc).__name__}: {exc}. Avvio annullato.")
+            return
+
         self._running = True
         self._stop_event.clear()      # nuova sessione: riarma l'attesa del backoff
         self._status_lbl.configure(text="⬤  ATTIVO", text_color="#66bb6a")
         self._btn_start.configure(state="disabled")
         self._btn_stop.configure(state="normal")
 
-        init_csv(cfg["csv_path"])
         # Path attivo della sessione: lo STOP pulirà questo (Codex P1).
         self._active_csv_path = cfg["csv_path"]
         self._init_guards(cfg)
@@ -1237,7 +1247,14 @@ class App(ctk.CTk):
             self._schedule_expiry(path)
 
     def _manual_clear(self):
-        path = self._e_csv.get().strip()
+        # In esecuzione si svuota il CSV ATTIVO della sessione (catturato a START), non il
+        # path del campo GUI: l'utente potrebbe averlo cambiato a runtime e svuotare il
+        # file sbagliato lascerebbe una riga ORFANA nel CSV operativo reale (A2). A bridge
+        # fermo non c'è sessione attiva → si usa il campo GUI.
+        if self._running and self._active_csv_path:
+            path = self._active_csv_path
+        else:
+            path = self._e_csv.get().strip()
         if not path:
             return
         # Ferma il tick di scadenza così non riscrive il CSV mentre lo svuotiamo (PR-22).
