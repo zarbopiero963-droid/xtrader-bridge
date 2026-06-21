@@ -221,6 +221,9 @@ class App(ctk.CTk):
             self._log(f"⚠️ Impostazioni avanzate: {err}")
         saved = save_config(cfg, CONFIG_FILE)
         self._config = saved
+        # Mantiene il pannello "Chat ascoltate" allineato alla config salvata: unico
+        # punto, così non va ripetuto a ogni call site (bottone Salva, AVVIA, ...).
+        self._refresh_listened_chats()
         return saved
 
     # ── UI ────────────────────────────────────
@@ -334,8 +337,7 @@ class App(ctk.CTk):
         ctk.CTkButton(
             btn_frame, text="💾  Salva Config", width=140, height=42,
             fg_color="#37474f", hover_color="#263238",
-            command=lambda: [self._save_config(), self._refresh_listened_chats(),
-                             self._log("💾 Configurazione salvata")],
+            command=lambda: [self._save_config(), self._log("💾 Configurazione salvata")],
         ).pack(side="right", padx=5)
 
         # Riga propria: la finestra è a larghezza fissa, non far sforare i pulsanti.
@@ -459,6 +461,10 @@ class App(ctk.CTk):
         leggibili (source_chats) o l'ID, oppure un avviso se nessuna chat è configurata
         (in quel caso il bridge non parte: fail-fast d'avvio). Solo lettura: non cambia
         config né runtime. Thread Tk."""
+        # Guardia: _save_config può essere chiamato (in teoria) prima che _build_ui abbia
+        # creato il pannello; in quel caso non c'è nulla da aggiornare.
+        if not hasattr(self, "_chats_lbl"):
+            return
         cfg = self._config if isinstance(self._config, dict) else {}
         rows = signal_router.listened_chats(cfg)
         if not rows:
@@ -701,8 +707,7 @@ class App(ctk.CTk):
                 self._log(f"❌ {err}")
             return
 
-        cfg = self._save_config()
-        self._refresh_listened_chats()   # riflette la config con cui il bridge parte
+        cfg = self._save_config()   # aggiorna anche il pannello "Chat ascoltate"
         # Fail-fast (PR-13, finding Codex P1): se le impostazioni avanzate non sono
         # valide, apply_advanced le ha RIFIUTATE in blocco e cfg ha ancora i vecchi
         # valori. Avviare ignorerebbe una modifica safety-critical (es. riattivare

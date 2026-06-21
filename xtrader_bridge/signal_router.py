@@ -128,8 +128,9 @@ def listened_chats(cfg: dict) -> list:
         if cid and nm:
             names[cid] = nm
     rows = [{"chat_id": cid, "name": names.get(cid, "")} for cid in allowed_chats(cfg)]
-    # I nomi vuoti in fondo: chiave ("￿"+id) ordina dopo qualsiasi nome reale.
-    return sorted(rows, key=lambda r: (r["name"].lower() or "￿" + r["chat_id"], r["chat_id"]))
+    # Prima le chat con nome (False ordina prima di True), per nome case-insensitive,
+    # poi per chat_id; quelle senza nome finiscono in fondo, ordinate per ID.
+    return sorted(rows, key=lambda r: (r["name"] == "", r["name"].lower(), r["chat_id"]))
 
 
 def active_custom_parser(cfg: dict, chat: str, parsers_dir: str = None):
