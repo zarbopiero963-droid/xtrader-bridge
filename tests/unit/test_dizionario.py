@@ -146,6 +146,19 @@ def test_selections_for_market_correct_score_19_non_dinamiche():
     assert not any(s["dynamic"] for s in cs)
 
 
+def test_selections_handicap_placeholder_nel_marketname_e_dinamico():
+    # Codex P2: in TEAM_A_1/TEAM_B_1 il MarketName contiene {HOME_TEAM}/{AWAY_TEAM}
+    # mentre una selezione è statica ("Pareggio"): la riga è COMUNQUE dinamica perché
+    # serve Home/Away per risolvere il mercato. Tutte e 3 le selezioni → dynamic=True.
+    for mt in ("TEAM_A_1", "TEAM_B_1"):
+        sels = dz.selections_for_market(mt)
+        assert sels, mt
+        assert all(s["dynamic"] for s in sels), [(s["SelectionName"], s["dynamic"]) for s in sels]
+        # in particolare la selezione statica "Pareggio" è marcata dinamica.
+        pareggio = [s for s in sels if s["SelectionName"] == "Pareggio"]
+        assert pareggio and pareggio[0]["dynamic"] is True
+
+
 def test_selections_for_market_mercato_ignoto_o_vuoto():
     assert dz.selections_for_market("INESISTENTE") == []
     assert dz.selections_for_market("") == []

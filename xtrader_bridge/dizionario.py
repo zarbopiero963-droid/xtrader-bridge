@@ -89,6 +89,8 @@ def market_types(rows: list) -> set:
 # nell'ordine del file: stabile e prevedibile per l'utente.
 
 _PLACEHOLDER_RE = re.compile(r"\{[A-Z_]+\}")
+# Valori della colonna SelezioneDinamica che marcano una riga come dinamica.
+_DYNAMIC_FLAG = frozenset({"sì", "si", "yes", "true", "1"})
 
 
 @functools.lru_cache(maxsize=1)
@@ -158,17 +160,26 @@ def selections_for_market(market, rows=None) -> list:
         if key not in (mt, mn):
             continue
         name = (r.get("SelectionName_XTrader") or "").strip()
+        market_name = (r.get("MarketName_XTrader") or "").strip()
+        # `dynamic`: la riga richiede Home/Away per essere risolta. Vero se il
+        # placeholder è nella selezione **o** nel MarketName (es. handicap TEAM_A_1
+        # "{HOME_TEAM} +1" con selezione statica "Pareggio") **o** se il dizionario
+        # marca la riga come dinamica (SelezioneDinamica = "Sì"). Così un chiamante
+        # che usa il catalogo per i valori "fissi" non lascia placeholder irrisolti
+        # (Codex P2).
+        selez_dyn = (r.get("SelezioneDinamica") or "").strip().lower() in _DYNAMIC_FLAG
         out.append({
             "SelectionName":          name,
             "SelectionRole":          (r.get("SelectionRole") or "").strip(),
             "MarketType":             (r.get("MarketType_XTrader") or "").strip(),
-            "MarketName":             (r.get("MarketName_XTrader") or "").strip(),
+            "MarketName":             market_name,
             "MarketAliasTelegram":    (r.get("MarketAliasTelegram") or "").strip(),
             "SelectionAliasTelegram": (r.get("SelectionAliasTelegram") or "").strip(),
             "Linea":                  (r.get("Linea") or "").strip(),
             "Handicap":               ((r.get("Handicap") or "").strip() or "0"),
             "BetType":                (r.get("BetType_XTrader") or "").strip(),
-            "dynamic":                has_placeholder(name),
+            "SelezioneDinamica":      selez_dyn,
+            "dynamic":                has_placeholder(name) or has_placeholder(market_name) or selez_dyn,
         })
     return out
 
