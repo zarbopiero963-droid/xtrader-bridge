@@ -18,6 +18,11 @@ import tempfile
 APP_DIR_NAME = "XTraderBridge"
 CONFIG_VERSION = 1
 
+# Prefisso/suffisso del file temporaneo della scrittura atomica del config: fonte
+# unica così i test si allineano senza duplicare la stringa (finding Sourcery).
+TMP_PREFIX = ".config_"
+TMP_SUFFIX = ".tmp"
+
 # Logger di modulo: un salvataggio/migrazione config fallito NON deve restare
 # silenzioso (prima era `except: pass`). Resta comunque best-effort — l'app non
 # crasha e prosegue dai default — ma l'errore diventa visibile per la diagnosi.
@@ -191,7 +196,7 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
     try:
         _ensure_dir(path)
         d = os.path.dirname(os.path.abspath(path)) or "."
-        fd, tmp = tempfile.mkstemp(dir=d, prefix=".config_", suffix=".tmp")
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=TMP_PREFIX, suffix=TMP_SUFFIX)
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(to_save, f, indent=2)

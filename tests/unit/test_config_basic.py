@@ -187,7 +187,7 @@ def test_save_config_logga_errore_io_ma_resta_best_effort(tmp_path, caplog):
     assert ok is False                             # A1: la GUI non deve dire "salvato"
     assert any("Salvataggio config fallito" in r.getMessage() for r in caplog.records)
     # Nessun temporaneo lasciato in giro dopo il fallimento.
-    assert not [f for f in os.listdir(target.parent) if f.startswith(".config_")]
+    assert not [f for f in os.listdir(target.parent) if f.startswith(config_store.TMP_PREFIX)]
 
 
 def test_save_config_successo_ritorna_ok_e_persiste(tmp_path):
@@ -199,7 +199,7 @@ def test_save_config_successo_ritorna_ok_e_persiste(tmp_path):
     assert out["provider"] == "TG"
     reread = config_store.load_config(str(p))
     assert reread["provider"] == "TG" and reread["chat_id"] == "123"
-    assert not [f for f in os.listdir(p.parent) if f.startswith(".config_")]
+    assert not [f for f in os.listdir(p.parent) if f.startswith(config_store.TMP_PREFIX)]
 
 
 def test_save_config_atomico_non_distrugge_il_file_esistente_su_errore(tmp_path, monkeypatch):
@@ -218,7 +218,7 @@ def test_save_config_atomico_non_distrugge_il_file_esistente_su_errore(tmp_path,
     assert ok is False
     # Il file su disco è ancora quello valido precedente, non corrotto/troncato.
     assert config_store.load_config(str(p))["provider"] == "BUONO"
-    assert not [f for f in os.listdir(p.parent) if f.startswith(".config_")]
+    assert not [f for f in os.listdir(p.parent) if f.startswith(config_store.TMP_PREFIX)]
 
 
 def test_migrate_legacy_logga_errore_ma_non_crasha(tmp_path, caplog):
