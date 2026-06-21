@@ -334,7 +334,8 @@ class App(ctk.CTk):
         ctk.CTkButton(
             btn_frame, text="💾  Salva Config", width=140, height=42,
             fg_color="#37474f", hover_color="#263238",
-            command=lambda: [self._save_config(), self._log("💾 Configurazione salvata")],
+            command=lambda: [self._save_config(), self._refresh_listened_chats(),
+                             self._log("💾 Configurazione salvata")],
         ).pack(side="right", padx=5)
 
         # Riga propria: la finestra è a larghezza fissa, non far sforare i pulsanti.
@@ -352,6 +353,20 @@ class App(ctk.CTk):
             tools_frame, text="📁  Profili", width=140, height=38,
             fg_color="#5d4037", hover_color="#3e2723",
             command=self._open_profiles).pack(side="left", padx=5)
+
+        # Chat ascoltate (B1): vista READ-ONLY delle chat che il listener processerà,
+        # coi nomi leggibili (da source_chats) quando disponibili. Aggiornata a Salva
+        # Config e al caricamento di un profilo. Rende visibile il modello "ascolta solo
+        # queste chat, mai tutte" (allowed_chats, A2).
+        chats_frame = ctk.CTkFrame(self, corner_radius=10)
+        chats_frame.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(chats_frame, text="📡  CHAT ASCOLTATE",
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", padx=12, pady=(8, 2))
+        self._chats_lbl = ctk.CTkLabel(
+            chats_frame, text="", font=ctk.CTkFont(size=11), text_color="gray",
+            wraplength=680, anchor="w", justify="left")
+        self._chats_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+        self._refresh_listened_chats()
 
         # Stato + diagnostica (PR-14c): ultimo segnale/messaggio/CSV/errore + pulsanti
         # "Apri cartella log" e "Copia diagnostica" (per il supporto).
@@ -437,6 +452,26 @@ class App(ctk.CTk):
         ctk.CTkCheckBox(parent, text=label, variable=var).grid(
             row=row, column=0, columnspan=2, padx=10, pady=8, sticky="w")
         return var
+
+    # ── CHAT ASCOLTATE (B1) ───────────────────
+    def _refresh_listened_chats(self) -> None:
+        """Aggiorna il pannello 'Chat ascoltate' dalla config corrente. Mostra i nomi
+        leggibili (source_chats) o l'ID, oppure un avviso se nessuna chat è configurata
+        (in quel caso il bridge non parte: fail-fast d'avvio). Solo lettura: non cambia
+        config né runtime. Thread Tk."""
+        cfg = self._config if isinstance(self._config, dict) else {}
+        rows = signal_router.listened_chats(cfg)
+        if not rows:
+            self._chats_lbl.configure(
+                text="⚠️ Nessuna chat configurata — il bridge non si avvierà finché non "
+                     "imposti una Chat ID o una Chat sorgente.",
+                text_color="#ffa726")
+            return
+        lines = [f"• {r['name']}  ({r['chat_id']})" if r["name"] else f"• {r['chat_id']}"
+                 for r in rows]
+        self._chats_lbl.configure(
+            text=f"Il bridge ascolterà queste {len(rows)} chat:\n" + "\n".join(lines),
+            text_color="gray")
 
     # ── DASHBOARD (PR-14) ─────────────────────
     def _refresh_dashboard(self) -> None:
@@ -667,6 +702,7 @@ class App(ctk.CTk):
             return
 
         cfg = self._save_config()
+        self._refresh_listened_chats()   # riflette la config con cui il bridge parte
         # Fail-fast (PR-13, finding Codex P1): se le impostazioni avanzate non sono
         # valide, apply_advanced le ha RIFIUTATE in blocco e cfg ha ancora i vecchi
         # valori. Avviare ignorerebbe una modifica safety-critical (es. riattivare
@@ -1225,6 +1261,7 @@ class App(ctk.CTk):
 
         def _on_saved(new_cfg):
             self._config = new_cfg
+            self._refresh_listened_chats()
             self._log(f"📡 Sorgenti multi-chat aggiornate ({len(new_cfg.get('source_chats', []))}).")
 
         win = SourceChatsWindow(self, on_saved=_on_saved)
@@ -1241,6 +1278,7 @@ class App(ctk.CTk):
             saved = save_config(new_cfg, CONFIG_FILE)
             self._config = saved
             self._populate_form(saved)
+            self._refresh_listened_chats()
             self._log("📁 Profilo caricato e applicato (token invariato).")
 
         win = ProfilesWindow(self, get_current_cfg=self._save_config, on_loaded=_on_loaded,
