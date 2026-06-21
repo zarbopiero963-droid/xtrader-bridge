@@ -9,7 +9,9 @@ proprio (alias → riga) e l'integrazione in `build_csv_row` sono PR-08.
 """
 
 import csv
+import functools
 import os
+import re
 import sys
 
 
@@ -78,3 +80,166 @@ def duplicate_alias_pairs(rows: list) -> list:
 
 def market_types(rows: list) -> set:
     return {row["MarketType_XTrader"] for row in rows}
+
+
+# ── Catalogo per le tendine della GUI (A1) ──────────────────────────────────
+# Funzioni PURE costruite sul dizionario reale: popolano i menù a tendina del
+# Parser Personalizzato (scelta del VALORE FISSO della colonna) senza che la GUI
+# conosca il formato del CSV/del dizionario. Mercati e selezioni sono restituiti
+# nell'ordine del file: stabile e prevedibile per l'utente.
+
+_PLACEHOLDER_RE = re.compile(r"\{[A-Z_]+\}")
+# Valori della colonna SelezioneDinamica che marcano una riga come dinamica.
+_DYNAMIC_FLAG = frozenset({"sì", "si", "yes", "true", "1"})
+
+
+@functools.lru_cache(maxsize=1)
+def _cached_rows() -> tuple:
+    """Dizionario reale caricato UNA volta (il catalogo non cambia a runtime).
+    `lru_cache` gestisce la cache, evitando stato mutabile a livello di modulo."""
+    return tuple(load_dizionario())
+
+
+def _rows(rows=None):
+    """Righe del dizionario: quelle passate (mantiene le funzioni pure/testabili
+    senza toccare il disco), oppure il file reale tenuto in cache."""
+    return rows if rows is not None else _cached_rows()
+
+
+def market_catalog(rows=None) -> list:
+    """Elenco ordinato e SENZA duplicati dei mercati nell'ordine di prima comparsa:
+    ``[{"MarketType": ..., "MarketName": ..., "dynamic": bool}, …]``. Popola la
+    tendina dei mercati (l'utente sceglie il MarketName; il MarketType è accoppiato).
+
+    ``dynamic=True`` marca un mercato il cui **MarketName contiene un placeholder**
+    squadra (es. handicap TEAM_A_1 ``"{HOME_TEAM} +1"``): quel nome NON è un valore
+    fisso sicuro: va completato con Home/Away (`fill_placeholders`) prima di finire
+    nel CSV, altrimenti resterebbe un ``{HOME_TEAM}`` non risolto (Codex P2)."""
+    seen, out = set(), []
+    for r in _rows(rows):
+        mt = (r.get("MarketType_XTrader") or "").strip()
+        mn = (r.get("MarketName_XTrader") or "").strip()
+        if not mt or mt in seen:
+            continue
+        seen.add(mt)
+        out.append({"MarketType": mt, "MarketName": mn, "dynamic": has_placeholder(mn)})
+    return out
+
+
+def market_is_dynamic(market, rows=None) -> bool:
+    """True se il MarketName del mercato (cercato per MarketType **o** MarketName)
+    contiene un placeholder squadra → il nome va completato, non usato come fisso."""
+    key = _norm(market)
+    if not key:
+        return False
+    for m in market_catalog(rows):
+        if _norm(m["MarketType"]) == key or _norm(m["MarketName"]) == key:
+            return bool(m["dynamic"])
+    return False
+
+
+def market_names(rows=None, fixed_only=False) -> list:
+    """I MarketName per una tendina.
+
+    Con ``fixed_only=True`` esclude i mercati **dinamici** (MarketName con placeholder
+    squadra, es. handicap ``"{HOME_TEAM} +1"``), lasciando solo nomi usabili come
+    valore **fisso** — utile per una tendina che salva il nome così com'è. Con il
+    default (``fixed_only=False``) li include **tutti**: i mercati handicap sono
+    scommesse legittime, ma il loro nome va completato con Home/Away
+    (`fill_placeholders`), non persistito grezzo — il flag `dynamic` lo segnala in
+    `market_catalog()`, e `has_placeholder` impedisce a un nome non risolto di finire
+    nel CSV a valle (Codex P2)."""
+    return [m["MarketName"] for m in market_catalog(rows)
+            if not (fixed_only and m["dynamic"])]
+
+
+def market_name_for_type(market_type, rows=None):
+    """MarketName accoppiato a un MarketType, o None se non esiste."""
+    key = (market_type or "").strip()
+    for m in market_catalog(rows):
+        if m["MarketType"] == key:
+            return m["MarketName"]
+    return None
+
+
+def market_type_for_name(market_name, rows=None):
+    """MarketType accoppiato a un MarketName (case/space-insensitive), o None."""
+    key = _norm(market_name)
+    for m in market_catalog(rows):
+        if _norm(m["MarketName"]) == key:
+            return m["MarketType"]
+    return None
+
+
+def selections_for_market(market, rows=None) -> list:
+    """Selezioni di un mercato (match per MarketType **o** MarketName,
+    case/space-insensitive), nell'ordine del dizionario. Ogni voce è un dict con i
+    campi utili a tendina e riga CSV. ``dynamic=True`` marca una selezione che
+    contiene un placeholder squadra ({HOME_TEAM}/{AWAY_TEAM}): quel valore va
+    completato dal parser (Home/Away), non scelto come fisso."""
+    key = _norm(market)
+    if not key:
+        return []
+    out = []
+    for r in _rows(rows):
+        mt = _norm(r.get("MarketType_XTrader"))
+        mn = _norm(r.get("MarketName_XTrader"))
+        if key not in (mt, mn):
+            continue
+        name = (r.get("SelectionName_XTrader") or "").strip()
+        market_name = (r.get("MarketName_XTrader") or "").strip()
+        # `dynamic`: la riga richiede Home/Away per essere risolta. Vero se il
+        # placeholder è nella selezione **o** nel MarketName (es. handicap TEAM_A_1
+        # "{HOME_TEAM} +1" con selezione statica "Pareggio") **o** se il dizionario
+        # marca la riga come dinamica (SelezioneDinamica = "Sì"). Così un chiamante
+        # che usa il catalogo per i valori "fissi" non lascia placeholder irrisolti
+        # (Codex P2).
+        selez_dyn = (r.get("SelezioneDinamica") or "").strip().lower() in _DYNAMIC_FLAG
+        out.append({
+            "SelectionName":          name,
+            "SelectionRole":          (r.get("SelectionRole") or "").strip(),
+            "MarketType":             (r.get("MarketType_XTrader") or "").strip(),
+            "MarketName":             market_name,
+            "MarketAliasTelegram":    (r.get("MarketAliasTelegram") or "").strip(),
+            "SelectionAliasTelegram": (r.get("SelectionAliasTelegram") or "").strip(),
+            "Linea":                  (r.get("Linea") or "").strip(),
+            "Handicap":               ((r.get("Handicap") or "").strip() or "0"),
+            "BetType":                (r.get("BetType_XTrader") or "").strip(),
+            "SelezioneDinamica":      selez_dyn,
+            "dynamic":                has_placeholder(name) or has_placeholder(market_name) or selez_dyn,
+        })
+    return out
+
+
+def has_placeholder(value) -> bool:
+    """True se nel valore restano placeholder non risolti (es. ``{HOME_TEAM}``)."""
+    return bool(_PLACEHOLDER_RE.search(str(value)))
+
+
+def compose_event_name(home, away) -> str:
+    """Compone l'EventName nel formato del dizionario/XTrader: ``"Casa - Trasferta"``
+    (separatore " - ", come negli esempi reali). Se manca una squadra ritorna
+    l'altra (o stringa vuota), senza separatori penzolanti."""
+    h = str(home or "").strip()
+    a = str(away or "").strip()
+    if h and a:
+        return f"{h} - {a}"
+    return h or a
+
+
+def fill_placeholders(value, home="", away="") -> str:
+    """Sostituisce i placeholder dinamici di un valore del dizionario:
+    ``{HOME_TEAM}``/``{AWAY_TEAM}`` con le squadre e ``{EVENT_NAME}`` con l'EventName
+    composto (solo se entrambe le squadre sono note). I placeholder privi di valore
+    restano invariati: il chiamante può rilevarli con `has_placeholder` e scartare
+    una selezione non completabile."""
+    out = str(value)
+    h = str(home or "").strip()
+    a = str(away or "").strip()
+    if h:
+        out = out.replace("{HOME_TEAM}", h)
+    if a:
+        out = out.replace("{AWAY_TEAM}", a)
+    if h and a:
+        out = out.replace("{EVENT_NAME}", compose_event_name(h, a))
+    return out
