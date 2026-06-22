@@ -86,3 +86,14 @@ def test_segnale_senza_squadre_scartato_name_only():
     parsed = {"signal_type": "MATCH ODDS", "teams": "", "quota": "1.85", "bet_type": "BACK"}
     row = build_csv_row(parsed, "PBet")
     assert rec.is_valid(row, "NAME_ONLY") is False
+
+
+# ── required_targets: campi auto-obbligatori per modalità (PR-4) ─────────────
+
+def test_required_targets_per_modalita():
+    assert rec.required_targets("NAME_ONLY") == ("EventName", "MarketType", "SelectionName")
+    assert rec.required_targets("ID_ONLY") == ("MarketId", "SelectionId")
+    assert rec.required_targets("BOTH") == ()                 # basta un set → non forza
+    assert rec.required_targets("boh") == ("EventName", "MarketType", "SelectionName")  # default
+    for f in rec.required_targets("ID_ONLY") + rec.required_targets("NAME_ONLY"):
+        assert f in rec.RECOGNITION_FIELDS

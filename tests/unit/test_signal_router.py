@@ -455,3 +455,35 @@ def test_should_process_senza_config_e_senza_custom_mai():
     cfg = {"provider": "TG"}
     assert signal_router.should_process(cfg, "777", "P.Bet. ...") is False
     assert signal_router.should_process(cfg, "777", "ciao") is False
+
+
+def test_modalita_e_per_parser_non_globale(tmp_path):
+    # PR-4: la Modalità è quella DEL PARSER, non `recognition_mode` globale. Un parser
+    # ID_ONLY valida per ID: il fixture (solo nomi) → INVALID_MISSING_FIELDS anche se la
+    # config globale dice NAME_ONLY.
+    defn = parser_io.example_parser()
+    defn.name = "PerId"
+    defn.mode = "ID_ONLY"
+    cp.save_parser(defn, str(tmp_path))
+    cfg = {"provider": "TG", "active_parser": "PerId", "chat_id": "42",
+           "recognition_mode": "NAME_ONLY"}        # globale diverso: deve essere ignorato
+    res = signal_router.resolve_row(parser_io.fixture_message(), cfg,
+                                    chat_id="42", parsers_dir=str(tmp_path))
+    assert res.source == signal_router.CUSTOM
+    assert res.placeable is False
+    assert res.status == "INVALID_MISSING_FIELDS"   # mancano MarketId/SelectionId (ID_ONLY)
+
+
+def test_parser_legacy_senza_mode_eredita_globale(tmp_path):
+    # Codex P1: un parser salvato SENZA `mode` (file pre-feature) deve ereditare la
+    # modalità globale `recognition_mode`, non essere forzato a NAME_ONLY. Qui il
+    # parser (solo nomi) con globale ID_ONLY → scartato per ID mancanti (eredita ID_ONLY).
+    defn = parser_io.example_parser()
+    defn.name = "Legacy"
+    defn.mode = ""                                  # non impostata = file legacy
+    cp.save_parser(defn, str(tmp_path))
+    cfg = {"provider": "TG", "active_parser": "Legacy", "chat_id": "42",
+           "recognition_mode": "ID_ONLY"}
+    res = signal_router.resolve_row(parser_io.fixture_message(), cfg,
+                                    chat_id="42", parsers_dir=str(tmp_path))
+    assert res.status == "INVALID_MISSING_FIELDS"   # eredita ID_ONLY dal globale

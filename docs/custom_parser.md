@@ -97,6 +97,34 @@ mai un lato/selezione tradotto a caso.
 
 ---
 
+## 2bis. Modalità di riconoscimento e griglia a 14 colonne
+
+Il builder mostra **tutte e 14 le colonne del contratto già pronte, in ordine fisso**
+(una riga per colonna): compili quelle che ti servono e lasci vuote le altre — non si
+aggiungono/scelgono colonne a mano, così l'ordine è sempre corretto e non se ne dimentica
+nessuna.
+
+La **Modalità** di riconoscimento (`ID_ONLY` / `NAME_ONLY` / `BOTH`) è una proprietà
+**del parser** (salvata nel file, campo `mode`; default `NAME_ONLY`). Selezionandola dal
+menu, le colonne richieste da quel set diventano **obbligatorie in automatico** (auto
+«Obblig.»), senza spuntarle a mano:
+
+| Modalità | Colonne rese obbligatorie |
+|---|---|
+| `NAME_ONLY` | `EventName`, `MarketType`, `SelectionName` |
+| `ID_ONLY` | `MarketId`, `SelectionId` |
+| `BOTH` | nessuna forzata (basta **un** set completo: lo decidi tu) |
+
+`Price`, `BetType`, `Provider` non dipendono dalla modalità (la loro obbligatorietà la
+gestisci tu). A **runtime** la validazione del segnale usa la modalità **del parser**:
+ogni parser porta la sua, coerente col builder. **Eccezione (compatibilità):** un parser
+salvato *prima* di questa feature non ha il campo `mode` (resta `""`) e in quel caso il
+runtime **eredita la modalità globale** `recognition_mode`, così i parser vecchi non
+cambiano comportamento. I parser creati/salvati dalla GUI hanno sempre una modalità
+esplicita (incl. la voce «(eredita globale)» se la scegli apposta).
+
+---
+
 ## 3. Gate di sicurezza (perché non scrive righe sbagliate)
 
 Tutti questi gate devono passare perché una riga venga scritta:

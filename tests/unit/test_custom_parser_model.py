@@ -271,3 +271,36 @@ def test_list_parser_files_ignora_tmp_atomici(tmp_path):
     files = cp.list_parser_files(str(tmp_path))
     assert files == [p]
     assert all(not os.path.basename(f).startswith(".") for f in files)
+
+
+# ── Modalità per-parser (PR-4) ───────────────────────────────────────────────
+
+def test_mode_default_costruzione_e_roundtrip():
+    # Costruzione diretta/template → default NAME_ONLY (esplicito, non sentinella ""),
+    # così skeleton/example non ereditano per sbaglio il globale (Codex).
+    d = cp.CustomParserDef(name="P", rules=[cp.FieldRule(target="Provider", fixed_value="X")])
+    assert d.mode == "NAME_ONLY"
+    d.mode = "ID_ONLY"
+    again = cp.CustomParserDef.from_dict(d.to_dict())
+    assert again.mode == "ID_ONLY"
+    assert d.to_dict()["mode"] == "ID_ONLY"
+
+
+def test_skeleton_e_example_hanno_mode_esplicito():
+    # I template NON devono avere "" (che a runtime erediterebbe il globale).
+    assert cp.skeleton("X").mode == "NAME_ONLY"
+
+
+def test_mode_assente_da_json_eredita_vuoto():
+    # SOLO la chiave 'mode' assente/null (file legacy) → "" = eredita il globale.
+    assert cp.CustomParserDef.from_dict({"name": "P", "rules": []}).mode == ""
+    assert cp.CustomParserDef.from_dict({"name": "P", "mode": None, "rules": []}).mode == ""
+    # "" esplicito (eredità scelta dalla GUI) → "".
+    assert cp.CustomParserDef.from_dict({"name": "P", "mode": "", "rules": []}).mode == ""
+
+
+def test_mode_malformato_fail_safe_name_only():
+    # Un valore PRESENTE ma malformato (typo, file corrotto) → NAME_ONLY (fail-safe):
+    # non eredita un globale magari sbagliato, non lascia passare un modo ignoto (Codex).
+    assert cp.CustomParserDef.from_dict({"name": "P", "mode": "boh", "rules": []}).mode == "NAME_ONLY"
+    assert cp.CustomParserDef.from_dict({"name": "P", "mode": "IDONLY", "rules": []}).mode == "NAME_ONLY"

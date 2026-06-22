@@ -34,7 +34,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 
-from . import config_store, transforms
+from . import config_store, recognition, transforms
 from .csv_writer import CSV_HEADER
 
 # Versione dello schema del file parser: serve a gestire migrazioni future
@@ -45,6 +45,23 @@ SCHEMA_VERSION = 1
 # contratto CSV XTrader (fonte unica: csv_writer.CSV_HEADER), così il modello
 # non può andare in drift rispetto al contratto.
 VALID_TARGETS = tuple(CSV_HEADER)
+
+
+def _normalize_parser_mode(raw) -> str:
+    """Normalizza il campo `mode` letto da JSON (vedi `from_dict`):
+
+    - chiave assente / `null` → `""` = eredita il globale (file legacy pre-feature);
+    - `""` esplicito → `""` (eredità scelta dalla GUI);
+    - valore valido (`ID_ONLY`/`NAME_ONLY`/`BOTH`) → tenuto;
+    - valore MALFORMATO (typo, corrotto) → `NAME_ONLY` (fail-safe: non eredita un
+      globale potenzialmente sbagliato; non lascia passare un modo ignoto).
+    """
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if s == "" or s in recognition.VALID_MODES:
+        return s
+    return recognition.DEFAULT_MODE
 
 # Token booleani riconosciuti nei file JSON scritti/modificati a mano.
 _TRUE_TOKENS = {"true", "1", "yes", "si", "sì", "y", "on"}
@@ -116,6 +133,13 @@ class CustomParserDef:
     name: str
     description: str = ""
     version: int = SCHEMA_VERSION
+    # Modalità di riconoscimento del parser (per-parser): decide quali colonne servono
+    # per riconoscere il segnale (ID vs Nomi vs Both) e guida l'auto-obbligatorietà nel
+    # builder. Default `NAME_ONLY` per costruzione diretta/template (skeleton, example):
+    # un parser nuovo porta una modalità esplicita. Il sentinella `""` (= eredita la
+    # modalità globale `recognition_mode`) è prodotto SOLO da `from_dict` per i file
+    # salvati PRIMA di questa feature (campo `mode` assente), per retro-compatibilità.
+    mode: str = recognition.DEFAULT_MODE
     rules: "list[FieldRule]" = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -123,6 +147,7 @@ class CustomParserDef:
             "name": self.name,
             "description": self.description,
             "version": self.version,
+            "mode": self.mode,
             "rules": [r.to_dict() for r in self.rules],
         }
 
@@ -145,6 +170,11 @@ class CustomParserDef:
             name=str(data.get("name", "")),
             description=str(data.get("description", "")),
             version=version,
+            # Modalità: SOLO la chiave assente/null (file legacy pre-feature) → "" =
+            # eredita il globale. Un `mode` ESPLICITO valido è tenuto; `""` esplicito è
+            # l'eredità scelta dalla GUI; un valore malformato (typo, file corrotto) →
+            # NAME_ONLY (fail-safe, NON eredita un globale magari sbagliato: Codex).
+            mode=_normalize_parser_mode(data.get("mode", None)),
             rules=rules,
         )
 

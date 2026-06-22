@@ -282,3 +282,46 @@ def test_init_da_definizione_copia_le_regole():
     assert b.name == "Base"
     b.update_rule(0, fixed_value="ALTRO")     # modifica la copia
     assert base.rules[0].fixed_value != "ALTRO"  # l'originale non cambia
+
+
+# ── Modalità per-parser + auto-obbligatori + griglia 14 colonne (PR-4) ───────
+
+_RECOG = ("EventName", "MarketType", "SelectionName", "MarketId", "SelectionId")
+
+
+def test_set_mode_allinea_obbligatori_alla_modalita():
+    # set_mode ALLINEA i required dei campi di riconoscimento alla modalità: il set
+    # scelto diventa required, l'altro set viene sbloccato (no required "stantii", Codex).
+    b = pb.ParserBuilder()
+    for t in (*_RECOG, "Price"):
+        b.add_rule(target=t)
+    b.set_mode("ID_ONLY")
+    assert b.mode == "ID_ONLY"
+    assert {r.target for r in b.rules if r.required} == {"MarketId", "SelectionId"}
+    b.set_mode("NAME_ONLY")               # cambio: ID sbloccati, NAME obbligatori
+    assert {r.target for r in b.rules if r.required} == {"EventName", "MarketType", "SelectionName"}
+    # Price NON è un campo di riconoscimento: la modalità non lo tocca mai.
+    assert next(r for r in b.rules if r.target == "Price").required is False
+
+
+def test_set_mode_both_non_forza_alcun_set():
+    b = pb.ParserBuilder()
+    for t in _RECOG:
+        b.add_rule(target=t, required=True)
+    b.set_mode("BOTH")                      # basta un set → nessun campo di riconoscimento forzato
+    assert all(not r.required for r in b.rules if r.target in _RECOG)
+
+
+def test_ensure_all_columns_14_in_ordine_preserva_esistenti():
+    b = pb.ParserBuilder()
+    b.add_rule(target="Price", fixed_value="1.85")
+    b.ensure_all_columns()
+    assert [r.target for r in b.rules] == list(CSV_HEADER)        # 14, ordine contratto
+    assert next(r for r in b.rules if r.target == "Price").fixed_value == "1.85"  # preservata
+
+
+def test_to_def_include_mode():
+    b = pb.ParserBuilder()
+    b.add_rule(target="Provider", fixed_value="X")
+    b.set_mode("ID_ONLY")
+    assert b.to_def().mode == "ID_ONLY"

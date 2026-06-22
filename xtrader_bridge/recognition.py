@@ -18,6 +18,26 @@ DEFAULT_MODE = NAME_ONLY
 _ID_FIELDS = ("MarketId", "SelectionId")
 _NAME_FIELDS = ("EventName", "MarketType", "SelectionName")
 
+# Tutte le colonne legate al riconoscimento (per il builder: sono quelle la cui
+# obbligatorietà è guidata dalla Modalità, vs Price/BetType/Provider che no).
+RECOGNITION_FIELDS = _ID_FIELDS + _NAME_FIELDS
+
+
+def required_targets(mode: str) -> tuple:
+    """Colonne che la Modalità rende obbligatorie nel builder (auto-Obblig.):
+
+    - `ID_ONLY`   → `MarketId`+`SelectionId`;
+    - `NAME_ONLY` → `EventName`+`MarketType`+`SelectionName`;
+    - `BOTH`      → `()`: basta UN set completo, quindi il builder non forza un set
+      preciso (lo decide l'utente; il validatore accetta ID **oppure** nomi).
+    """
+    mode = normalize_mode(mode)
+    if mode == ID_ONLY:
+        return _ID_FIELDS
+    if mode == NAME_ONLY:
+        return _NAME_FIELDS
+    return ()
+
 
 def normalize_mode(mode: str) -> str:
     """Riporta una modalità sconosciuta al default sicuro (NAME_ONLY)."""
