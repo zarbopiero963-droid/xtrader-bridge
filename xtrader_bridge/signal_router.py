@@ -144,6 +144,19 @@ def active_custom_parser(cfg: dict, chat: str, parsers_dir: str = None):
     return parser_manager.load_active(cfg, chat, parsers_dir)
 
 
+def has_active_parser_config(cfg: dict) -> bool:
+    """True se è configurato almeno un Parser Personalizzato: l'attivo globale
+    (`active_parser`) oppure un override per-chat non vuoto (`parser_by_chat`).
+
+    Con il parser automatico P.Bet disattivato (CP-09b), senza alcun parser
+    configurato il bridge non processerebbe NESSUN segnale: `app._start` lo usa per
+    avvisare l'operatore (un listener "connesso" che ignora tutto in silenzio sarebbe
+    fuorviante, Codex P2)."""
+    if parser_manager.active_parser_name(cfg):
+        return True
+    return any(str(v or "").strip() for v in parser_manager.parser_by_chat(cfg).values())
+
+
 def should_process(cfg: dict, chat: str, text: str, parsers_dir: str = None) -> bool:
     """Decide se un messaggio live va instradato (PR-11). Logica pura e testabile,
     estratta dal listener Telegram. Con il parser automatico P.Bet disattivato

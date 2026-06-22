@@ -133,6 +133,19 @@ def test_custom_inesistente_ignora_il_messaggio(tmp_path):
     assert res.placeable is False
 
 
+def test_has_active_parser_config():
+    # Codex P2: rileva se è configurato almeno un parser (per l'avviso di avvio).
+    assert signal_router.has_active_parser_config({}) is False
+    assert signal_router.has_active_parser_config({"chat_id": "42"}) is False  # chat, ma 0 parser
+    assert signal_router.has_active_parser_config({"active_parser": "X"}) is True
+    assert signal_router.has_active_parser_config(
+        {"active_parser": "   "}) is False                                     # solo spazi → vuoto
+    assert signal_router.has_active_parser_config(
+        {"parser_by_chat": {"1": "X"}}) is True
+    assert signal_router.has_active_parser_config(
+        {"parser_by_chat": {"1": ""}}) is False                                # override vuoto
+
+
 def test_parser_configurato_ma_mancante_non_sparisce_in_silenzio(tmp_path):
     # Codex P2: una chat APPROVATA con un parser CONFIGURATO il cui file è mancante
     # non deve far sparire i segnali senza traccia. should_process resta True (così
