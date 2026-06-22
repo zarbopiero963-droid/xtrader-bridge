@@ -212,9 +212,12 @@ def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str =
     defn = active_custom_parser(cfg, chat, parsers_dir)
     if defn is not None:
         # Parser Personalizzato attivo: autoritativo (nessun fallback hardcoded). La
-        # Modalità di riconoscimento è quella DEL PARSER (per-parser), non più la chiave
-        # globale `recognition_mode`: ogni parser porta la sua, coerente col builder.
-        mode = recognition.normalize_mode(defn.mode)
+        # Modalità di riconoscimento è quella DEL PARSER (per-parser). Se il parser non
+        # ne ha una (file salvato prima della feature: `mode` assente → ""), si EREDITA
+        # la modalità globale `recognition_mode`, così i parser legacy non cambiano
+        # comportamento dopo l'upgrade (Codex P1).
+        mode = recognition.normalize_mode(
+            defn.mode or cfg.get("recognition_mode", recognition.DEFAULT_MODE))
         res = custom_pipeline.build_validated_row(
             defn, text, provider=provider, mode=mode, require_price=require_price)
         if not res.placeable:

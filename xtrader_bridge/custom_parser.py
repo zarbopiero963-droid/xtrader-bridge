@@ -118,8 +118,10 @@ class CustomParserDef:
     version: int = SCHEMA_VERSION
     # Modalità di riconoscimento del parser (CP: per-parser, non più solo globale):
     # decide quali colonne servono per riconoscere il segnale (ID vs Nomi vs Both) e
-    # guida l'auto-obbligatorietà nel builder. Default sicuro NAME_ONLY.
-    mode: str = recognition.DEFAULT_MODE
+    # guida l'auto-obbligatorietà nel builder. `""` = NON impostata → eredita la
+    # modalità globale `recognition_mode` (retro-compat coi file salvati prima di
+    # questa feature). I parser creati/salvati dalla GUI hanno sempre un valore esplicito.
+    mode: str = ""
     rules: "list[FieldRule]" = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -150,9 +152,10 @@ class CustomParserDef:
             name=str(data.get("name", "")),
             description=str(data.get("description", "")),
             version=version,
-            # Modalità ignota/assente → default sicuro (NAME_ONLY): un file vecchio
-            # (senza `mode`) o manomesso non rompe il caricamento.
-            mode=recognition.normalize_mode(data.get("mode", recognition.DEFAULT_MODE)),
+            # `mode` valido → tenuto; assente o non valido → "" = eredita il globale
+            # (un file pre-feature non deve essere forzato a NAME_ONLY: Codex P1).
+            mode=(lambda m: m if m in recognition.VALID_MODES else "")(
+                str(data.get("mode", "") or "").strip()),
             rules=rules,
         )
 

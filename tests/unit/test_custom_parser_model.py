@@ -275,17 +275,19 @@ def test_list_parser_files_ignora_tmp_atomici(tmp_path):
 
 # ── Modalità per-parser (PR-4) ───────────────────────────────────────────────
 
-def test_mode_default_e_roundtrip():
+def test_mode_default_vuoto_e_roundtrip_esplicito():
+    # Default "" = non impostata (eredita il globale a runtime). Un valore esplicito
+    # valido fa roundtrip su dict.
     d = cp.CustomParserDef(name="P", rules=[cp.FieldRule(target="Provider", fixed_value="X")])
-    assert d.mode == "NAME_ONLY"                              # default sicuro
+    assert d.mode == ""                                       # non impostata → eredita
     d.mode = "ID_ONLY"
     again = cp.CustomParserDef.from_dict(d.to_dict())
-    assert again.mode == "ID_ONLY"                            # roundtrip dict
+    assert again.mode == "ID_ONLY"
     assert d.to_dict()["mode"] == "ID_ONLY"
 
 
-def test_mode_assente_o_invalido_default_name_only():
-    # File vecchio senza 'mode', o valore non valido → NAME_ONLY (non rompe il load).
-    assert cp.CustomParserDef.from_dict({"name": "P", "rules": []}).mode == "NAME_ONLY"
-    assert cp.CustomParserDef.from_dict(
-        {"name": "P", "mode": "boh", "rules": []}).mode == "NAME_ONLY"
+def test_mode_assente_o_invalido_eredita_vuoto():
+    # File vecchio senza 'mode', o valore non valido → "" (eredita il globale, non
+    # forza NAME_ONLY: i parser legacy non cambiano comportamento dopo l'upgrade).
+    assert cp.CustomParserDef.from_dict({"name": "P", "rules": []}).mode == ""
+    assert cp.CustomParserDef.from_dict({"name": "P", "mode": "boh", "rules": []}).mode == ""

@@ -151,6 +151,11 @@ class CustomParserWindow(ctk.CTkToplevel):
         self._rows = []
         # Griglia fissa: garantisce una riga per ognuna delle 14 colonne, in ordine.
         self.builder.ensure_all_columns()
+        # Applica l'auto-obbligatorietà della modalità corrente GIÀ all'apertura/Nuovo
+        # (non solo al cambio menu), così le checkbox "Obblig." sono coerenti col menu
+        # fin da subito e non si salva un parser incoerente (Codex P2). `set_mode`
+        # normalizza anche "" (legacy) → default GUI.
+        self.builder.set_mode(self.builder.mode or recognition.DEFAULT_MODE)
         self._mode_var.set(recognition.normalize_mode(self.builder.mode))
         for rule in self.builder.rules:
             self._add_row(rule)
