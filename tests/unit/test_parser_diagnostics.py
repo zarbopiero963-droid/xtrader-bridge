@@ -139,11 +139,26 @@ def test_mode_required_missing_crea_campo_sintetico():
 # ── gate di contenuto ─────────────────────────────────────────────────────────
 
 def test_no_content_match_solo_valori_fissi():
-    # Tutti i campi fissi: la riga sarebbe "pronta" ma non estrae nulla dal messaggio.
+    # Tutti i campi fissi: la riga validerebbe, ma non estrae nulla dal messaggio →
+    # il runtime la scarterebbe (NO_CONTENT_MATCH), quindi NON è "pronta" (Codex).
     diag = pd.diagnose(_full_name_rules(), "messaggio non pertinente",
                        mode=recognition.NAME_ONLY, provider="TG",
                        value_maps_registry=_BUILTIN)
     assert diag.message_error == pd.NO_CONTENT_MATCH
+    assert diag.placeable is False
+    assert diag.status == pd.NO_CONTENT_MATCH
+
+
+def test_minprice_invalido_attribuito_alla_colonna_giusta():
+    # Price valido ma MinPrice invalido: l'errore va su MinPrice, non su Price (Codex).
+    defn = _full_name_rules(
+        Price=FieldRule(target="Price", start_after="Quota", required=True),
+        MinPrice=FieldRule(target="MinPrice", start_after="Min", required=False))
+    diag = pd.diagnose(defn, "Quota 1.85\nMin 0.5", mode=recognition.NAME_ONLY,
+                       provider="TG", value_maps_registry=_BUILTIN)
+    assert _f(diag, "MinPrice").error == pd.INVALID_PRICE
+    assert _f(diag, "Price").error == pd.OK
+    assert diag.placeable is False
 
 
 # ── report testuale ───────────────────────────────────────────────────────────

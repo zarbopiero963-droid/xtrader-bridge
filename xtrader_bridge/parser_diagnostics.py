@@ -143,7 +143,13 @@ def _overlay_validator(result, by_target, fields) -> None:
     elif status == validator.INVALID_BETTYPE:
         _mark(by_target, fields, "BetType", INVALID_BETTYPE)
     elif status == validator.INVALID_PRICE:
-        _mark(by_target, fields, "Price", INVALID_PRICE)
+        # `validator` ritorna INVALID_PRICE anche per `MinPrice`/`MaxPrice`: attribuisci
+        # l'errore alla colonna che fallisce DAVVERO, non sempre a `Price` (Codex).
+        row = result.row
+        for col in ("Price", "MinPrice", "MaxPrice"):
+            v = str(row.get(col, "")).strip()
+            if v and validator.price_status(v) != validator.VALID:
+                _mark(by_target, fields, col, INVALID_PRICE)
     elif status == validator.INVALID_MISSING_PRICE:
         _mark(by_target, fields, "Price", REQUIRED_EMPTY, required=True)
     elif status == custom_pipeline.INVALID_MISSING_PROVIDER:
@@ -175,8 +181,15 @@ def diagnose(defn: CustomParserDef, text: str, *, value_maps_registry: dict = No
         mode=mode, require_price=require_price)
     _overlay_validator(result, by_target, fields)
 
+    # Il runtime (`signal_router.resolve_row`) scrive SOLO se la riga è piazzabile
+    # **e** qualcosa è stato estratto dal messaggio (gate di contenuto
+    # `matches_message`, altrimenti `NO_CONTENT_MATCH`). Riflettiamolo nel verdetto,
+    # così un parser a soli valori fissi che "validerebbe" non risulta PRONTO quando
+    # il bridge in realtà lo scarterebbe (Codex).
     message_error = "" if matches_message(defn, text) else NO_CONTENT_MATCH
-    return Diagnosis(placeable=result.placeable, status=result.status,
+    placeable = result.placeable and not message_error
+    status = message_error if (message_error and result.placeable) else result.status
+    return Diagnosis(placeable=placeable, status=status,
                      fields=fields, message_error=message_error)
 
 
