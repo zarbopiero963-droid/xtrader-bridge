@@ -53,11 +53,14 @@ class CustomParserWindow(ctk.CTkToplevel):
         try:
             cfg = config_store.load_config(config_store.CONFIG_FILE)
             cfg = provider_store.add_provider(cfg, name)
-            _saved, ok = config_store.save_config(cfg, config_store.CONFIG_FILE)
+            saved, ok = config_store.save_config(cfg, config_store.CONFIG_FILE)
         except Exception as exc:                 # noqa: BLE001
             self._result.configure(text=f"❌ Errore salvataggio provider: {exc}")
             return
-        self._providers = provider_store.provider_names(cfg)
+        # Sincronizza la config in memoria della GUI principale (no perdita provider).
+        if ok and callable(self._on_saved):
+            self._on_saved(saved)
+        self._providers = provider_store.provider_names(saved if ok else cfg)
         self._sync_to_builder()                  # non perdere le modifiche correnti
         self._reload_rows_from_builder()         # ridisegna con la tendina aggiornata
         self._result.configure(
@@ -65,13 +68,17 @@ class CustomParserWindow(ctk.CTkToplevel):
             else f"⚠️ Provider «{name}» aggiunto solo in memoria (salvataggio fallito).")
 
     def __init__(self, master=None, builder: ParserBuilder = None, provider: str = "",
-                 global_mode: str = ""):
+                 global_mode: str = "", on_saved=None):
         super().__init__(master)
         self.title("Parser Personalizzato")
         self.geometry("1024x720")
         is_new = builder is None
         self.builder = builder or ParserBuilder()
         self._provider = provider
+        # Callback opzionale: dopo aver salvato l'anagrafica Provider su config.json,
+        # sincronizza la config in memoria della GUI principale (vedi `app`), così un
+        # successivo Salva/Avvia non riscrive il file perdendo i provider (Codex).
+        self._on_saved = on_saved
         # Modalità globale (config `recognition_mode`): usata SOLO per l'anteprima di un
         # parser legacy a eredità ("" ): così "Prova messaggio" combacia col runtime (Codex).
         self._global_mode = global_mode
