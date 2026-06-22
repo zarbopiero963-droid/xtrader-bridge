@@ -201,6 +201,24 @@ def test_matches_message_estrazione_dipende_dal_testo():
     assert eng.matches_message(defn, "nessun delimitatore") is False     # assente → no match
 
 
+def test_matches_message_estrazione_opzionale_non_basta():
+    # A10: campi scommessa FISSI + una regola di estrazione OPZIONALE "larga" non deve
+    # far risultare segnale un messaggio non pertinente che combacia con quella regola.
+    # Conta solo un'estrazione OBBLIGATORIA (il contenuto vero del segnale).
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
+        cp.FieldRule(target="Price", fixed_value="2.0", required=True),
+        cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+        # nota opzionale che estrae da "qualsiasi" riga con uno spazio iniziale
+        cp.FieldRule(target="MarketName", start_after="x", end_before="\n", required=False),
+    ])
+    # Un messaggio non-segnale che però attiva la regola opzionale → NON è un match.
+    assert eng.matches_message(defn, "xyz roba a caso\n") is False
+    # Aggiungendo un'estrazione OBBLIGATORIA, il match dipende dal contenuto reale.
+    defn.rules[3] = cp.FieldRule(target="MarketName", start_after="x", end_before="\n", required=True)
+    assert eng.matches_message(defn, "xyz roba a caso\n") is True
+
+
 def test_apply_parser_target_duplicato_ultimo_vince_senza_doppioni():
     # Difesa: due regole stesso target (vietate da validate, ma il motore non
     # deve produrre stati incoerenti). L'ultima vince; missing_required dedup.
