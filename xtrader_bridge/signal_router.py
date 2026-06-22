@@ -4,10 +4,11 @@ Decide la riga CSV da scrivere per un messaggio Telegram:
 
 - se per la chat è attivo un **Parser Personalizzato** (CP-07), è lui a parsare:
   se produce una riga piazzabile la si scrive, altrimenti il segnale è scartato.
-  Un custom attivo è **autoritativo**: NON si ripiega sull'hardcoded (che
-  potrebbe interpretare diversamente un messaggio che il custom ha rifiutato);
-- se nessun custom è attivo, si usa il **parser hardcoded** (comportamento
-  storico): `parse_message` → `build_csv_row` → `validator`.
+  Un custom attivo è **autoritativo**;
+- se nessun custom è attivo, il messaggio è **ignorato**: il parser automatico
+  P.Bet (`parse_message`) è DISATTIVATO nel percorso live (CP-09b). Per processare
+  una chat serve un Parser Personalizzato attivo (globale o per-chat). Il codice di
+  `parse_message`/`build_csv_row` resta nel repo ma non è più nel flusso live.
 
 Funzione pura (nessuna GUI/scrittura): ritorna la riga e lo stato; è `app` a
 scrivere il CSV. Così l'instradamento è interamente testabile.
@@ -23,11 +24,13 @@ from . import (
     source_manager,
     validator,
 )
-from .csv_writer import build_csv_row
-from .parser import parse_message
 
 CUSTOM = "custom"
 HARDCODED = "hardcoded"
+
+# Nessun Parser Personalizzato attivo: il parser automatico P.Bet è disattivato
+# (CP-09b), quindi il messaggio è ignorato (nessuna riga scritta).
+NO_PARSER = "no_parser"
 
 # Gate di contenuto: il custom è piazzabile ma non ha estratto nulla dal messaggio
 # (parser a soli valori fissi su testo arbitrario) → scartato, niente scrittura.
@@ -141,26 +144,20 @@ def active_custom_parser(cfg: dict, chat: str, parsers_dir: str = None):
     return parser_manager.load_active(cfg, chat, parsers_dir)
 
 
-# Marker del formato P.Bet. storico: il prefiltro legacy vale SOLO per il parser
-# hardcoded (i formati custom non hanno questi marker).
-_LEGACY_MARKERS = ("P.Bet.", "📊")
-
-
 def should_process(cfg: dict, chat: str, text: str, parsers_dir: str = None) -> bool:
     """Decide se un messaggio live va instradato (PR-11). Logica pura e testabile,
-    estratta dal listener Telegram:
+    estratta dal listener Telegram. Con il parser automatico P.Bet disattivato
+    (CP-09b) una chat viene processata SOLO se:
 
-    - chat non ammessa (`is_chat_allowed`) → mai (non si indebolisce il filtro chat);
-    - chat ammessa con un Parser Personalizzato attivo → sempre (i formati custom
-      non hanno i marker `P.Bet.`/📊, quindi il prefiltro legacy non si applica);
-    - chat ammessa senza custom (percorso hardcoded) → solo se il testo contiene un
-      marker legacy, per non passare al parser storico messaggi non pertinenti."""
+    - è ammessa (`is_chat_allowed`) → altrimenti mai (non si indebolisce il filtro chat);
+    - **e** ha un Parser Personalizzato attivo (globale o per-chat).
+
+    Una chat ammessa ma senza parser custom NON viene più processata: prima la
+    gestiva il parser hardcoded col prefiltro marker `P.Bet.`/📊, ora rimosso dal
+    percorso live. (`text` non è più usato: la decisione non dipende dal contenuto.)"""
     if not is_chat_allowed(cfg, chat):
         return False
-    if active_custom_parser(cfg, chat, parsers_dir) is not None:
-        return True
-    text = text or ""
-    return any(marker in text for marker in _LEGACY_MARKERS)
+    return active_custom_parser(cfg, chat, parsers_dir) is not None
 
 
 @dataclass
@@ -216,10 +213,8 @@ def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str =
             row["Provider"] = provider
         return RouteResult(row, validator.VALID, CUSTOM)
 
-    # Fallback: parser hardcoded storico.
-    parsed = parse_message(text)
-    row = build_csv_row(parsed, provider)
-    status, detail = validator.validate(row, mode, require_price=require_price)
-    if status == validator.VALID:
-        return RouteResult(row, status, HARDCODED)
-    return RouteResult(None, status, HARDCODED, detail)
+    # Nessun Parser Personalizzato attivo: il parser automatico P.Bet è DISATTIVATO
+    # (CP-09b). Il messaggio è ignorato (riga non piazzabile, nessuna scrittura)
+    # invece di affidarsi a un'interpretazione automatica non voluta. Per processare
+    # una chat serve un Parser Personalizzato attivo (globale o per-chat).
+    return RouteResult(None, NO_PARSER, NO_PARSER, "no_active_parser")
