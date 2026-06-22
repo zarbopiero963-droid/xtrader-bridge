@@ -219,6 +219,18 @@ def test_matches_message_estrazione_opzionale_non_basta():
     assert eng.matches_message(defn, "xyz roba a caso\n") is True
 
 
+def test_matches_message_campo_riconoscimento_estratto_anche_se_opzionale():
+    # Codex: in modalità BOTH la GUI lascia i campi nome/ID NON obbligatori (basta un
+    # set). Un campo di RICONOSCIMENTO estratto deve contare come contenuto anche se non
+    # `required`, altrimenti un parser BOTH legittimo verrebbe scartato (NO_CONTENT_MATCH).
+    defn = cp.CustomParserDef(name="Both", mode="BOTH", rules=[
+        cp.FieldRule(target="EventName", start_after="🆚", end_before="\n", required=False),
+        cp.FieldRule(target="Price", fixed_value="2.0"),
+    ])
+    assert eng.matches_message(defn, "🆚Inter v Milan\n") is True       # recognition estratto
+    assert eng.matches_message(defn, "nessuna squadra") is False        # niente contenuto
+
+
 def test_apply_parser_target_duplicato_ultimo_vince_senza_doppioni():
     # Difesa: due regole stesso target (vietate da validate, ma il motore non
     # deve produrre stati incoerenti). L'ultima vince; missing_required dedup.

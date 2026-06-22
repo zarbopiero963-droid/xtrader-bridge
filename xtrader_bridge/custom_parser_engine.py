@@ -39,7 +39,7 @@ Semantica di una regola (`FieldRule`):
 import re
 from dataclasses import dataclass, field
 
-from . import transforms, value_maps
+from . import recognition, transforms, value_maps
 from .csv_writer import CSV_HEADER
 from .custom_parser import CustomParserDef, FieldRule
 
@@ -130,22 +130,25 @@ def extract_value_traced(text: str, rule: FieldRule):
 
 
 def matches_message(defn: CustomParserDef, text: str) -> bool:
-    """True se almeno una regola di estrazione **OBBLIGATORIA** (`required`, con
-    `start_after`/`end_before`, non `fixed_value`) ha trovato un valore non vuoto in `text`.
+    """True se il messaggio ha attivato un'estrazione che rappresenta **contenuto di
+    segnale**: una regola con `start_after`/`end_before` (non `fixed_value`) che ha
+    trovato un valore non vuoto **e** è o **obbligatoria** (`required`) o su un **campo
+    di riconoscimento** (`recognition.RECOGNITION_FIELDS`: EventName/MarketType/
+    SelectionName/MarketId/SelectionId).
 
     Gate di "contenuto" per il live (CP-09): un parser i cui obbligatori sono
-    tutti `fixed_value` produrrebbe una riga piazzabile per QUALSIASI messaggio
-    (anche vuoto o non pertinente). Siccome il live bypassa il prefiltro marker
-    per i parser custom attivi, senza questo gate si scriverebbe lo stesso bet
-    fisso su ogni messaggio della chat (rischio doppia/spuria scommessa).
+    tutti `fixed_value` produrrebbe una riga piazzabile per QUALSIASI messaggio. Siccome
+    il live bypassa il prefiltro marker per i parser custom attivi, senza questo gate si
+    scriverebbe lo stesso bet fisso su ogni messaggio (rischio doppia/spuria scommessa).
 
-    Si richiede un'estrazione **obbligatoria**, non una qualsiasi: un parser coi campi
-    scommessa FISSI più una regola di estrazione **opzionale** "larga" (es. una nota)
-    non deve risultare un segnale solo perché quella regola opzionale combacia con un
-    messaggio non pertinente (A10). Conta solo che il CONTENUTO del segnale (un campo
-    obbligatorio estratto) sia davvero presente. NON tocca la pipeline/validator."""
+    Non basta UN'estrazione qualsiasi: un'estrazione **opzionale** su un campo NON di
+    riconoscimento (es. una nota "larga") non deve far passare un messaggio non-segnale
+    (A10). Ma i campi di riconoscimento ESTRATTI contano anche se non `required`: in
+    modalità `BOTH` la GUI lascia opzionali i campi nome/ID (basta un set), e un parser
+    BOTH che estrae il set nomi è un segnale legittimo (Codex). NON tocca pipeline/validator."""
     for rule in defn.rules:
-        if (rule.required and rule.has_extraction() and not rule.is_fixed()
+        signal_field = rule.required or rule.target in recognition.RECOGNITION_FIELDS
+        if (signal_field and rule.has_extraction() and not rule.is_fixed()
                 and extract_value(text, rule) != ""):
             return True
     return False
