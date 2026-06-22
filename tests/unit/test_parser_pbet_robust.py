@@ -273,3 +273,37 @@ def test_tutte_le_chiavi_presenti():
     for k in ("signal_type", "competition", "teams", "score", "time_",
               "quota", "probability", "bet_type", "live"):
         assert k in p
+
+
+# ── A3: quota con HT/FT senza Prematch (regola universale del valore .5) ──
+
+def test_quota_ft_senza_prematch_recuperata():
+    # A3: "Quota 1,90 FT" senza "Prematch:" → 1.90 è la QUOTA (non è un valore .5),
+    # prima veniva persa. Vale anche con HT e altri decimali non-.5.
+    assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nQuota 1,90 FT")["quota"] == "1.90"
+    assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nQuota 2,05 HT")["quota"] == "2.05"
+    assert parse_message("📈Quota 1,90 FT")["quota"] == "1.90"
+
+
+def test_quota_linea_mezzo_punto_resta_linea():
+    # A3: un valore .5 con HT/FT e senza Prematch resta una LINEA over/under → nessuna
+    # quota (comportamento storico preservato: niente prezzo errato a XTrader).
+    assert parse_message("P.Bet. OVER 1.5\nInter v Milan\nQuota 1,5 HT")["quota"] == ""
+    assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nQuota 2,5 FT")["quota"] == ""
+
+
+def test_quota_ft_prematch_malformato_fail_closed():
+    # Codex P1: se un marker "Prematch:" è presente ma il suo valore è malformato, la
+    # quota era lì ed è invalida → fail-closed (""). Il fallback A3 NON deve promuovere
+    # il numero pre-Prematch (la LINEA) a prezzo. Vale per linea .5 e non-.5.
+    assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nQuota 1,90 FT Prematch:1,85,3")["quota"] == ""
+    assert parse_message("📈Quota 2,5 FT Prematch:1,85,3")["quota"] == ""
+
+
+def test_quota_prematch_su_riga_successiva():
+    # Codex P1 (multi-line): il "Prematch:" reale è sulla riga DOPO. Il recupero A3 è
+    # whole-message: vede il Prematch e usa 1,85 (la quota vera), NON promuove 1,90 (la
+    # linea) della prima riga. Senza Prematch da nessuna parte, invece, 1,90 è la quota.
+    assert parse_message("Quota 1,90 FT\nPrematch:1,85")["quota"] == "1.85"
+    assert parse_message("Quota 1,90 FT\nPrematch:1,85,3")["quota"] == ""   # malformato → fail-closed
+    assert parse_message("Quota 1,90 FT")["quota"] == "1.90"                # nessun Prematch → A3
