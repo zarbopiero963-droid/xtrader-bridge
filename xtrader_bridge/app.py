@@ -1399,7 +1399,16 @@ class App(ctk.CTk):
         # Modalità globale: serve solo all'anteprima di un parser legacy a eredità (""),
         # così "Prova messaggio" usa la stessa modalità del runtime.
         global_mode = str(cfg.get("recognition_mode", "")).strip()
-        win = CustomParserWindow(self, provider=provider, global_mode=global_mode)
+
+        def _on_saved(new_cfg):
+            # L'anagrafica Provider salva su config.json: sincronizza la config in
+            # memoria, altrimenti un successivo "Salva Config"/"Avvia" la riscriverebbe
+            # dalla copia stantia perdendo i provider aggiunti (Codex). Stesso pattern
+            # della finestra Sorgenti.
+            self._config = new_cfg
+
+        win = CustomParserWindow(self, provider=provider, global_mode=global_mode,
+                                 on_saved=_on_saved)
         win.focus()
 
     def _open_source_chats(self):
