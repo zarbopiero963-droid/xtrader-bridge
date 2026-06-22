@@ -201,7 +201,6 @@ def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str =
     `chat_id` è la chat di ORIGINE del messaggio (dal live): se passato ha la
     precedenza sul `chat_id` di config, così l'override `parser_by_chat` funziona
     anche in setup multi-chat dove il singolo `chat_id` non è impostato."""
-    mode = recognition.normalize_mode(cfg.get("recognition_mode", "NAME_ONLY"))
     require_price = validator.require_price_enabled(cfg)
     chat = str((chat_id if chat_id is not None else cfg.get("chat_id", "")) or "")
     # Provider PER-CHAT (PR-24): per una sorgente multi-chat attiva usa il suo provider
@@ -212,7 +211,10 @@ def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str =
 
     defn = active_custom_parser(cfg, chat, parsers_dir)
     if defn is not None:
-        # Parser Personalizzato attivo: autoritativo (nessun fallback hardcoded).
+        # Parser Personalizzato attivo: autoritativo (nessun fallback hardcoded). La
+        # Modalità di riconoscimento è quella DEL PARSER (per-parser), non più la chiave
+        # globale `recognition_mode`: ogni parser porta la sua, coerente col builder.
+        mode = recognition.normalize_mode(defn.mode)
         res = custom_pipeline.build_validated_row(
             defn, text, provider=provider, mode=mode, require_price=require_price)
         if not res.placeable:

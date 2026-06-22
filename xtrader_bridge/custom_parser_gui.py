@@ -32,7 +32,6 @@ class CustomParserWindow(ctk.CTkToplevel):
         self._rows = []  # widget refs per regola
         self._saved_map = {}  # etichetta menu → path file parser
 
-        self._targets = self.builder.target_options()
         self._transforms = self.builder.transform_options()
         self._value_maps = self.builder.value_map_options(include_dizionario=True)
         self._modes = self.builder.mode_options()
@@ -49,12 +48,11 @@ class CustomParserWindow(ctk.CTkToplevel):
         self._name_var = ctk.StringVar(value=self.builder.name)
         ctk.CTkEntry(top, textvariable=self._name_var, width=240).pack(side="left", padx=6)
         ctk.CTkLabel(top, text="Modalità:").pack(side="left", padx=6)
-        # Default = modalità di default del riconoscimento (NAME_ONLY), non il
-        # primo elemento di VALID_MODES (che è ID_ONLY).
-        default_mode = recognition.DEFAULT_MODE if recognition.DEFAULT_MODE in self._modes \
-            else (self._modes[0] if self._modes else recognition.DEFAULT_MODE)
-        self._mode_var = ctk.StringVar(value=default_mode)
-        ctk.CTkOptionMenu(top, variable=self._mode_var, values=self._modes, width=140).pack(side="left", padx=6)
+        # Modalità DEL PARSER (per-parser): scegliendola, i campi di riconoscimento
+        # diventano obbligatori da soli (set_mode → auto-Obblig.), niente spunte a mano.
+        self._mode_var = ctk.StringVar(value=recognition.normalize_mode(self.builder.mode))
+        ctk.CTkOptionMenu(top, variable=self._mode_var, values=self._modes, width=140,
+                          command=self._on_mode_change).pack(side="left", padx=6)
 
         # gestione parser salvati: lista + nuovo / carica / duplica / elimina
         manage = ctk.CTkFrame(self)
@@ -102,7 +100,6 @@ class CustomParserWindow(ctk.CTkToplevel):
 
         actions = ctk.CTkFrame(self, fg_color="transparent")
         actions.pack(fill="x", padx=10, pady=4)
-        ctk.CTkButton(actions, text="➕ Aggiungi regola", command=self._add_row).pack(side="left", padx=4)
         ctk.CTkButton(actions, text="💾 Salva", command=self._save).pack(side="left", padx=4)
         ctk.CTkButton(actions, text="🧪 Prova messaggio", command=self._test).pack(side="left", padx=4)
         ctk.CTkButton(actions, text="📋 Copia diagnostica", command=self._copy_diag).pack(side="left", padx=4)
@@ -122,51 +119,57 @@ class CustomParserWindow(ctk.CTkToplevel):
         self._last_report = ""   # testo per "Copia diagnostica"
 
     # ── righe regola ──────────────────────────────────────────────────────
-    def _add_row(self, rule=None):
+    def _add_row(self, rule):
+        """Una riga = UNA colonna del contratto (griglia fissa a 14, PR-4): la colonna
+        è una Label fissa (non più una tendina), così l'ordine resta quello del contratto
+        e non si possono creare doppioni o dimenticare colonne."""
         row = ctk.CTkFrame(self._rows_frame)
         row.pack(fill="x", pady=2)
-        refs = {}
-        refs["target"] = ctk.StringVar(value=rule.target if rule else self._targets[0])
-        ctk.CTkOptionMenu(row, variable=refs["target"], values=self._targets, width=150).pack(side="left", padx=2)
+        refs = {"target": rule.target}     # colonna FISSA: stringa, non un widget
+        ctk.CTkLabel(row, text=rule.target, width=150, anchor="w").pack(side="left", padx=2)
         refs["start_after"] = ctk.CTkEntry(row, width=150)
         refs["end_before"] = ctk.CTkEntry(row, width=150)
         refs["fixed_value"] = ctk.CTkEntry(row, width=130)
-        if rule:
-            refs["start_after"].insert(0, rule.start_after)
-            refs["end_before"].insert(0, rule.end_before)
-            refs["fixed_value"].insert(0, rule.fixed_value)
+        refs["start_after"].insert(0, rule.start_after)
+        refs["end_before"].insert(0, rule.end_before)
+        refs["fixed_value"].insert(0, rule.fixed_value)
         refs["start_after"].pack(side="left", padx=2)
         refs["end_before"].pack(side="left", padx=2)
         refs["fixed_value"].pack(side="left", padx=2)
-        refs["transform"] = ctk.StringVar(value=rule.transform if rule else "")
+        refs["transform"] = ctk.StringVar(value=rule.transform)
         ctk.CTkOptionMenu(row, variable=refs["transform"], values=self._transforms, width=150).pack(side="left", padx=2)
-        refs["value_map"] = ctk.StringVar(value=rule.value_map if rule else "")
+        refs["value_map"] = ctk.StringVar(value=rule.value_map)
         ctk.CTkOptionMenu(row, variable=refs["value_map"], values=self._value_maps, width=150).pack(side="left", padx=2)
-        refs["required"] = ctk.BooleanVar(value=bool(rule.required) if rule else False)
+        refs["required"] = ctk.BooleanVar(value=bool(rule.required))
         ctk.CTkCheckBox(row, text="", variable=refs["required"], width=40).pack(side="left", padx=2)
-        ctk.CTkButton(row, text="✕", width=60, fg_color="#7f0000",
-                      command=lambda: self._remove_row(row)).pack(side="left", padx=2)
         refs["frame"] = row
         self._rows.append(refs)
-
-    def _remove_row(self, row):
-        self._rows = [r for r in self._rows if r["frame"] is not row]
-        row.destroy()
 
     def _reload_rows_from_builder(self):
         for r in list(self._rows):
             r["frame"].destroy()
         self._rows = []
+        # Griglia fissa: garantisce una riga per ognuna delle 14 colonne, in ordine.
+        self.builder.ensure_all_columns()
+        self._mode_var.set(recognition.normalize_mode(self.builder.mode))
         for rule in self.builder.rules:
             self._add_row(rule)
 
+    def _on_mode_change(self, _value=None):
+        """Modalità cambiata → set_mode applica l'auto-obbligatorietà ai campi del set,
+        poi si ricaricano le righe così le checkbox 'Obblig.' si aggiornano da sole."""
+        self._sync_to_builder()
+        self.builder.set_mode(self._mode_var.get())
+        self._reload_rows_from_builder()
+
     def _sync_to_builder(self):
-        """Riporta i valori dei widget nel controller."""
+        """Riporta i valori dei widget nel controller (colonne fisse + Modalità)."""
         self.builder.name = self._name_var.get().strip()
+        self.builder.mode = recognition.normalize_mode(self._mode_var.get())
         self.builder.rules = []
         for refs in self._rows:
             self.builder.add_rule(
-                target=refs["target"].get(),
+                target=refs["target"],          # stringa fissa (Label)
                 start_after=refs["start_after"].get(),
                 end_before=refs["end_before"].get(),
                 fixed_value=refs["fixed_value"].get(),

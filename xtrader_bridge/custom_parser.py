@@ -34,7 +34,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 
-from . import config_store, transforms
+from . import config_store, recognition, transforms
 from .csv_writer import CSV_HEADER
 
 # Versione dello schema del file parser: serve a gestire migrazioni future
@@ -116,6 +116,10 @@ class CustomParserDef:
     name: str
     description: str = ""
     version: int = SCHEMA_VERSION
+    # Modalità di riconoscimento del parser (CP: per-parser, non più solo globale):
+    # decide quali colonne servono per riconoscere il segnale (ID vs Nomi vs Both) e
+    # guida l'auto-obbligatorietà nel builder. Default sicuro NAME_ONLY.
+    mode: str = recognition.DEFAULT_MODE
     rules: "list[FieldRule]" = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -123,6 +127,7 @@ class CustomParserDef:
             "name": self.name,
             "description": self.description,
             "version": self.version,
+            "mode": self.mode,
             "rules": [r.to_dict() for r in self.rules],
         }
 
@@ -145,6 +150,9 @@ class CustomParserDef:
             name=str(data.get("name", "")),
             description=str(data.get("description", "")),
             version=version,
+            # Modalità ignota/assente → default sicuro (NAME_ONLY): un file vecchio
+            # (senza `mode`) o manomesso non rompe il caricamento.
+            mode=recognition.normalize_mode(data.get("mode", recognition.DEFAULT_MODE)),
             rules=rules,
         )
 

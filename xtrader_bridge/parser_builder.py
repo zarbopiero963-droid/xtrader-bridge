@@ -25,10 +25,12 @@ class ParserBuilder:
         if defn is None:
             self.name = ""
             self.description = ""
+            self.mode = recognition.DEFAULT_MODE
             self.rules = []
         else:
             self.name = defn.name
             self.description = defn.description
+            self.mode = recognition.normalize_mode(getattr(defn, "mode", recognition.DEFAULT_MODE))
             self.rules = [FieldRule.from_dict(r.to_dict()) for r in defn.rules]  # copia
 
     # ── opzioni per i menu a tendina della GUI ─────────────────────────────
@@ -130,7 +132,35 @@ class ParserBuilder:
     # ── modello / validazione ──────────────────────────────────────────────
     def to_def(self) -> CustomParserDef:
         return CustomParserDef(name=self.name, description=self.description,
-                               rules=list(self.rules))
+                               mode=self.mode, rules=list(self.rules))
+
+    # ── Modalità di riconoscimento (per-parser) ────────────────────────────
+    def set_mode(self, mode: str) -> None:
+        """Imposta la Modalità del parser e **guida l'obbligatorietà** delle colonne di
+        riconoscimento (auto-Obblig.): i campi del set della modalità diventano
+        `required=True`, gli altri campi di riconoscimento `required=False`. Così
+        selezionando la modalità non serve spuntare a mano "Obblig." (Codex/utente).
+        Price/BetType/Provider NON sono toccati (non dipendono dalla modalità).
+        `BOTH` non forza alcun set (basta ID **oppure** nomi): l'utente decide."""
+        self.mode = recognition.normalize_mode(mode)
+        required = set(recognition.required_targets(self.mode))
+        for rule in self.rules:
+            if rule.target in recognition.RECOGNITION_FIELDS:
+                rule.required = rule.target in required
+
+    def ensure_all_columns(self) -> None:
+        """Garantisce una riga per OGNI colonna del contratto (14), nell'ordine di
+        `VALID_TARGETS`: le colonne non ancora presenti sono aggiunte come regole
+        vuote (nessun valore → colonna CSV vuota se non configurata). Serve alla GUI a
+        righe fisse: l'utente compila/lascia vuota ciascuna colonna senza aggiungerle
+        a mano. Mantiene le regole esistenti (valori/Obblig.), solo riordinate."""
+        by_target = {r.target: r for r in self.rules}
+        ordered = []
+        for target in custom_parser.VALID_TARGETS:
+            ordered.append(by_target.get(target) or FieldRule(target=target))
+        # Eventuali target non-standard (non dovrebbero esistere) restano in coda.
+        ordered.extend(r for r in self.rules if r.target not in custom_parser.VALID_TARGETS)
+        self.rules = ordered
 
     def errors(self) -> list:
         return custom_parser.validate_parser_def(self.to_def())
@@ -191,8 +221,10 @@ class ParserBuilder:
 
     # ── test-live ────────────────────────────────────────────────────────────
     def test_message(self, message: str, *, provider: str = "",
-                     mode: str = recognition.DEFAULT_MODE, require_price: bool = True):
+                     mode: str = None, require_price: bool = True):
         """Applica il parser corrente a un messaggio e ritorna il `PipelineResult`
-        (status + riga + piazzabilità), per l'anteprima del costruttore."""
+        (status + riga + piazzabilità), per l'anteprima del costruttore. La modalità
+        usata è quella DEL PARSER (`self.mode`) salvo override esplicito."""
         return build_validated_row(self.to_def(), message, provider=provider,
-                                   mode=mode, require_price=require_price)
+                                   mode=self.mode if mode is None else mode,
+                                   require_price=require_price)
