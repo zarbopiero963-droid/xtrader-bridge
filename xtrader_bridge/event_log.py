@@ -127,14 +127,17 @@ _LOG_FILE_RE = re.compile(r"^bridge-(\d{4})-(\d{2})-(\d{2})\.log$")
 
 def retention_days(cfg: dict) -> int:
     """Giorni di conservazione dei log dalla config (`log_retention_days`),
-    normalizzati: intero ≥ 1 → quel valore; tutto il resto (assente, 0, negativo,
-    non numerico) → 0 = conserva tutto (default sicuro: nessuna cancellazione)."""
+    ristretti alle opzioni offerte dalla GUI (`RETENTION_OPTIONS`): solo `5`/`15`/`30`
+    sono effettivi; qualsiasi altro valore (assente, 0, negativo, non numerico, o un
+    intero non in menu come `7`) → 0 = conserva tutto. Così comportamento ed etichetta
+    della tendina restano sempre coerenti (Codex): niente purge "nascosto" mostrato come
+    «Mai»."""
     raw = (cfg or {}).get("log_retention_days", 0)
     try:
         n = int(raw)
     except (TypeError, ValueError):
         return 0
-    return n if n >= 1 else 0
+    return n if n in RETENTION_OPTIONS else 0
 
 
 def purge_old_logs(days: int, *, base: str = None, when: datetime = None) -> list:

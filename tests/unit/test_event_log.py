@@ -16,8 +16,10 @@ def test_retention_days_normalizza():
     assert el.retention_days({}) == 0                          # assente → conserva tutto
     assert el.retention_days({"log_retention_days": 5}) == 5
     assert el.retention_days({"log_retention_days": "15"}) == 15
+    assert el.retention_days({"log_retention_days": 30}) == 30
     assert el.retention_days({"log_retention_days": 0}) == 0
     assert el.retention_days({"log_retention_days": -3}) == 0  # negativo → 0
+    assert el.retention_days({"log_retention_days": 7}) == 0   # fuori menu → 0 (coerente con "Mai")
     assert el.retention_days({"log_retention_days": "boh"}) == 0
 
 

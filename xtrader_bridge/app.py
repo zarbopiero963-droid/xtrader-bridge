@@ -16,6 +16,7 @@ import customtkinter as ctk
 from . import __version__
 from .config_store import (
     CONFIG_FILE,
+    as_bool,
     config_dir,
     load_config,
     migrate_legacy_config,
@@ -475,7 +476,7 @@ class App(ctk.CTk):
         ctk.CTkButton(log_hdr, text="🧹 Svuota log", width=110, height=28,
                       fg_color="#37474f", hover_color="#263238",
                       command=self._clear_logs_now).pack(side="left", padx=(8, 0))
-        self._debug_var = tk.BooleanVar(master=self, value=bool(self._config.get("debug_log")))
+        self._debug_var = tk.BooleanVar(master=self, value=as_bool(self._config.get("debug_log", False)))
         ctk.CTkCheckBox(log_hdr, text="🐞 Debug", variable=self._debug_var,
                         command=self._on_debug_toggle).pack(side="left", padx=(12, 0))
         self._log_box = ctk.CTkTextbox(
@@ -620,9 +621,13 @@ class App(ctk.CTk):
             self._log("🧹 Retention log: conservo tutto (nessuna pulizia automatica).")
 
     def _clear_logs_now(self):
-        """«Svuota log adesso»: rimuove tutti i file di log su disco (PR-3)."""
+        """«Svuota log adesso»: rimuove i file di log su disco E svuota la vista in
+        memoria/textbox (PR-3), così cambiando il filtro non riappaiono entry "pulite"
+        (Codex). La riga di conferma è il primo nuovo evento dopo la pulizia."""
         removed = event_log.clear_all_logs()
-        self._log(f"🧹 Log su disco svuotati: {len(removed)} file rimossi.")
+        self._log_entries.clear()
+        self._log_box.delete("1.0", "end")
+        self._log(f"🧹 Log svuotati: {len(removed)} file su disco rimossi; vista azzerata.")
 
     def _on_debug_toggle(self):
         """Attiva/disattiva la modalità Debug (log dettagliato del percorso) e persiste."""
@@ -635,8 +640,9 @@ class App(ctk.CTk):
 
     def _dbg(self, msg: str):
         """Log di percorso dettagliato, scritto SOLO se la modalità Debug è attiva
-        (PR-3): avvii/stop, salvataggi, selezioni, stadi del segnale + warning."""
-        if (self._config or {}).get("debug_log"):
+        (PR-3): avvii/stop, salvataggi, selezioni, stadi del segnale + warning.
+        `as_bool` evita che `"false"`/`"0"` da config a mano accendano il debug (Codex)."""
+        if as_bool((self._config or {}).get("debug_log", False)):
             self._log(f"🐞 {msg}")
 
     # ── LOG ───────────────────────────────────
@@ -1448,3 +1454,10 @@ class App(ctk.CTk):
             else:   # CTkEntry (campi di testo avanzati)
                 widget.delete(0, "end")
                 widget.insert(0, str(value))
+        # Tab Log (PR-3): allinea anche retention e Debug al profilo caricato, altrimenti
+        # i widget mostrerebbero lo stato vecchio mentre `self._config` ne usa un altro
+        # (es. profilo con debug_log: true ma checkbox spenta) (Codex).
+        if hasattr(self, "_retention_var"):
+            self._retention_var.set(_retention_label(event_log.retention_days(cfg)))
+        if hasattr(self, "_debug_var"):
+            self._debug_var.set(as_bool(cfg.get("debug_log", False)))
