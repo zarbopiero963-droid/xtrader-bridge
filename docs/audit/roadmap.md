@@ -628,8 +628,8 @@ Legenda severità: 🔴 critico · 🟠 medio-alto/alto · 🟡 medio/basso.
 | A3 | `xtrader_bridge/parser.py` · `_extract_quota()`: `"Quota X,Y FT"` senza `Prematch:` → quota persa (segnale non scritto) | Claude | ✅ Confermato* | 🟠 Alto* | PR-A3 |
 | A4 | `xtrader_bridge/parser.py` · `_find_teams()`: riga con `" v "` in testo libero (senza emoji) scambiata per squadre → **EventName errato scritto nel CSV** (riga sbagliata, non solo perdita: con prezzo/mercato validi `resolve_row()` ritorna VALID per l'evento sbagliato) | Claude + Codex | ✅ Confermato | 🟠 Medio | PR-A3 |
 | A5 | `xtrader_bridge/transforms.py` · `_score_to_over()`: nessun cap sulla somma gol (`999-999` → `Over 1998,5`) | Claude | ✅ Confermato | 🟡 Basso | PR-A3 |
-| A6 | Token Telegram persistito in `config.json` in chiaro (da documentare) | Claude + Codex | ✅ Fatto (tradeoff accettato) | 🟡 Basso | PR-A4 |
-| A7 | Dipendenze runtime non pinnate (`requirements.txt` usa `>=`) | Codex | ✅ Confermato | 🟡 Basso | PR-A4 |
+| A6 | Token Telegram persistito in `config.json` in chiaro | Claude + Codex | ✅ Fatto — **documentato** (README → Sicurezza: tradeoff, `.gitignore`, redazione log, revoca) | 🟡 Basso | PR-minors |
+| A7 | Dipendenze runtime non pinnate (`requirements.txt` usa `>=`) | Codex + CodeRabbit | 🟡 Parziale — floor di **sicurezza/compatibilità**: `customtkinter>=5.2.2` (la 5.2.0 importa `distutils`, rotto su Python 3.12), `python-telegram-bot>=21.0` + `h11>=0.16.0` (la 20.0 trascinava `h11 0.14` vulnerabile, GHSA-vqfr-h8mv-ghfj). **Lock riproducibile completo** (pip-compile/constraints con hash) = follow-up (richiede rete + build Windows) | 🟡 Basso | PR-minors |
 | A8 | `xtrader_bridge/mapping.py` · `_index()` e `xtrader_bridge/custom_pipeline.py` · `_default_registry()`: cache globale lazy non sotto lock (doppia costruzione possibile al primo uso concorrente) | Claude | ✅ Confermato (benigno) | 🟡 Basso | PR-A4 (opz.) |
 | A9 | `xtrader_bridge/app.py` · `_start()` imposta `_running=True` e mette la GUI in stato ATTIVO **prima** di `init_csv(csv_path)`, senza catturare `OSError`: con un path CSV non scrivibile/lockato l'avvio si interrompe ma la UI resta "attiva" fino allo STOP manuale (listener non partito) | Codex | ✅ Confermato | 🟠 Medio | PR-A2 |
 | A10 | `xtrader_bridge/custom_parser_engine.py` · `matches_message()`: il gate di contenuto accetta **qualsiasi** regola di estrazione non-fissa, anche **opzionale** (non solo i campi-segnale obbligatori). Un parser coi campi scommessa **fissi** + una regola di estrazione opzionale "larga" produce una riga piazzabile su un messaggio **non-segnale** che attiva quella regola → **bet fisso scritto per un messaggio non pertinente** (scommessa spuria, in chat ammessa) | Codex | ✅ Confermato | 🟠 Medio | PR-A5 |
@@ -677,15 +677,15 @@ warning CodeRabbit "Docstring coverage" → advisory, non bloccante.
 
 ```text
 PR-A0  audit-roadmap          → questa sezione (documentazione)                 [questa PR]
-PR-A1  config-atomic-save     → save_config atomico (tmp+fsync+os.replace) +    [da fare]
+PR-A1  config-atomic-save     → save_config atomico (tmp+fsync+os.replace) +    [FATTO]
                                  ritorna esito; GUI logga "salvata" solo se ok   (A1)
-PR-A2  lifecycle-csv-safety   → _manual_clear usa _active_csv_path se running    [da fare]
+PR-A2  lifecycle-csv-safety   → _manual_clear usa _active_csv_path se running    [FATTO #66]
                                  (A2) + _start guarda init_csv/OSError senza
                                  lasciare la UI in stato ATTIVO (A9)
-PR-A3  parser-hardening       → quota FT fallback (A3, confermato Alto) + guard   [da fare]
-                                 " v " (A4) + cap somma gol (A5) + test mirati
-PR-A4  hardening-minori       → doc token plaintext (A6) + pin deps (A7) +       [da fare]
-                                 lock cache lazy (A8, opzionale)
+PR-A3  parser-hardening       → quota FT fallback (A3) + guard " v " (A4,        [FATTO #67]
+                                 poi rimosso) + cap somma/lato gol (A5) + test
+PR-min hardening-minori       → doc token plaintext (A6) + pin deps (A7)        [FATTO — questa PR]
+                                 [A8 lock cache lazy: ancora da fare, opzionale]
 PR-A5  custom-content-gate    → matches_message() richiede una regola di          [da fare]
                                  estrazione OBBLIGATORIA non-fissa (non solo
                                  opzionale): un parser a campi fissi non scrive su

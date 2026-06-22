@@ -275,6 +275,14 @@ Tutte queste protezioni sono **attive a runtime**:
    XTrader non legge mai un file parziale; l'header è sempre presente.
 7. **Nessun token nei log** — i segreti sono redatti sia a schermo sia su file.
 
+> 🔑 **Dove sta il Bot Token (e perché).** Il token è salvato **in chiaro** in
+> `%APPDATA%\XTraderBridge\config.json`, nel profilo del **tuo** utente Windows. È una
+> scelta consapevole (tradeoff accettato, audit A6): nessun "vault"/cifratura, ma il
+> file **non** è nel repository (è in `.gitignore`), **non** finisce nei log (redazione
+> attiva) e **non** è incluso nell'EXE/artifact. Conseguenze pratiche: proteggi il tuo
+> profilo Windows e **non condividere** `config.json`; se il token trapela, **rigeneralo**
+> da @BotFather (`/revoke`).
+
 > Prima dell'uso reale, segui la procedura **`docs/audit/xtrader_simulation_test.md`**
 > con XTrader in Modalità Simulazione, stake basso e limiti chiari. Nessuna promessa
 > di profitto.

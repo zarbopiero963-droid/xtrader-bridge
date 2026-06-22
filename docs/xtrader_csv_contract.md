@@ -49,18 +49,44 @@ Esempi reali (dal team XTrader):
 - **`Timestamp`**: la deduplica anti-doppia-scommessa è interna al bridge (vedi roadmap
   PR-15), non è una colonna CSV.
 
-## Modalità di riconoscimento (formalizzate, implementate in PR-06)
+## Modalità di riconoscimento (implementate in PR-06, `recognition.py`)
 
-| Modalità | Campi richiesti |
-|---|---|
-| `ID_ONLY` | `MarketId` + `SelectionId` (+ `EventId`) |
-| `NAME_ONLY` | `EventName` + `MarketType` + `SelectionName` |
-| `BOTH` | scrive sia ID sia nomi quando disponibili |
+XTrader riconosce un segnale in **due modi alternativi**; la modalità scelta decide
+quali colonne devono essere popolate. I due set sono **mutuamente esclusivi**: se usi
+un set, l'altro **può restare vuoto**.
+
+| Modalità | Campi richiesti | Possono restare vuoti |
+|---|---|---|
+| `ID_ONLY` | `MarketId` + `SelectionId` | `EventName`, `MarketType`, `SelectionName`, `EventId`, `MarketName` |
+| `NAME_ONLY` | `EventName` + `MarketType` + `SelectionName` | `MarketId`, `SelectionId`, `EventId`, `MarketName` |
+| `BOTH` | basta che **UN** set sia completo (ID **oppure** nomi) | l'altro set |
+
+> Allineato a `recognition.missing_fields`: in `BOTH` la riga è valida se è completo
+> **almeno uno** dei due set (non servono entrambi).
 
 Con i nomi (`NAME_ONLY`/`BOTH`), la **lingua** del CSV deve coincidere con quella della
 fonte Segnali di XTrader (italiano). **Nota:** il messaggio Telegram P.Bet non contiene
 gli ID (`EventId`/`MarketId`/`SelectionId`), quindi oggi restano vuoti e il bridge punta
 sulla modalità a nomi.
+
+## Campi sempre opzionali e gate del prezzo
+
+`Price`, `MinPrice`, `MaxPrice`, `Points` sono **sempre facoltativi** per XTrader e
+possono restare vuoti in entrambe le modalità (gli esempi reali li lasciano vuoti).
+
+⚠️ **Differenza XTrader vs bridge sul `Price`:**
+
+- **Per XTrader** `Price` può essere vuoto (la quota può essere indicata nell'azione
+  "Piazza Scommessa su Segnali").
+- **Per il bridge**, di default `require_price` è `true`: un segnale **senza** `Price`
+  valido (numerico, > 1.0) viene **scartato** (stato `INVALID_MISSING_PRICE`). Per
+  scrivere righe con `Price` vuoto devi impostare in `config.json` il booleano JSON
+  **`"require_price": false`** (non la stringa `"false"`, non `0`).
+
+Nel **Parser Personalizzato**, per lasciare `Price` vuoto: non configurare la regola
+`Price` (nessun `fixed_value`/`start_after`/`end_before`) **e** impostare
+`require_price: false`. `MinPrice`/`MaxPrice`/`Points` si lasciano vuoti semplicemente
+non configurando la loro regola.
 
 ## Regole di scrittura
 
