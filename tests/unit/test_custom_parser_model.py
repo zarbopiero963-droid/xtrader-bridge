@@ -292,7 +292,15 @@ def test_skeleton_e_example_hanno_mode_esplicito():
 
 
 def test_mode_assente_da_json_eredita_vuoto():
-    # SOLO un file legacy (JSON senza 'mode') → "" = eredita il globale; idem valore
-    # non valido. I parser nuovi/template hanno invece un mode esplicito (sopra).
+    # SOLO la chiave 'mode' assente/null (file legacy) → "" = eredita il globale.
     assert cp.CustomParserDef.from_dict({"name": "P", "rules": []}).mode == ""
-    assert cp.CustomParserDef.from_dict({"name": "P", "mode": "boh", "rules": []}).mode == ""
+    assert cp.CustomParserDef.from_dict({"name": "P", "mode": None, "rules": []}).mode == ""
+    # "" esplicito (eredità scelta dalla GUI) → "".
+    assert cp.CustomParserDef.from_dict({"name": "P", "mode": "", "rules": []}).mode == ""
+
+
+def test_mode_malformato_fail_safe_name_only():
+    # Un valore PRESENTE ma malformato (typo, file corrotto) → NAME_ONLY (fail-safe):
+    # non eredita un globale magari sbagliato, non lascia passare un modo ignoto (Codex).
+    assert cp.CustomParserDef.from_dict({"name": "P", "mode": "boh", "rules": []}).mode == "NAME_ONLY"
+    assert cp.CustomParserDef.from_dict({"name": "P", "mode": "IDONLY", "rules": []}).mode == "NAME_ONLY"

@@ -32,12 +32,17 @@ class CustomParserWindow(ctk.CTkToplevel):
     def _label_to_mode(self, label: str) -> str:
         return "" if label == self._MODE_INHERIT else label
 
-    def __init__(self, master=None, builder: ParserBuilder = None, provider: str = ""):
+    def __init__(self, master=None, builder: ParserBuilder = None, provider: str = "",
+                 global_mode: str = ""):
         super().__init__(master)
         self.title("Parser Personalizzato")
         self.geometry("1024x720")
+        is_new = builder is None
         self.builder = builder or ParserBuilder()
         self._provider = provider
+        # Modalità globale (config `recognition_mode`): usata SOLO per l'anteprima di un
+        # parser legacy a eredità ("" ): così "Prova messaggio" combacia col runtime (Codex).
+        self._global_mode = global_mode
         self._rows = []  # widget refs per regola
         self._saved_map = {}  # etichetta menu → path file parser
 
@@ -45,6 +50,10 @@ class CustomParserWindow(ctk.CTkToplevel):
         self._value_maps = self.builder.value_map_options(include_dizionario=True)
         self._modes = self.builder.mode_options()
 
+        # Parser NUOVO: applica l'auto-Obblig. della modalità di default UNA volta (per i
+        # parser caricati invece si preservano i flag salvati: niente set_mode al reload).
+        if is_new and self.builder.mode:
+            self.builder.set_mode(self.builder.mode)
         self._build_ui()
         self._reload_rows_from_builder()
         self._refresh_saved()
@@ -62,7 +71,7 @@ class CustomParserWindow(ctk.CTkToplevel):
         # "(eredita globale)" rappresenta "" (parser legacy): usa la modalità globale.
         self._mode_var = ctk.StringVar(value=self._mode_to_label(self.builder.mode))
         ctk.CTkOptionMenu(top, variable=self._mode_var,
-                          values=[self._MODE_INHERIT] + self._modes, width=160,
+                          values=[self._MODE_INHERIT, *self._modes], width=160,
                           command=self._on_mode_change).pack(side="left", padx=6)
 
         # gestione parser salvati: lista + nuovo / carica / duplica / elimina
@@ -162,11 +171,9 @@ class CustomParserWindow(ctk.CTkToplevel):
         self._rows = []
         # Griglia fissa: garantisce una riga per ognuna delle 14 colonne, in ordine.
         self.builder.ensure_all_columns()
-        # Auto-obbligatorietà coerente col menu già all'apertura/Nuovo: SOLO per modalità
-        # concrete (set_mode è add-only → non rilassa mai un required manuale, Codex P2/3).
-        # Per "" (legacy = eredita globale) NON si chiama set_mode, così "" è preservato.
-        if self.builder.mode:
-            self.builder.set_mode(self.builder.mode)
+        # NB: NON si chiama qui `set_mode` — il reload deve solo RENDERIZZARE i flag
+        # correnti, preservando i required salvati a mano di un parser caricato (Codex).
+        # L'auto-Obblig. si applica su azione esplicita (_on_mode_change) o su parser nuovo.
         self._mode_var.set(self._mode_to_label(self.builder.mode))
         for rule in self.builder.rules:
             self._add_row(rule)
@@ -259,6 +266,9 @@ class CustomParserWindow(ctk.CTkToplevel):
     def _new(self):
         """Svuota il costruttore per un nuovo parser (non tocca i file salvati)."""
         self.builder = ParserBuilder()
+        # Parser nuovo: applica l'auto-Obblig. della modalità di default una volta.
+        if self.builder.mode:
+            self.builder.set_mode(self.builder.mode)
         self._name_var.set("")
         self._reload_rows_from_builder()
         self._result.configure(text="🆕 Nuovo parser (non ancora salvato).")
@@ -317,7 +327,9 @@ class CustomParserWindow(ctk.CTkToplevel):
     def _test(self):
         self._sync_to_builder()
         message = self._msg_box.get("1.0", "end").rstrip("\n")
-        mode = self._mode_var.get()
+        # Modalità EFFETTIVA per l'anteprima: quella scelta; se "(eredita globale)" ("")
+        # usa la modalità globale, così "Prova messaggio" combacia col runtime (Codex).
+        mode = self._label_to_mode(self._mode_var.get()) or self._global_mode
         # Verdetto sintetico (riga risultante) + diagnostica per-campo (CP-08b).
         res = self.builder.test_message(message, provider=self._provider, mode=mode)
         if res.placeable:

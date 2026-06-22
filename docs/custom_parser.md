@@ -116,8 +116,12 @@ menu, le colonne richieste da quel set diventano **obbligatorie in automatico** 
 | `BOTH` | nessuna forzata (basta **un** set completo: lo decidi tu) |
 
 `Price`, `BetType`, `Provider` non dipendono dalla modalità (la loro obbligatorietà la
-gestisci tu). A **runtime** la validazione del segnale usa la modalità **del parser**
-(non più una chiave globale): ogni parser porta la sua, coerente col builder.
+gestisci tu). A **runtime** la validazione del segnale usa la modalità **del parser**:
+ogni parser porta la sua, coerente col builder. **Eccezione (compatibilità):** un parser
+salvato *prima* di questa feature non ha il campo `mode` (resta `""`) e in quel caso il
+runtime **eredita la modalità globale** `recognition_mode`, così i parser vecchi non
+cambiano comportamento. I parser creati/salvati dalla GUI hanno sempre una modalità
+esplicita (incl. la voce «(eredita globale)» se la scegli apposta).
 
 ---
 

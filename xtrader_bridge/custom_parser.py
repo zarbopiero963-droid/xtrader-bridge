@@ -46,6 +46,23 @@ SCHEMA_VERSION = 1
 # non può andare in drift rispetto al contratto.
 VALID_TARGETS = tuple(CSV_HEADER)
 
+
+def _normalize_parser_mode(raw) -> str:
+    """Normalizza il campo `mode` letto da JSON (vedi `from_dict`):
+
+    - chiave assente / `null` → `""` = eredita il globale (file legacy pre-feature);
+    - `""` esplicito → `""` (eredità scelta dalla GUI);
+    - valore valido (`ID_ONLY`/`NAME_ONLY`/`BOTH`) → tenuto;
+    - valore MALFORMATO (typo, corrotto) → `NAME_ONLY` (fail-safe: non eredita un
+      globale potenzialmente sbagliato; non lascia passare un modo ignoto).
+    """
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if s == "" or s in recognition.VALID_MODES:
+        return s
+    return recognition.DEFAULT_MODE
+
 # Token booleani riconosciuti nei file JSON scritti/modificati a mano.
 _TRUE_TOKENS = {"true", "1", "yes", "si", "sì", "y", "on"}
 _FALSE_TOKENS = {"false", "0", "no", "n", "off", ""}
@@ -153,10 +170,11 @@ class CustomParserDef:
             name=str(data.get("name", "")),
             description=str(data.get("description", "")),
             version=version,
-            # `mode` valido → tenuto; assente o non valido → "" = eredita il globale
-            # (un file pre-feature non deve essere forzato a NAME_ONLY: Codex P1).
-            mode=(lambda m: m if m in recognition.VALID_MODES else "")(
-                str(data.get("mode", "") or "").strip()),
+            # Modalità: SOLO la chiave assente/null (file legacy pre-feature) → "" =
+            # eredita il globale. Un `mode` ESPLICITO valido è tenuto; `""` esplicito è
+            # l'eredità scelta dalla GUI; un valore malformato (typo, file corrotto) →
+            # NAME_ONLY (fail-safe, NON eredita un globale magari sbagliato: Codex).
+            mode=_normalize_parser_mode(data.get("mode", None)),
             rules=rules,
         )
 

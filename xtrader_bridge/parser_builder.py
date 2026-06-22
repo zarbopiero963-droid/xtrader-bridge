@@ -139,18 +139,21 @@ class ParserBuilder:
 
     # ── Modalità di riconoscimento (per-parser) ────────────────────────────
     def set_mode(self, mode: str) -> None:
-        """Imposta la Modalità del parser e **aggiunge** l'obbligatorietà ai campi del suo
-        set (auto-Obblig.), così selezionandola non serve spuntare "Obblig." a mano.
+        """Imposta la Modalità del parser e **allinea** l'obbligatorietà dei SOLI campi di
+        riconoscimento al suo set (auto-Obblig.): i campi del set diventano `required=True`,
+        gli ALTRI campi di riconoscimento `required=False`. Così selezionando una modalità
+        i required risultano sempre coerenti con essa (cambiando NAME↔ID non restano
+        required "stantii", Codex). `BOTH` → nessun campo di riconoscimento forzato (basta
+        un set). Price/BetType/Provider NON sono toccati (non dipendono dalla modalità).
 
-        **Add-only**: marca `required=True` i campi del set, ma NON rimuove mai un
-        `required` già impostato (di un altro set o messo a mano). Così non si rilassa
-        silenziosamente un gate di contenuto cambiando/riselezionando modalità (Codex):
-        al massimo si è più stretti, mai più permissivi. `BOTH` (set vuoto) non tocca
-        nulla. Price/BetType/Provider non dipendono dalla modalità."""
+        Va invocata SOLO su azione esplicita dell'utente (scelta modalità) o su parser
+        NUOVO — MAI al semplice reload/apertura, altrimenti rilasserebbe i required salvati
+        a mano di un parser esistente (per quello la GUI non la chiama in `_reload`)."""
         self.mode = recognition.normalize_mode(mode)
+        required = set(recognition.required_targets(self.mode))
         for rule in self.rules:
-            if rule.target in recognition.required_targets(self.mode):
-                rule.required = True
+            if rule.target in recognition.RECOGNITION_FIELDS:
+                rule.required = rule.target in required
 
     def ensure_all_columns(self) -> None:
         """Garantisce una riga per OGNI colonna del contratto (14), nell'ordine di

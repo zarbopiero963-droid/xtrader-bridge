@@ -1394,8 +1394,12 @@ class App(ctk.CTk):
 
         Import lazy: la GUI del costruttore non serve all'avvio del bridge."""
         from .custom_parser_gui import CustomParserWindow
-        provider = str(self._load_config().get("provider", "")).strip()
-        win = CustomParserWindow(self, provider=provider)
+        cfg = self._load_config()
+        provider = str(cfg.get("provider", "")).strip()
+        # Modalità globale: serve solo all'anteprima di un parser legacy a eredità (""),
+        # così "Prova messaggio" usa la stessa modalità del runtime.
+        global_mode = str(cfg.get("recognition_mode", "")).strip()
+        win = CustomParserWindow(self, provider=provider, global_mode=global_mode)
         win.focus()
 
     def _open_source_chats(self):
