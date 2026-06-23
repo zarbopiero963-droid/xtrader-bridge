@@ -78,31 +78,37 @@ class CustomParserWindow(ctk.CTkToplevel):
         return name_mapping_store.profile_names(cfg)
 
     def _reload_profile_checks(self, use_builder=False):
-        """Ridisegna le checkbox dai profili **realmente esistenti** in config. La
-        selezione spuntata viene da `builder.name_mapping_profiles` (su `use_builder`, es.
-        caricamento di un parser) oppure dalle checkbox correnti (refresh dopo aver
-        modificato il dizionario: non perdere ciò che l'utente ha appena spuntato).
+        """Ridisegna le checkbox dei profili. La selezione spuntata viene da
+        `builder.name_mapping_profiles` (su `use_builder`, es. caricamento di un parser)
+        oppure dalle checkbox correnti (refresh dopo aver modificato il dizionario).
 
-        Si mostrano SOLO i profili esistenti: un nome non più presente (profilo
-        rinominato/eliminato nel dizionario mentre il builder è aperto) NON viene mostrato
-        come checkbox, così non può essere ri-salvato nel parser come riferimento morto
-        (→ MAPPING_MISSING). `_selected_profiles` lo esclude di conseguenza (Codex)."""
+        Mostra i profili **esistenti** in config e, in più, i profili **selezionati ma non
+        più esistenti** (rinominati/eliminati nel dizionario) come voci ⚠ **fantasma**:
+        restano una checkbox così l'utente PUÒ togliere la spunta, e `_unresolved_selected`
+        le intercetta per bloccare save/preview finché non sono risolte — niente
+        riferimenti morti riscritti in silenzio né blocchi senza via d'uscita (Codex)."""
         if use_builder or not self._profile_checks:
-            selected = set(self.builder.name_mapping_profiles)
+            selected = list(self.builder.name_mapping_profiles)
         else:
-            selected = set(self._selected_profiles())
+            selected = self._selected_profiles()
+        selected_set = set(selected)
         for child in self._profiles_box.winfo_children():
             child.destroy()
         self._profile_checks = {}
-        names = list(self._load_name_mapping_profiles())
+        existing = list(self._load_name_mapping_profiles())
+        self._existing_profiles = set(existing)
+        missing = [n for n in selected if n not in self._existing_profiles]
+        names = existing + [n for n in missing if n not in existing]
         if not names:
             ctk.CTkLabel(self._profiles_box, text="(nessun profilo)",
                          text_color="gray").pack(side="left", padx=4)
             return
         for name in names:
-            var = ctk.BooleanVar(value=name in selected)
-            ctk.CTkCheckBox(self._profiles_box, text=name, variable=var,
-                            width=20).pack(side="left", padx=4)
+            present = name in self._existing_profiles
+            var = ctk.BooleanVar(value=name in selected_set)
+            kw = {} if present else {"text_color": "#ffa726"}   # ⚠ profilo mancante
+            ctk.CTkCheckBox(self._profiles_box, text=name if present else f"⚠ {name}",
+                            variable=var, width=20, **kw).pack(side="left", padx=4)
             self._profile_checks[name] = var
 
     def _selected_profiles(self) -> list:
@@ -111,24 +117,19 @@ class CustomParserWindow(ctk.CTkToplevel):
         i profili già presenti in `builder.name_mapping_profiles` mantengono la loro
         posizione; gli eventuali profili appena spuntati si aggiungono in coda (ordine di
         visualizzazione). Così aprire e ri-salvare un parser con profili ['B','A'] NON li
-        riordina alfabeticamente cambiando la precedenza (Codex P1)."""
+        riordina alfabeticamente cambiando la precedenza (Codex P1). I profili mancanti
+        (⚠) selezionati restano inclusi: hanno una checkbox e `_unresolved_selected` li
+        blocca finché non sono risolti."""
         checked = {name for name, var in self._profile_checks.items() if var.get()}
         ordered = [n for n in self.builder.name_mapping_profiles if n in checked]
         ordered += [n for n in self._profile_checks if n in checked and n not in ordered]
-        # Preserva i profili richiesti dal parser ma SENZA checkbox (profilo eliminato/
-        # rinominato nel dizionario, o config caricata vuota): non vanno persi in silenzio
-        # — altrimenti un parser mappato diventerebbe di nascosto "senza mappatura" e
-        # l'EventName grezzo passerebbe a XTrader. `_unresolved_selected` li intercetta e
-        # blocca salvataggio/anteprima finché non sono risolti (Codex).
-        ordered += [n for n in self.builder.name_mapping_profiles
-                    if n not in self._profile_checks and n not in ordered]
         return ordered
 
     def _unresolved_selected(self) -> list:
-        """Profili selezionati che non corrispondono a un profilo ESISTENTE (nessuna
-        checkbox). Finché ce ne sono, `_save`/`_test` si bloccano: una mappatura richiesta
-        ma non risolvibile non deve diventare in silenzio «nessuna mappatura»."""
-        return [n for n in self._selected_profiles() if n not in self._profile_checks]
+        """Profili selezionati che non corrispondono a un profilo ESISTENTE (voci ⚠
+        fantasma). Finché ce ne sono spuntati, `_save`/`_test` si bloccano: una mappatura
+        richiesta ma non risolvibile non deve diventare in silenzio «nessuna mappatura»."""
+        return [n for n in self._selected_profiles() if n not in self._existing_profiles]
 
     @staticmethod
     def _resolve_mapping_profiles(defn):
@@ -255,6 +256,7 @@ class CustomParserWindow(ctk.CTkToplevel):
         self._profiles_box = ctk.CTkScrollableFrame(nm, height=42, orientation="horizontal")
         self._profiles_box.pack(side="left", fill="x", expand=True, padx=4)
         self._profile_checks = {}        # nome profilo → BooleanVar
+        self._existing_profiles = set()  # profili realmente presenti in config (non ⚠)
         self._reload_profile_checks()
 
         # intestazione colonne
@@ -380,6 +382,11 @@ class CustomParserWindow(ctk.CTkToplevel):
 
     # ── azioni ────────────────────────────────────────────────────────────
     def _save(self):
+        # Rinfresca le checkbox dal config: una modifica del dizionario fatta altrove
+        # (es. rinomina dal pulsante della finestra principale) deve riflettersi qui,
+        # così un profilo mancante diventa ⚠ e blocca il salvataggio invece di riscrivere
+        # un riferimento morto nel parser (Codex).
+        self._reload_profile_checks()
         self._sync_to_builder()
         unresolved = self._unresolved_selected()
         if unresolved:
@@ -501,6 +508,7 @@ class CustomParserWindow(ctk.CTkToplevel):
             text=f"🗑 Eliminato {name!r}." if removed else f"⛔ {name!r} non trovato.")
 
     def _test(self):
+        self._reload_profile_checks()   # rifletti modifiche al dizionario fatte altrove (Codex)
         self._sync_to_builder()
         unresolved = self._unresolved_selected()
         if unresolved:
