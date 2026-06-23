@@ -128,6 +128,36 @@ def test_custom_estrazione_opzionale_non_basta_serve_obbligatoria(tmp_path):
     assert ko.placeable is False                      # MarketName obbligatorio vuoto + gate
 
 
+def test_quota_governata_dalla_riga_price_del_parser(tmp_path):
+    # Unico comando della quota: il gate require_price è guidato dalla riga Price del
+    # parser (price_required), NON più da una chiave globale di config.
+    base = [
+        cp.FieldRule(target="Provider", fixed_value="TG"),
+        cp.FieldRule(target="EventName", start_after="Match:", end_before="\n", required=True),
+        cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
+        cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
+        cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+    ]
+    cfg = {"provider": "TG", "active_parser": "Q", "chat_id": "42",
+           "recognition_mode": "NAME_ONLY"}
+    msg = "Match: Inter v Milan\n"            # nessuna quota nel messaggio
+
+    # (a) Price NON obbligatorio → quota opzionale: scrive la riga col Price vuoto.
+    opt = cp.CustomParserDef(name="Q", mode="NAME_ONLY", rules=[
+        *base, cp.FieldRule(target="Price", start_after="Quota:", end_before="\n")])
+    cp.save_parser(opt, str(tmp_path))
+    res = signal_router.resolve_row(msg, cfg, chat_id="42", parsers_dir=str(tmp_path))
+    assert res.placeable is True
+    assert res.row["Price"] == ""
+
+    # (b) STESSO parser con Price OBBLIGATORIO → quota richiesta: senza quota è scartato.
+    req = cp.CustomParserDef(name="Q", mode="NAME_ONLY", rules=[
+        *base, cp.FieldRule(target="Price", start_after="Quota:", end_before="\n", required=True)])
+    cp.save_parser(req, str(tmp_path))
+    ko = signal_router.resolve_row(msg, cfg, chat_id="42", parsers_dir=str(tmp_path))
+    assert ko.placeable is False
+
+
 def test_custom_inesistente_ignora_il_messaggio(tmp_path):
     # active_parser punta a un parser non salvato → load_active None → nessun parser
     # custom → messaggio ignorato (niente fallback automatico).

@@ -115,8 +115,9 @@ def test_pbet_gol_secondo_tempo_yangon_end_to_end(tmp_path):
     """Messaggio reale di un provider 'P.Bet' (emoji 🆚 davanti alle squadre, nessuna
     quota di puntata). Regressione: la catena attuale lo gestisce senza modifiche —
     EventName estratto **dopo 🆚** fino a fine riga; mercato/selezione tradotti dal
-    dizionario via fixed_value+value_map; Price assente AMMESSO con require_price=False
-    (il messaggio non porta una quota piazzabile). Nessun campo inventato."""
+    dizionario via fixed_value+value_map; Price assente AMMESSO perché il parser NON
+    marca `Price` obbligatorio (`price_required()` False → quota opzionale, unico
+    comando dalla riga Price). Nessun campo inventato."""
     defn = cp.CustomParserDef(name="PBetGol2T", rules=[
         cp.FieldRule(target="Provider", fixed_value="P.Bet"),
         # "🆚Yangon City v Silver Stars FC" → tutto dopo 🆚 fino a fine riga.
@@ -138,7 +139,7 @@ def test_pbet_gol_secondo_tempo_yangon_end_to_end(tmp_path):
         "\U0001F4C8Quota 0,5 HT\n"
         "Prematch:0"
     )
-    res = signal_router.resolve_row(msg, _cfg("PBetGol2T", require_price=False),
+    res = signal_router.resolve_row(msg, _cfg("PBetGol2T"),
                                     chat_id="42", parsers_dir=str(tmp_path))
     assert res.source == signal_router.CUSTOM
     assert res.placeable is True

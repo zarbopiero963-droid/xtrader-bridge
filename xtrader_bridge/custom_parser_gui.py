@@ -389,9 +389,15 @@ class CustomParserWindow(ctk.CTkToplevel):
         # diagnostica (`diag.placeable`/`diag.status`), che include ANCHE il gate di
         # contenuto: così "Prova messaggio" non dice "Pronto" per un parser che il
         # runtime scarterebbe come NO_CONTENT_MATCH (Codex).
-        res = self.builder.test_message(message, provider=self._provider, mode=mode)
+        # Quota richiesta sì/no = riga Price del parser (unico comando). Lo stesso
+        # valore guida sia il verdetto sintetico sia la diagnostica per-campo, così
+        # "Prova messaggio" combacia col runtime.
+        defn = self.builder.to_def()
+        require_price = defn.price_required()
+        res = self.builder.test_message(message, provider=self._provider, mode=mode,
+                                        require_price=require_price)
         diag = parser_diagnostics.diagnose(
-            self.builder.to_def(), message, provider=self._provider, mode=mode)
+            defn, message, provider=self._provider, mode=mode, require_price=require_price)
         if diag.placeable:
             riga = ", ".join(f"{k}={v}" for k, v in res.row.items() if v != "")
             self._result.configure(text=f"✅ Pronto · {riga}")

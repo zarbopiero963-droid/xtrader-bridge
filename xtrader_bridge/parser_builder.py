@@ -228,10 +228,17 @@ class ParserBuilder:
 
     # ── test-live ────────────────────────────────────────────────────────────
     def test_message(self, message: str, *, provider: str = "",
-                     mode: str = None, require_price: bool = True):
+                     mode: str = None, require_price: bool = None):
         """Applica il parser corrente a un messaggio e ritorna il `PipelineResult`
         (status + riga + piazzabilità), per l'anteprima del costruttore. La modalità
-        usata è quella DEL PARSER (`self.mode`) salvo override esplicito."""
-        return build_validated_row(self.to_def(), message, provider=provider,
+        usata è quella DEL PARSER (`self.mode`) salvo override esplicito.
+
+        `require_price` di default (None) deriva dalla riga Price del parser
+        (`price_required()`): l'anteprima riflette così l'unico comando della quota,
+        coerente col runtime."""
+        defn = self.to_def()
+        if require_price is None:
+            require_price = defn.price_required()
+        return build_validated_row(defn, message, provider=provider,
                                    mode=self.mode if mode is None else mode,
                                    require_price=require_price)

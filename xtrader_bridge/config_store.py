@@ -38,8 +38,8 @@ DEFAULTS = {
     # Modalità di riconoscimento XTrader: ID_ONLY / NAME_ONLY / BOTH.
     # Default NAME_ONLY: oggi il bridge non ricava gli ID dal messaggio Telegram.
     "recognition_mode": "NAME_ONLY",
-    # Se True (default sicuro) un segnale senza quota valida (> 1.0) viene scartato.
-    "require_price":     True,
+    # NB: la quota obbligatoria sì/no NON è più una chiave globale: la governa la
+    # casella «Obblig.» sulla riga Price di ogni Parser Personalizzato (per-parser).
     # Parser Personalizzato attivo (nome; "" = usa il parser hardcoded). CP-07.
     "active_parser":    "",
     # Override per chat sorgente: {chat_id: nome_parser}. Vuoto = usa active_parser.

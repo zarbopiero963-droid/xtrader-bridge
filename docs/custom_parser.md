@@ -116,7 +116,10 @@ menu, le colonne richieste da quel set diventano **obbligatorie in automatico** 
 | `BOTH` | nessuna forzata (basta **un** set completo: lo decidi tu) |
 
 `Price`, `BetType`, `Provider` non dipendono dalla modalità (la loro obbligatorietà la
-gestisci tu). A **runtime** la validazione del segnale usa la modalità **del parser**:
+gestisci tu). In particolare la casella **«Obblig.» sulla riga `Price`** è l'**unico
+comando della quota**: se spuntata il segnale deve avere una quota valida (`>1.0`),
+altrimenti è scartato; se non spuntata la quota è opzionale (CSV con `Price` vuoto
+ammesso, la quota la mette poi l'azione XTrader). Non esiste più un interruttore globale. A **runtime** la validazione del segnale usa la modalità **del parser**:
 ogni parser porta la sua, coerente col builder. **Eccezione (compatibilità):** un parser
 salvato *prima* di questa feature non ha il campo `mode` (resta `""`) e in quel caso il
 runtime **eredita la modalità globale** `recognition_mode`, così i parser vecchi non

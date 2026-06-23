@@ -190,6 +190,16 @@ class CustomParserDef:
         è "Non pronto" e non si scrive il CSV."""
         return [r.target for r in self.rules if r.required]
 
+    def price_required(self) -> bool:
+        """True se la colonna `Price` è marcata obbligatoria nel parser.
+
+        È l'**unico comando della quota**: se True il segnale deve avere una
+        quota valida (`>1.0`) — gate `require_price` del validator + "Non pronto"
+        se `Price` resta vuoto; se False la quota è opzionale (CSV con `Price`
+        vuoto ammesso, la quota la mette poi l'azione XTrader). Sostituisce il
+        vecchio interruttore globale `require_price`."""
+        return "Price" in self.required_targets()
+
 
 def validate_parser_def(defn: CustomParserDef) -> list:
     """Validazione *strutturale* del modello. Ritorna la lista degli errori

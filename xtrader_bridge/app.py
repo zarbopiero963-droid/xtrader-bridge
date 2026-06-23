@@ -319,8 +319,8 @@ class App(ctk.CTk):
         self._adv["recognition_mode"] = self._add_option(
             tab_rec, "🎯 Modalità riconoscimento",
             settings_controller.recognition_mode_options(), adv["recognition_mode"], 0)
-        self._adv["require_price"] = self._add_check(
-            tab_rec, "Richiedi una quota valida (> 1.0)", adv["require_price"], 1)
+        # La quota obbligatoria sì/no NON è più un interruttore globale: la governa la
+        # casella «Obblig.» sulla riga Price di OGNI Parser Personalizzato (unico comando).
 
         # Sicurezza
         self._adv["dry_run"] = self._add_check(
