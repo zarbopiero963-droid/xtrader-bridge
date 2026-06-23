@@ -632,7 +632,7 @@ Legenda severità: 🔴 critico · 🟠 medio-alto/alto · 🟡 medio/basso.
 | A7 | Dipendenze runtime non pinnate (`requirements.txt` usa `>=`) | Codex + CodeRabbit | 🟡 Parziale — floor di **sicurezza/compatibilità**: `customtkinter>=5.2.2` (la 5.2.0 importa `distutils`, rotto su Python 3.12), `python-telegram-bot>=21.0` + `h11>=0.16.0` (la 20.0 trascinava `h11 0.14` vulnerabile, GHSA-vqfr-h8mv-ghfj). **Lock riproducibile completo** (pip-compile/constraints con hash) = follow-up (richiede rete + build Windows) | 🟡 Basso | PR-minors |
 | A8 | `xtrader_bridge/mapping.py` · `_index()` e `xtrader_bridge/custom_pipeline.py` · `_default_registry()`: cache globale lazy non sotto lock (doppia costruzione possibile al primo uso concorrente) | Claude | ✅ Confermato (benigno) | 🟡 Basso | PR-A4 (opz.) |
 | A9 | `xtrader_bridge/app.py` · `_start()` imposta `_running=True` e mette la GUI in stato ATTIVO **prima** di `init_csv(csv_path)`, senza catturare `OSError`: con un path CSV non scrivibile/lockato l'avvio si interrompe ma la UI resta "attiva" fino allo STOP manuale (listener non partito) | Codex | ✅ Confermato | 🟠 Medio | PR-A2 |
-| A10 | `xtrader_bridge/custom_parser_engine.py` · `matches_message()`: il gate di contenuto accetta **qualsiasi** regola di estrazione non-fissa, anche **opzionale** (non solo i campi-segnale obbligatori). Un parser coi campi scommessa **fissi** + una regola di estrazione opzionale "larga" produce una riga piazzabile su un messaggio **non-segnale** che attiva quella regola → **bet fisso scritto per un messaggio non pertinente** (scommessa spuria, in chat ammessa) | Codex | ✅ **Fatto** — `matches_message()` richiede ora un'estrazione **obbligatoria** (`required`, non-fissa); un'estrazione opzionale non basta + test mirato | 🟠 Medio | PR-A5 |
+| A10 | `xtrader_bridge/custom_parser_engine.py` · `matches_message()`: il gate di contenuto accetta **qualsiasi** regola di estrazione non-fissa, anche **opzionale** (non solo i campi-segnale obbligatori). Un parser coi campi scommessa **fissi** + una regola di estrazione opzionale "larga" produce una riga piazzabile su un messaggio **non-segnale** che attiva quella regola → **bet fisso scritto per un messaggio non pertinente** (scommessa spuria, in chat ammessa) | Codex | ✅ **Fatto** — `matches_message()` richiede ora un'estrazione non-fissa che sia **obbligatoria** (`required`) **oppure** su un **campo di riconoscimento rilevante per la modalità** (NAME_ONLY→nomi, ID_ONLY→ID, BOTH→entrambi); un'opzionale "larga" su campo non di riconoscimento non basta + test mirato | 🟠 Medio | PR-A5 |
 
 > **Nota sui riferimenti**: i finding puntano a `file` · `funzione()` (simbolo **stabile**),
 > non a numeri di riga, così la roadmap resta valida anche se il codice si sposta.
@@ -687,9 +687,10 @@ PR-A3  parser-hardening       → quota FT fallback (A3) + guard " v " (A4,     
 PR-min hardening-minori       → doc token plaintext (A6) + pin deps (A7)        [FATTO — questa PR]
                                  [A8 lock cache lazy: ancora da fare, opzionale]
 PR-A5  custom-content-gate    → matches_message() richiede una regola di          [FATTO]
-                                 estrazione OBBLIGATORIA non-fissa (non solo
-                                 opzionale): un parser a campi fissi non scrive su
-                                 messaggi non-segnale (A10) + test mirato
+                                 estrazione non-fissa che sia OBBLIGATORIA oppure
+                                 su campo di riconoscimento rilevante per la modalità:
+                                 un parser a campi fissi non scrive su messaggi
+                                 non-segnale (A10) + test mirato
 ```
 
 Ogni PR-Ax: branch dedicato, Phase 0, patch stretta, micro-audit, test hard veritieri,
