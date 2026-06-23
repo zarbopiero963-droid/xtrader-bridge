@@ -141,6 +141,12 @@ class CustomParserDef:
     # salvati PRIMA di questa feature (campo `mode` assente), per retro-compatibilità.
     mode: str = recognition.DEFAULT_MODE
     rules: "list[FieldRule]" = field(default_factory=list)
+    # Mappatura nomi squadra (name_mapping_store): profili selezionati per tradurre
+    # l'EventName provider → nome Betfair/XTrader. Vuoto = nessuna mappatura (EventName
+    # invariato, retro-compatibile). `team_separator` è il separatore casa/trasferta
+    # nei messaggi del canale (testo libero: "v"/"vs"/"-"/"/"); vuoto = default "v".
+    name_mapping_profiles: "list[str]" = field(default_factory=list)
+    team_separator: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -148,6 +154,8 @@ class CustomParserDef:
             "description": self.description,
             "version": self.version,
             "mode": self.mode,
+            "name_mapping_profiles": list(self.name_mapping_profiles),
+            "team_separator": self.team_separator,
             "rules": [r.to_dict() for r in self.rules],
         }
 
@@ -166,10 +174,18 @@ class CustomParserDef:
             version = int(version)
         except (TypeError, ValueError):
             version = SCHEMA_VERSION
+        # Profili di mappatura nomi: lista di stringhe non vuote (chiave assente o
+        # malformata → nessun profilo = nessuna mappatura, retro-compatibile).
+        raw_profiles = data.get("name_mapping_profiles", [])
+        if not isinstance(raw_profiles, list):
+            raw_profiles = []
+        profiles = [str(p).strip() for p in raw_profiles if str(p or "").strip()]
         return cls(
             name=str(data.get("name", "")),
             description=str(data.get("description", "")),
             version=version,
+            name_mapping_profiles=profiles,
+            team_separator=str(data.get("team_separator", "") or ""),
             # Modalità: SOLO la chiave assente/null (file legacy pre-feature) → "" =
             # eredita il globale. Un `mode` ESPLICITO valido è tenuto; `""` esplicito è
             # l'eredità scelta dalla GUI; un valore malformato (typo, file corrotto) →

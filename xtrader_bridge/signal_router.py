@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from . import (
     custom_parser_engine,
     custom_pipeline,
+    name_mapping_store,
     parser_manager,
     recognition,
     source_manager,
@@ -221,8 +222,16 @@ def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str =
         # (`Obblig.` sulla colonna Price): unico comando, niente più interruttore
         # globale. Price obbligatorio → quota richiesta; opzionale → Price vuoto ammesso.
         require_price = defn.price_required()
+        # Mappatura nomi squadra (PR name-mapping): se il parser seleziona dei profili,
+        # risolvi le loro righe da config e passale al pipeline, che tradurrà l'EventName
+        # provider → Betfair/XTrader (o scarterà il segnale con MAPPING_MISSING). Nessun
+        # profilo selezionato → None → EventName invariato (retro-compatibile).
+        name_mapping_profiles = (
+            name_mapping_store.entries_for_profiles(cfg, defn.name_mapping_profiles)
+            if defn.name_mapping_profiles else None)
         res = custom_pipeline.build_validated_row(
-            defn, text, provider=provider, mode=mode, require_price=require_price)
+            defn, text, provider=provider, mode=mode, require_price=require_price,
+            name_mapping_profiles=name_mapping_profiles)
         if not res.placeable:
             return RouteResult(None, res.status, CUSTOM, res.detail, list(res.missing_required))
         # Gate di contenuto: la riga è piazzabile, ma il parser deve aver estratto

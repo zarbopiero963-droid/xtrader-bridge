@@ -95,6 +95,33 @@ Traducono il valore grezzo nel valore esatto XTrader. Disponibili:
 **Sicuro**: value-map sconosciuta o valore non mappato → vuoto (→ "Non pronto"),
 mai un lato/selezione tradotto a caso.
 
+### Mappatura nomi squadra (`name_mapping_profiles` + `team_separator`)
+
+Un canale può scrivere le squadre con nomi diversi da quelli che XTrader/Betfair si
+aspettano nell'`EventName` (alias, abbreviazioni, lingue diverse). I **profili di
+mappatura nomi** (`name_mapping_store`, config `name_mappings`) traducono i nomi
+provider nei nomi Betfair/XTrader **prima** della scrittura:
+
+- ogni profilo è una tabella a campi liberi `Betfair/XTrader ↔ Provider` (+ `Country`
+  organizzativo); entrambe le colonne le compili tu;
+- il parser seleziona uno o più profili (`name_mapping_profiles`) e indica il
+  separatore casa/trasferta del canale (`team_separator`, testo libero: `v`, `vs`,
+  `-`, `/`; vuoto = default `v`). I separatori **alfabetici** (`v`/`vs`) richiedono
+  spazi attorno, così `Liverpool` non viene spezzato sulla `v` interna;
+- l'`EventName` viene diviso, casa e trasferta tradotte e ricomposte nel formato
+  XTrader `Casa - Trasferta` (`dizionario.compose_event_name`);
+- **multi-profilo**: i profili selezionati si applicano nell'ordine dato; in caso di
+  conflitto vince la **prima** corrispondenza (deterministico).
+
+**Sicuro (fail-closed)**: se il separatore non si trova **o** una squadra non è nei
+profili, lo stato è `MAPPING_MISSING` → **nessuna riga CSV** (un evento sbagliato =
+scommessa sbagliata). Nessun nome squadra viene mai tradotto "a caso". Un parser
+**senza profili** non applica alcuna mappatura (`EventName` invariato,
+retro-compatibile).
+
+> La **GUI** del dizionario nomi (tab dedicata + selettore profili nel builder)
+> arriva in un secondo step; questo step copre motore, persistenza e runtime.
+
 ---
 
 ## 2bis. Modalità di riconoscimento e griglia a 14 colonne
@@ -256,6 +283,7 @@ comportamento legacy (tutte le chat ammesse — responsabilità dell'utente).
 | Modello dati + persistenza | `custom_parser.py` | `tests/unit/test_custom_parser_model.py` |
 | Motore di estrazione (delimitatori tolleranti) | `custom_parser_engine.py` | `tests/unit/test_custom_parser_engine.py` |
 | Value-map (bettype + dizionario) | `value_maps.py` | `tests/unit/test_value_maps.py` |
+| Mappatura nomi squadra (profili) | `name_mapping_store.py` | `tests/unit/test_name_mapping.py` |
 | Trasformazioni | `transforms.py` | `tests/unit/test_transforms.py` |
 | Riga validata col contratto | `custom_pipeline.py` | `tests/unit/test_custom_pipeline.py` |
 | Diagnostica «Prova messaggio» (per-campo) | `parser_diagnostics.py` | `tests/unit/test_parser_diagnostics.py` |
