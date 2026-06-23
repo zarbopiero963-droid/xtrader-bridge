@@ -385,16 +385,19 @@ class CustomParserWindow(ctk.CTkToplevel):
         # Modalità EFFETTIVA per l'anteprima: quella scelta; se "(eredita globale)" ("")
         # usa la modalità globale, così "Prova messaggio" combacia col runtime (Codex).
         mode = self._label_to_mode(self._mode_var.get()) or self._global_mode
-        # Verdetto sintetico (riga risultante) + diagnostica per-campo (CP-08b).
+        # Verdetto sintetico + diagnostica per-campo (CP-08b). Il verdetto usa la
+        # diagnostica (`diag.placeable`/`diag.status`), che include ANCHE il gate di
+        # contenuto: così "Prova messaggio" non dice "Pronto" per un parser che il
+        # runtime scarterebbe come NO_CONTENT_MATCH (Codex).
         res = self.builder.test_message(message, provider=self._provider, mode=mode)
-        if res.placeable:
+        diag = parser_diagnostics.diagnose(
+            self.builder.to_def(), message, provider=self._provider, mode=mode)
+        if diag.placeable:
             riga = ", ".join(f"{k}={v}" for k, v in res.row.items() if v != "")
             self._result.configure(text=f"✅ Pronto · {riga}")
         else:
             extra = f" · mancanti: {', '.join(res.missing_required)}" if res.missing_required else ""
-            self._result.configure(text=f"⛔ Non pronto ({res.status}){extra}")
-        diag = parser_diagnostics.diagnose(
-            self.builder.to_def(), message, provider=self._provider, mode=mode)
+            self._result.configure(text=f"⛔ Non pronto ({diag.status}){extra}")
         self._last_report = parser_diagnostics.format_report(diag)
         self._diag_box.delete("1.0", "end")
         self._diag_box.insert("1.0", self._last_report)

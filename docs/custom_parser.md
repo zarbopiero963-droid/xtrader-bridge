@@ -147,8 +147,14 @@ Tutti questi gate devono passare perché una riga venga scritta:
    sarebbe "piazzabile" su qualsiasi testo (anche vuoto). Nel live, che bypassa il
    prefiltro marker per i parser custom attivi, questo scriverebbe lo stesso bet
    su ogni messaggio. Perciò una riga è accettata solo se **almeno una regola di
-   estrazione** ha trovato un valore nel messaggio (stato `NO_CONTENT_MATCH`
-   altrimenti).
+   estrazione che rappresenta contenuto di segnale** (non `fixed_value`) ha trovato un
+   valore nel messaggio: una regola **obbligatoria** (`required`) **oppure** una regola su
+   un **campo di riconoscimento rilevante per la modalità** (in `NAME_ONLY` i campi nome,
+   in `ID_ONLY` i campi ID, in `BOTH` entrambi i set) — stato `NO_CONTENT_MATCH`
+   altrimenti. Un'estrazione **opzionale** "larga" su un campo **non** di riconoscimento
+   (es. una nota) non basta: non deve far passare un messaggio non-segnale che la attiva
+   per caso (A10). Per usare un campo non di riconoscimento come "trigger" di contenuto,
+   marcalo **obbligatorio**.
 4. **Approvazione chat**: un parser è usato solo per la chat **configurata**
    (`chat_id`) o per le chat con voce esplicita in `parser_by_chat`. Un
    `active_parser` globale **non** fa scommettere chat non approvate.
