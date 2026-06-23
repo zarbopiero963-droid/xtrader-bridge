@@ -20,10 +20,14 @@ import re
 import threading
 from dataclasses import dataclass, field
 
-from . import recognition, validator, value_maps
+from . import name_mapping_store, recognition, validator, value_maps
 from .csv_writer import DEFAULT_HANDICAP, DEFAULT_POINTS
 from .custom_parser import CustomParserDef
 from .custom_parser_engine import apply_parser
+
+# Separatore casa/trasferta di default quando il parser richiede la mappatura nomi
+# ma non specifica `team_separator` (Betfair usa "Casa v Trasferta").
+_DEFAULT_TEAM_SEPARATOR = "v"
 
 # Registro value-map di default del pipeline: include il dizionario (le mappe
 # markettype/marketname/selectionname usate dallo skeleton e dai parser reali).
@@ -49,6 +53,9 @@ def _default_registry() -> dict:
 NOT_READY = "NOT_READY"   # gate parser: manca un campo obbligatorio della regola
 INVALID_MISSING_PROVIDER = "INVALID_MISSING_PROVIDER"  # Provider assente (contratto)
 INVALID_HANDICAP = "INVALID_HANDICAP"  # Handicap valorizzato ma non numerico
+# Mappatura nomi richiesta ma EventName non traducibile (separatore non trovato o una
+# squadra non nei profili): fail-closed, nessuna riga (un evento sbagliato = bet sbagliato).
+MAPPING_MISSING = "MAPPING_MISSING"
 
 # Handicap: numero con segno opzionale (es. "0", "-1", "0.5", "+1,5").
 _HANDICAP_RE = re.compile(r"^[+-]?\d+(?:[.,]\d+)?$")
@@ -104,7 +111,8 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
                         value_maps_registry: dict = None,
                         provider: str = "",
                         mode: str = recognition.DEFAULT_MODE,
-                        require_price: bool = True) -> PipelineResult:
+                        require_price: bool = True,
+                        name_mapping_profiles=None) -> PipelineResult:
     """Applica il parser al messaggio e valida la riga risultante.
 
     `provider` è fornito dal runtime/config (come per il parser hardcoded) e
@@ -113,6 +121,13 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
     `value_maps_registry` di default include il dizionario (built-in + mappe
     markettype/marketname/selectionname), così i parser/skeleton che usano quelle
     value-map risolvono senza che il chiamante debba passare un registro.
+
+    `name_mapping_profiles` (lista di liste-di-righe, vedi `name_mapping_store`):
+    se il parser richiede la mappatura nomi (`defn.name_mapping_profiles` non vuoto)
+    **e** questi dati sono forniti (non `None`), l'`EventName` provider viene tradotto
+    nel nome Betfair/XTrader PRIMA della validazione; se non è traducibile lo stato è
+    `MAPPING_MISSING` (fail-closed, nessuna riga). Quando è `None` (es. diagnostica
+    senza config) la mappatura è saltata e l'`EventName` resta invariato.
 
     Ritorna un `PipelineResult`: `placeable` True solo se supera il gate "Non
     pronto" del parser, ha un `Provider` E passa la validazione (modalità +
@@ -136,6 +151,18 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
     hcap = str(row.get("Handicap", "")).strip()
     if hcap and not _HANDICAP_RE.match(hcap):
         return PipelineResult(INVALID_HANDICAP, row, list(res.missing_required))
+
+    # Mappatura nomi squadra: traduce l'EventName provider nel nome Betfair/XTrader.
+    # Si applica solo se il parser la richiede E i profili sono forniti (il chiamante
+    # live li risolve da config; la diagnostica senza config passa None → salta).
+    if defn.name_mapping_profiles and name_mapping_profiles is not None:
+        sep = (defn.team_separator or "").strip() or _DEFAULT_TEAM_SEPARATOR
+        mapped = name_mapping_store.resolve_event_name(
+            row.get("EventName", ""), sep, name_mapping_profiles)
+        if mapped is None:
+            return PipelineResult(MAPPING_MISSING, row, list(res.missing_required))
+        row = dict(row)
+        row["EventName"] = mapped
 
     status, detail = validator.validate(row, mode, require_price)
     return PipelineResult(status, row, list(res.missing_required), detail)
