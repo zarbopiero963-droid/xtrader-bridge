@@ -1,7 +1,7 @@
 """Test dell'instradamento del segnale (CP-09): custom attivo vs hardcoded."""
 
 from xtrader_bridge import custom_parser as cp
-from xtrader_bridge import parser_io, signal_router
+from xtrader_bridge import custom_pipeline, parser_io, signal_router
 
 
 def _save_example(dir_path, name="Esempio P.Bet."):
@@ -156,6 +156,9 @@ def test_quota_governata_dalla_riga_price_del_parser(tmp_path):
     cp.save_parser(req, str(tmp_path))
     ko = signal_router.resolve_row(msg, cfg, chat_id="42", parsers_dir=str(tmp_path))
     assert ko.placeable is False
+    # Scartato proprio per la quota mancante (Price obbligatorio vuoto), non per altro.
+    assert ko.status == custom_pipeline.NOT_READY
+    assert "Price" in ko.missing_required
 
 
 def test_custom_inesistente_ignora_il_messaggio(tmp_path):

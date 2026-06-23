@@ -90,6 +90,13 @@ def test_require_price_non_e_piu_chiave_globale(tmp_path):
     p = str(tmp_path / "config.json")
     config_store.save_config({"provider": "TG", "custom_flag": False}, p)
     assert config_store.load_config(p)["custom_flag"] is False
+    # Compat: una vecchia config con `require_price` NON va in crash e la chiave legacy
+    # sopravvive (semplicemente ignorata a runtime, governata ora dalla riga Price).
+    p2 = str(tmp_path / "legacy.json")
+    config_store.save_config({"provider": "TG", "require_price": False}, p2)
+    loaded = config_store.load_config(p2)
+    assert loaded["require_price"] is False        # non rimossa, non causa errori
+    assert loaded["provider"] == "TG"
 
 
 # ── PR-04: cartella utente, migrazione, versione ──
