@@ -1015,6 +1015,19 @@ class App(ctk.CTk):
                 # (`live_guard`), path CSV e token NON cambiano a metà sessione (richiedono
                 # riavvio), per non far scattare una scommessa reale o un CSV stantio per sbaglio.
                 route = self._config if isinstance(self._config, dict) else cfg
+                # Difesa-in-profondità sul filtro chat (CodeRabbit): `_start` rifiuta
+                # l'avvio se la config NON ha alcun criterio chat (`has_chat_filter`),
+                # perché "nessun filtro" significherebbe "ammetti ogni chat". Col
+                # live-reload quel fail-fast d'avvio non protegge più il runtime, quindi
+                # ripetiamo qui lo stesso gate sulla config VIVA: se l'utente azzera chat_id,
+                # parser_by_chat e sorgenti mentre il bridge gira, il messaggio è ignorato
+                # (fail-closed). (`should_process` è già stretto via `_chat_approved_for_custom`,
+                # ma questo guard rende esplicito l'invariante "solo chat configurate".)
+                if not signal_router.has_chat_filter(route):
+                    self.after(0, lambda: self._log(
+                        "⚠️ Config live senza filtro chat: messaggio ignorato per sicurezza "
+                        "(configura chat/sorgenti, poi salva)."))
+                    return
                 # PR-23: la chat notifiche XTrader (SEPARATA dalle sorgenti) porta
                 # ESITI, non segnali → percorso di conferma, non di scrittura.
                 notif = str(cfg.get("xtrader_notification_chat_id", "") or "").strip()

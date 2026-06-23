@@ -61,6 +61,17 @@ def test_routing_riflette_mappatura_aggiunta_senza_riavvio(tmp_path):
     assert new.row["EventName"] == "Liverpool - Leeds"
 
 
+def test_should_process_fail_closed_senza_filtro_chat(tmp_path):
+    # Difesa-in-profondità (CodeRabbit): una config viva SENZA criterio chat
+    # (chat_id/parser_by_chat/sources vuoti) ma con active_parser NON deve far processare
+    # chat arbitrarie. `has_chat_filter` è False e `should_process` resta False: il listener
+    # (oltre al guard esplicito in `app._handle`) non instrada nessuna chat non configurata.
+    cp.save_parser(_mapping_parser(), str(tmp_path))
+    no_filter = {"provider": "TG", "active_parser": "Map", "recognition_mode": "NAME_ONLY"}
+    assert signal_router.has_chat_filter(no_filter) is False
+    assert signal_router.should_process(no_filter, "12345", _MSG, parsers_dir=str(tmp_path)) is False
+
+
 def test_should_process_riflette_chat_aggiunta_senza_riavvio(tmp_path):
     # Anche l'ammissione chat usa la config viva: una chat non ancora ammessa diventa
     # processabile appena la config (parser_by_chat) la include, senza riavvio.
