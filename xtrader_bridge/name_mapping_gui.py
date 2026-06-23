@@ -212,11 +212,21 @@ class NameMappingWindow(ctk.CTkToplevel):
             if cfg is not None:
                 cfg = name_mapping_store.set_entries(cfg, self._current, self._collect_rows())
                 saved, ok = config_store.save_config(cfg, config_store.CONFIG_FILE)
+                if not ok:
+                    # Auto-save fallito: ANNULLA il cambio profilo invece di proseguire,
+                    # altrimenti `_reload_rows` cancellerebbe le righe non salvate. Tieni
+                    # il profilo corrente a schermo così l'utente può riprovare (Codex).
+                    self._profile_var.set(self._current)
+                    self._status.configure(
+                        text="❌ Salvataggio FALLITO: cambio profilo annullato, modifiche "
+                             "mantenute a schermo. Controlla permessi/spazio del file config.",
+                        text_color="#ef5350")
+                    return
                 # Propaga al parent anche l'auto-save (non solo i salvataggi espliciti),
                 # altrimenti la GUI principale resta con un `self._config` stantio e un
                 # successivo "Salva Config"/START potrebbe sovrascrivere le mappature
                 # appena auto-salvate (Codex).
-                if ok and callable(self._on_saved):
+                if callable(self._on_saved):
                     self._on_saved(saved)
         self._current = new
         self._profile_var.set(new or self._NO_PROFILE)
@@ -270,10 +280,18 @@ class NameMappingWindow(ctk.CTkToplevel):
             # Aggiorna i riferimenti nei parser salvati che usano il vecchio nome, così non
             # restano a chiedere un profilo inesistente (→ MAPPING_MISSING silenzioso).
             try:
-                updated = custom_parser.rename_mapping_profile_in_files(old, new)
+                updated, failed = custom_parser.rename_mapping_profile_in_files(old, new)
             except Exception:                    # noqa: BLE001 — il rename del profilo resta valido
-                updated = []
-            if updated:
+                updated, failed = [], []
+            if failed:
+                # Alcuni parser non si sono potuti riscrivere: restano sul vecchio nome
+                # mentre la config ha il nuovo → quei segnali andrebbero scartati. Avvisa.
+                self._status.configure(
+                    text=f"⚠️ Profilo rinominato «{old}» → «{new}», ma {len(failed)} parser "
+                         f"NON aggiornati ({', '.join(failed)}): correggili a mano o quei "
+                         "segnali verranno scartati (MAPPING_MISSING).",
+                    text_color="#ffa726")
+            elif updated:
                 self._status.configure(
                     text=f"✏️ Profilo rinominato «{old}» → «{new}» · {len(updated)} parser aggiornati.",
                     text_color="#66bb6a")

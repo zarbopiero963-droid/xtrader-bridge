@@ -255,15 +255,16 @@ def test_rename_mapping_profile_in_files_aggiorna_riferimenti(tmp_path):
     other.name = "Other"
     cp.save_parser(other, d)
 
-    updated = cp.rename_mapping_profile_in_files("Premier", "EPL", d)
+    updated, failed = cp.rename_mapping_profile_in_files("Premier", "EPL", d)
     assert updated == ["Using"]
+    assert failed == []
     reloaded = cp.load_parser(cp.parser_path("Using", d))
     assert reloaded.name_mapping_profiles == ["B", "EPL"]          # ordine preservato
     # Parser che non usa il profilo: invariato.
     assert cp.load_parser(cp.parser_path("Other", d)).name_mapping_profiles == ["Altro"]
     # No-op: nuovo nome vuoto / uguale al vecchio.
-    assert cp.rename_mapping_profile_in_files("EPL", "EPL", d) == []
-    assert cp.rename_mapping_profile_in_files("EPL", "", d) == []
+    assert cp.rename_mapping_profile_in_files("EPL", "EPL", d) == ([], [])
+    assert cp.rename_mapping_profile_in_files("EPL", "", d) == ([], [])
 
 
 def test_rename_mapping_profile_in_files_evita_duplicati(tmp_path):
@@ -272,7 +273,8 @@ def test_rename_mapping_profile_in_files_evita_duplicati(tmp_path):
     defn = _mapping_parser(profiles=("A", "B"))
     defn.name = "Dup"
     cp.save_parser(defn, d)
-    assert cp.rename_mapping_profile_in_files("A", "B", d) == ["Dup"]
+    updated, failed = cp.rename_mapping_profile_in_files("A", "B", d)
+    assert updated == ["Dup"] and failed == []
     assert cp.load_parser(cp.parser_path("Dup", d)).name_mapping_profiles == ["B"]
 
 

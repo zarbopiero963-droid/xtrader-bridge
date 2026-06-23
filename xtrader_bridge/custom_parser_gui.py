@@ -115,7 +115,20 @@ class CustomParserWindow(ctk.CTkToplevel):
         checked = {name for name, var in self._profile_checks.items() if var.get()}
         ordered = [n for n in self.builder.name_mapping_profiles if n in checked]
         ordered += [n for n in self._profile_checks if n in checked and n not in ordered]
+        # Preserva i profili richiesti dal parser ma SENZA checkbox (profilo eliminato/
+        # rinominato nel dizionario, o config caricata vuota): non vanno persi in silenzio
+        # — altrimenti un parser mappato diventerebbe di nascosto "senza mappatura" e
+        # l'EventName grezzo passerebbe a XTrader. `_unresolved_selected` li intercetta e
+        # blocca salvataggio/anteprima finché non sono risolti (Codex).
+        ordered += [n for n in self.builder.name_mapping_profiles
+                    if n not in self._profile_checks and n not in ordered]
         return ordered
+
+    def _unresolved_selected(self) -> list:
+        """Profili selezionati che non corrispondono a un profilo ESISTENTE (nessuna
+        checkbox). Finché ce ne sono, `_save`/`_test` si bloccano: una mappatura richiesta
+        ma non risolvibile non deve diventare in silenzio «nessuna mappatura»."""
+        return [n for n in self._selected_profiles() if n not in self._profile_checks]
 
     @staticmethod
     def _resolve_mapping_profiles(defn):
@@ -368,6 +381,12 @@ class CustomParserWindow(ctk.CTkToplevel):
     # ── azioni ────────────────────────────────────────────────────────────
     def _save(self):
         self._sync_to_builder()
+        unresolved = self._unresolved_selected()
+        if unresolved:
+            self._result.configure(
+                text=f"⛔ Non salvato: profili di mappatura mancanti ({', '.join(unresolved)}). "
+                     "Ricreali nel «Dizionario nomi» o togli la spunta prima di salvare.")
+            return
         errors = self.builder.errors()
         if errors:
             self._result.configure(text="❌ Non salvato:\n- " + "\n- ".join(errors))
@@ -483,6 +502,14 @@ class CustomParserWindow(ctk.CTkToplevel):
 
     def _test(self):
         self._sync_to_builder()
+        unresolved = self._unresolved_selected()
+        if unresolved:
+            # Mappatura richiesta ma con profili non risolvibili: non mostrare un'anteprima
+            # fuorviante (col rischio di EventName grezzo). Blocca con spiegazione (Codex).
+            self._result.configure(
+                text=f"⛔ Non pronto: profili di mappatura mancanti ({', '.join(unresolved)}). "
+                     "Ricreali nel «Dizionario nomi» o togli la spunta.")
+            return
         message = self._msg_box.get("1.0", "end").rstrip("\n")
         # Modalità EFFETTIVA per l'anteprima: quella scelta; se "(eredita globale)" ("")
         # usa la modalità globale, così "Prova messaggio" combacia col runtime (Codex).

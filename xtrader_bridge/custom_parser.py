@@ -385,25 +385,27 @@ def list_parser_files(dir_path: str = None) -> list:
     )
 
 
-def rename_mapping_profile_in_files(old: str, new: str, dir_path: str = None) -> list:
+def rename_mapping_profile_in_files(old: str, new: str, dir_path: str = None) -> tuple:
     """Aggiorna i riferimenti a un profilo di mappatura **rinominato** (``old`` → ``new``)
     in tutti i parser salvati: i parser che hanno ``old`` in ``name_mapping_profiles``
     vengono riscritti con ``new`` nella **stessa posizione** (l'ordine conta per la
-    precedenza in `name_mapping_store.resolve_team`), senza duplicati. Ritorna i nomi dei
-    parser aggiornati.
+    precedenza in `name_mapping_store.resolve_team`), senza duplicati.
+
+    Ritorna la coppia ``(updated, failed)``: nomi dei parser aggiornati con successo e
+    nomi di quelli che referenziavano ``old`` ma **non si sono potuti riscrivere**
+    (cartella in sola lettura, collisione di nome file, I/O transitorio). I `failed` NON
+    vengono nascosti: il chiamante deve segnalarli, perché restano col vecchio nome mentre
+    la config ha già il nuovo → quei segnali andrebbero in ``MAPPING_MISSING`` (Codex).
 
     Serve perché il nome del profilo è memorizzato **per stringa** nel JSON del parser e
-    risolto esatto dal `signal_router`: senza questo aggiornamento, rinominare un profilo
-    in uso lascerebbe i parser a chiedere il vecchio nome → profilo vuoto → ogni segnale
-    mappato diventa ``MAPPING_MISSING`` in silenzio (Codex).
-
-    Best-effort: un file non caricabile/non valido viene **saltato** (non blocca gli altri
-    né solleva); i parser che non referenziano ``old`` non vengono toccati."""
+    risolto esatto dal `signal_router`. I file non caricabili/non validi vengono saltati
+    (non referenziano in modo affidabile ``old``); i parser che non usano ``old`` non
+    vengono toccati."""
     o = str(old or "").strip()
     n = str(new or "").strip()
     if not o or not n or o == n:
-        return []
-    updated = []
+        return [], []
+    updated, failed = [], []
     for path in list_parser_files(dir_path):
         try:
             defn = load_parser(path)
@@ -422,8 +424,8 @@ def rename_mapping_profile_in_files(old: str, new: str, dir_path: str = None) ->
             save_parser(defn, dir_path)
             updated.append(defn.name)
         except (OSError, ValueError):
-            continue
-    return updated
+            failed.append(defn.name)
+    return updated, failed
 
 
 def parsers_using_mapping_profile(name: str, dir_path: str = None) -> list:
