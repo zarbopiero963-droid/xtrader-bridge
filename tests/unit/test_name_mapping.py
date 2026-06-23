@@ -276,6 +276,22 @@ def test_rename_mapping_profile_in_files_evita_duplicati(tmp_path):
     assert cp.load_parser(cp.parser_path("Dup", d)).name_mapping_profiles == ["B"]
 
 
+def test_parsers_using_mapping_profile(tmp_path):
+    # Elenca i parser salvati che referenziano un profilo (per avvisare prima di
+    # eliminarlo): chi lo usa è listato, chi non lo usa no.
+    d = str(tmp_path)
+    a = _mapping_parser(profiles=("Premier", "Serie A"))
+    a.name = "A"
+    cp.save_parser(a, d)
+    b = _mapping_parser(profiles=("Serie A",))
+    b.name = "B"
+    cp.save_parser(b, d)
+    assert cp.parsers_using_mapping_profile("Premier", d) == ["A"]
+    assert sorted(cp.parsers_using_mapping_profile("Serie A", d)) == ["A", "B"]
+    assert cp.parsers_using_mapping_profile("Inesistente", d) == []
+    assert cp.parsers_using_mapping_profile("", d) == []
+
+
 def test_diagnose_non_mente_se_mappatura_richiesta_senza_profili():
     # Codex: "Prova messaggio" senza profili risolti deve risultare NON pronta
     # (MAPPING_MISSING su EventName), non un falso "Pronto" col nome grezzo.

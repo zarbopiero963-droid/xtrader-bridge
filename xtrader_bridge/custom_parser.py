@@ -426,6 +426,26 @@ def rename_mapping_profile_in_files(old: str, new: str, dir_path: str = None) ->
     return updated
 
 
+def parsers_using_mapping_profile(name: str, dir_path: str = None) -> list:
+    """Nomi dei parser salvati che referenziano il profilo di mappatura ``name`` in
+    ``name_mapping_profiles``. Serve ad **avvisare** prima di eliminare un profilo in
+    uso: cancellarlo lascerebbe quei parser a chiedere un profilo inesistente → ogni
+    segnale mappato diventa ``MAPPING_MISSING`` (scartato). Best-effort: i file non
+    caricabili vengono saltati."""
+    n = str(name or "").strip()
+    if not n:
+        return []
+    out = []
+    for path in list_parser_files(dir_path):
+        try:
+            defn = load_parser(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if n in defn.name_mapping_profiles:
+            out.append(defn.name)
+    return out
+
+
 def delete_parser(name: str, dir_path: str = None) -> bool:
     """Elimina il file di un parser salvato, risolvendo il path **per nome** con
     `_safe_filename` (anti path-traversal: un `name` con `..`/separatori non può

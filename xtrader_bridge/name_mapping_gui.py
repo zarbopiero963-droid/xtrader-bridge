@@ -169,11 +169,17 @@ class NameMappingWindow(ctk.CTkToplevel):
 
     # ── azioni profilo (persistono subito) ───────────────────────────────────
     def _persist(self, cfg: dict, ok_msg: str, fail_msg: str, select=None) -> bool:
-        """Salva `cfg`, sincronizza la GUI principale (on_saved) e ridisegna."""
+        """Salva `cfg`, sincronizza la GUI principale (on_saved) e ridisegna.
+
+        Solo su **successo** si ricarica da disco: se il salvataggio fallisce (cartella
+        in sola lettura, disco pieno, I/O transitorio) NON si rilegge il file, così le
+        righe appena digitate restano a schermo e non vengono perse mentre il messaggio
+        dice che non sono state salvate (Codex)."""
         saved, ok = config_store.save_config(cfg, config_store.CONFIG_FILE)
-        if ok and callable(self._on_saved):
-            self._on_saved(saved)
-        self._reload_profiles(select=select)
+        if ok:
+            if callable(self._on_saved):
+                self._on_saved(saved)
+            self._reload_profiles(select=select)
         self._status.configure(text=ok_msg if ok else fail_msg,
                                text_color="#66bb6a" if ok else "#ef5350")
         return ok
@@ -255,15 +261,22 @@ class NameMappingWindow(ctk.CTkToplevel):
         # Salva prima le modifiche correnti, poi rinomina (conserva le righe).
         cfg = name_mapping_store.set_entries(cfg, old, self._collect_rows())
         cfg = name_mapping_store.rename_profile(cfg, old, new)
-        # Aggiorna i riferimenti nei parser salvati che usano il vecchio nome, così non
-        # restano a chiedere un profilo inesistente (→ MAPPING_MISSING silenzioso, Codex).
-        try:
-            updated = custom_parser.rename_mapping_profile_in_files(old, new)
-        except Exception:                        # noqa: BLE001 — il rename del profilo resta valido
-            updated = []
-        extra = f" · {len(updated)} parser aggiornati" if updated else ""
-        self._persist(cfg, ok_msg=f"✏️ Profilo rinominato «{old}» → «{new}»{extra}.",
-                      fail_msg="❌ Salvataggio FALLITO: rinomina non applicata.", select=new)
+        # Persisti PRIMA la config; solo se il salvataggio riesce riscrivi i riferimenti
+        # nei parser salvati. Altrimenti, con un save config fallito, i parser punterebbero
+        # a `new` mentre la config ha ancora `old` → MAPPING_MISSING (Codex).
+        ok = self._persist(cfg, ok_msg=f"✏️ Profilo rinominato «{old}» → «{new}».",
+                           fail_msg="❌ Salvataggio FALLITO: rinomina non applicata.", select=new)
+        if ok:
+            # Aggiorna i riferimenti nei parser salvati che usano il vecchio nome, così non
+            # restano a chiedere un profilo inesistente (→ MAPPING_MISSING silenzioso).
+            try:
+                updated = custom_parser.rename_mapping_profile_in_files(old, new)
+            except Exception:                    # noqa: BLE001 — il rename del profilo resta valido
+                updated = []
+            if updated:
+                self._status.configure(
+                    text=f"✏️ Profilo rinominato «{old}» → «{new}» · {len(updated)} parser aggiornati.",
+                    text_color="#66bb6a")
 
     def _delete_profile(self):
         if not self._current:
@@ -273,7 +286,21 @@ class NameMappingWindow(ctk.CTkToplevel):
         if cfg is None:
             return
         name = self._current
+        # Avvisa se il profilo è ancora usato da parser salvati: la cancellazione li
+        # lascerebbe a chiedere un profilo inesistente → segnali scartati (MAPPING_MISSING,
+        # fail-closed). Non lo rimuoviamo in silenzio dai parser (disattivare la mappatura
+        # lascerebbe passare l'EventName grezzo): meglio avvisare e far decidere all'utente.
+        try:
+            affected = custom_parser.parsers_using_mapping_profile(name)
+        except Exception:                        # noqa: BLE001 — l'avviso è best-effort
+            affected = []
         cfg = name_mapping_store.delete_profile(cfg, name)
         self._current = None
-        self._persist(cfg, ok_msg=f"🗑 Profilo «{name}» eliminato.",
-                      fail_msg=f"❌ Salvataggio FALLITO: «{name}» non eliminato.")
+        ok = self._persist(cfg, ok_msg=f"🗑 Profilo «{name}» eliminato.",
+                           fail_msg=f"❌ Salvataggio FALLITO: «{name}» non eliminato.")
+        if ok and affected:
+            self._status.configure(
+                text=f"⚠️ «{name}» eliminato, ma è ancora selezionato in {len(affected)} parser "
+                     f"({', '.join(affected)}): quei segnali verranno scartati (MAPPING_MISSING) "
+                     "finché non togli il profilo da quei parser.",
+                text_color="#ffa726")
