@@ -106,8 +106,16 @@ class CustomParserWindow(ctk.CTkToplevel):
             self._profile_checks[name] = var
 
     def _selected_profiles(self) -> list:
-        """Profili spuntati, nell'ordine di visualizzazione (deterministico)."""
-        return [name for name, var in self._profile_checks.items() if var.get()]
+        """Profili spuntati, **preservando l'ordine** scelto nel parser: l'ordine dei
+        profili è significativo (in `resolve_team` vince la prima corrispondenza), quindi
+        i profili già presenti in `builder.name_mapping_profiles` mantengono la loro
+        posizione; gli eventuali profili appena spuntati si aggiungono in coda (ordine di
+        visualizzazione). Così aprire e ri-salvare un parser con profili ['B','A'] NON li
+        riordina alfabeticamente cambiando la precedenza (Codex P1)."""
+        checked = {name for name, var in self._profile_checks.items() if var.get()}
+        ordered = [n for n in self.builder.name_mapping_profiles if n in checked]
+        ordered += [n for n in self._profile_checks if n in checked and n not in ordered]
+        return ordered
 
     @staticmethod
     def _resolve_mapping_profiles(defn):

@@ -19,7 +19,7 @@ coperta da `tests/unit/test_name_mapping.py`. Verifica manuale su Windows.
 
 import customtkinter as ctk
 
-from . import config_store, name_mapping_store
+from . import config_store, custom_parser, name_mapping_store
 
 
 class NameMappingWindow(ctk.CTkToplevel):
@@ -205,7 +205,13 @@ class NameMappingWindow(ctk.CTkToplevel):
             cfg = self._load_cfg()
             if cfg is not None:
                 cfg = name_mapping_store.set_entries(cfg, self._current, self._collect_rows())
-                config_store.save_config(cfg, config_store.CONFIG_FILE)
+                saved, ok = config_store.save_config(cfg, config_store.CONFIG_FILE)
+                # Propaga al parent anche l'auto-save (non solo i salvataggi espliciti),
+                # altrimenti la GUI principale resta con un `self._config` stantio e un
+                # successivo "Salva Config"/START potrebbe sovrascrivere le mappature
+                # appena auto-salvate (Codex).
+                if ok and callable(self._on_saved):
+                    self._on_saved(saved)
         self._current = new
         self._profile_var.set(new or self._NO_PROFILE)
         self._reload_rows()
@@ -222,6 +228,10 @@ class NameMappingWindow(ctk.CTkToplevel):
         if name in name_mapping_store.profile_names(cfg):
             self._status.configure(text=f"ℹ️ Il profilo «{name}» esiste già.", text_color="gray")
             return
+        # Salva prima le righe in editing del profilo corrente: passare a quello nuovo
+        # non deve perdere le modifiche non ancora salvate (Codex).
+        if self._current:
+            cfg = name_mapping_store.set_entries(cfg, self._current, self._collect_rows())
         cfg = name_mapping_store.add_profile(cfg, name)
         self._persist(cfg, ok_msg=f"🆕 Profilo «{name}» creato.",
                       fail_msg=f"❌ Salvataggio FALLITO: «{name}» non creato.", select=name)
@@ -241,10 +251,18 @@ class NameMappingWindow(ctk.CTkToplevel):
         if new in name_mapping_store.profile_names(cfg):
             self._status.configure(text=f"ℹ️ Il profilo «{new}» esiste già.", text_color="gray")
             return
+        old = self._current
         # Salva prima le modifiche correnti, poi rinomina (conserva le righe).
-        cfg = name_mapping_store.set_entries(cfg, self._current, self._collect_rows())
-        cfg = name_mapping_store.rename_profile(cfg, self._current, new)
-        self._persist(cfg, ok_msg=f"✏️ Profilo rinominato «{self._current}» → «{new}».",
+        cfg = name_mapping_store.set_entries(cfg, old, self._collect_rows())
+        cfg = name_mapping_store.rename_profile(cfg, old, new)
+        # Aggiorna i riferimenti nei parser salvati che usano il vecchio nome, così non
+        # restano a chiedere un profilo inesistente (→ MAPPING_MISSING silenzioso, Codex).
+        try:
+            updated = custom_parser.rename_mapping_profile_in_files(old, new)
+        except Exception:                        # noqa: BLE001 — il rename del profilo resta valido
+            updated = []
+        extra = f" · {len(updated)} parser aggiornati" if updated else ""
+        self._persist(cfg, ok_msg=f"✏️ Profilo rinominato «{old}» → «{new}»{extra}.",
                       fail_msg="❌ Salvataggio FALLITO: rinomina non applicata.", select=new)
 
     def _delete_profile(self):

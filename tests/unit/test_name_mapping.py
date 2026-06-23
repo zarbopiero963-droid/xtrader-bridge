@@ -244,6 +244,38 @@ def test_custom_parser_default_retrocompatibile():
     assert back.team_separator == ""
 
 
+def test_rename_mapping_profile_in_files_aggiorna_riferimenti(tmp_path):
+    # Codex: rinominare un profilo deve aggiornare i parser che lo referenziano,
+    # preservando ordine e senza duplicati; chi non lo usa resta intatto.
+    d = str(tmp_path)
+    using = _mapping_parser(profiles=("B", "Premier"), separator="v")
+    using.name = "Using"
+    cp.save_parser(using, d)
+    other = _mapping_parser(profiles=("Altro",))
+    other.name = "Other"
+    cp.save_parser(other, d)
+
+    updated = cp.rename_mapping_profile_in_files("Premier", "EPL", d)
+    assert updated == ["Using"]
+    reloaded = cp.load_parser(cp.parser_path("Using", d))
+    assert reloaded.name_mapping_profiles == ["B", "EPL"]          # ordine preservato
+    # Parser che non usa il profilo: invariato.
+    assert cp.load_parser(cp.parser_path("Other", d)).name_mapping_profiles == ["Altro"]
+    # No-op: nuovo nome vuoto / uguale al vecchio.
+    assert cp.rename_mapping_profile_in_files("EPL", "EPL", d) == []
+    assert cp.rename_mapping_profile_in_files("EPL", "", d) == []
+
+
+def test_rename_mapping_profile_in_files_evita_duplicati(tmp_path):
+    # Se il nuovo nome è già presente nel parser, il rename non crea duplicati.
+    d = str(tmp_path)
+    defn = _mapping_parser(profiles=("A", "B"))
+    defn.name = "Dup"
+    cp.save_parser(defn, d)
+    assert cp.rename_mapping_profile_in_files("A", "B", d) == ["Dup"]
+    assert cp.load_parser(cp.parser_path("Dup", d)).name_mapping_profiles == ["B"]
+
+
 def test_diagnose_non_mente_se_mappatura_richiesta_senza_profili():
     # Codex: "Prova messaggio" senza profili risolti deve risultare NON pronta
     # (MAPPING_MISSING su EventName), non un falso "Pronto" col nome grezzo.

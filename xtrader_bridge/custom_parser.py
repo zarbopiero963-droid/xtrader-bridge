@@ -385,6 +385,47 @@ def list_parser_files(dir_path: str = None) -> list:
     )
 
 
+def rename_mapping_profile_in_files(old: str, new: str, dir_path: str = None) -> list:
+    """Aggiorna i riferimenti a un profilo di mappatura **rinominato** (``old`` → ``new``)
+    in tutti i parser salvati: i parser che hanno ``old`` in ``name_mapping_profiles``
+    vengono riscritti con ``new`` nella **stessa posizione** (l'ordine conta per la
+    precedenza in `name_mapping_store.resolve_team`), senza duplicati. Ritorna i nomi dei
+    parser aggiornati.
+
+    Serve perché il nome del profilo è memorizzato **per stringa** nel JSON del parser e
+    risolto esatto dal `signal_router`: senza questo aggiornamento, rinominare un profilo
+    in uso lascerebbe i parser a chiedere il vecchio nome → profilo vuoto → ogni segnale
+    mappato diventa ``MAPPING_MISSING`` in silenzio (Codex).
+
+    Best-effort: un file non caricabile/non valido viene **saltato** (non blocca gli altri
+    né solleva); i parser che non referenziano ``old`` non vengono toccati."""
+    o = str(old or "").strip()
+    n = str(new or "").strip()
+    if not o or not n or o == n:
+        return []
+    updated = []
+    for path in list_parser_files(dir_path):
+        try:
+            defn = load_parser(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if o not in defn.name_mapping_profiles:
+            continue
+        seen, newlist = set(), []
+        for p in defn.name_mapping_profiles:
+            p2 = n if p == o else p
+            if p2 not in seen:
+                seen.add(p2)
+                newlist.append(p2)
+        defn.name_mapping_profiles = newlist
+        try:
+            save_parser(defn, dir_path)
+            updated.append(defn.name)
+        except (OSError, ValueError):
+            continue
+    return updated
+
+
 def delete_parser(name: str, dir_path: str = None) -> bool:
     """Elimina il file di un parser salvato, risolvendo il path **per nome** con
     `_safe_filename` (anti path-traversal: un `name` con `..`/separatori non può
