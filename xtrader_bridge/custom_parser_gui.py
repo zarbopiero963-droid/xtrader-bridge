@@ -176,10 +176,13 @@ class CustomParserWindow(ctk.CTkToplevel):
         self._msg_box.pack(fill="both", expand=True, padx=6, pady=4)
         self._result = ctk.CTkLabel(test, text="", anchor="w", justify="left")
         self._result.pack(fill="x", padx=6, pady=4)
-        # Diagnostica per-campo (CP-08b): perché "Non pronto", colonna per colonna.
-        ctk.CTkLabel(test, text="Diagnostica:").pack(anchor="w", padx=6)
-        self._diag_box = ctk.CTkTextbox(test, height=160)
-        self._diag_box.pack(fill="both", expand=True, padx=6, pady=(0, 4))
+        # Diagnostica per-campo (CP-08b): TABELLA — perché "Non pronto", colonna per colonna.
+        ctk.CTkLabel(test, text="Diagnostica (una riga per colonna):").pack(anchor="w", padx=6)
+        self._diag_table = ctk.CTkScrollableFrame(test, height=200)
+        self._diag_table.pack(fill="both", expand=True, padx=6, pady=(0, 4))
+        # Larghezze colonne della tabella diagnostica (px), in ordine.
+        self._diag_cols = (("Colonna", 110), ("Stato", 64), ("Motivo", 280),
+                           ("Inizia dopo", 120), ("Finisce prima", 120), ("Valore estratto", 170))
         self._last_report = ""   # testo per "Copia diagnostica"
 
     # ── righe regola ──────────────────────────────────────────────────────
@@ -405,8 +408,27 @@ class CustomParserWindow(ctk.CTkToplevel):
             extra = f" · mancanti: {', '.join(res.missing_required)}" if res.missing_required else ""
             self._result.configure(text=f"⛔ Non pronto ({diag.status}){extra}")
         self._last_report = parser_diagnostics.format_report(diag)
-        self._diag_box.delete("1.0", "end")
-        self._diag_box.insert("1.0", self._last_report)
+        self._render_diag_table(parser_diagnostics.diagnostic_table(diag, defn))
+
+    def _render_diag_table(self, rows):
+        """Disegna la tabella diagnostica da righe già pronte (logica in
+        `parser_diagnostics.diagnostic_table`): qui solo widget."""
+        for child in self._diag_table.winfo_children():
+            child.destroy()
+
+        def add_cells(values, *, header=False, color=None):
+            row = ctk.CTkFrame(self._diag_table, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            font = ctk.CTkFont(size=11, weight="bold" if header else "normal")
+            for (txt, (_, w)) in zip(values, self._diag_cols):
+                ctk.CTkLabel(row, text=txt, width=w, anchor="w", justify="left",
+                             wraplength=w - 6, font=font, text_color=color).pack(side="left", padx=2)
+
+        add_cells([c for c, _ in self._diag_cols], header=True)
+        for r in rows:
+            target = r.target if (r.required or r.banner) else f"{r.target}  (opz)"
+            add_cells([target, r.status, r.reason, r.start_after, r.end_before, r.extracted],
+                      color=None if r.ok else "#ef5350")
 
     def _copy_diag(self):
         """Copia l'ultimo report di diagnostica negli appunti (per incollarlo)."""

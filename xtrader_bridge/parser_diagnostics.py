@@ -193,6 +193,61 @@ def diagnose(defn: CustomParserDef, text: str, *, value_maps_registry: dict = No
                      fields=fields, message_error=message_error)
 
 
+@dataclass
+class TableRow:
+    """Una riga della tabella diagnostica (vista del builder, CP-08b).
+
+    Pensata per essere disegnata 1:1 dalla GUI senza altra logica: la formattazione
+    leggibile (delimitatori, valore estratto, motivo) è già risolta qui."""
+
+    target: str
+    status: str            # "✅ OK" / "⛔ ERR"
+    reason: str            # spiegazione leggibile (vuota se OK)
+    start_after: str       # "Inizia dopo" leggibile
+    end_before: str        # "Finisce prima" leggibile
+    extracted: str         # valore estratto ("grezzo" o "grezzo → finale" se mappato)
+    ok: bool = True
+    required: bool = True
+    banner: bool = False    # True = riga d'avviso a livello messaggio (NO_CONTENT_MATCH)
+
+
+def _fmt_delim(rule) -> "tuple[str, str]":
+    """('Inizia dopo', 'Finisce prima') leggibili: un valore fisso non estrae →
+    '(valore fisso)'; vuoto → semantica di default; i newline come «↵» (fine riga)."""
+    if rule is not None and rule.is_fixed():
+        return ("(valore fisso)", "(valore fisso)")
+
+    def show(v, empty_label):
+        v = (v or "").replace("\n", "↵")
+        return v if v != "" else empty_label
+    start = show(getattr(rule, "start_after", ""), "(dall'inizio)")
+    end = show(getattr(rule, "end_before", ""), "(fine riga)")
+    return (start, end)
+
+
+def diagnostic_table(diag: Diagnosis, defn: CustomParserDef) -> "list[TableRow]":
+    """Righe della tabella diagnostica per "Prova messaggio" (CP-08b).
+
+    Una riga per colonna del parser, con stato/motivo/delimitatori/valore estratto
+    già formattati. Se il gate di contenuto fallisce (`NO_CONTENT_MATCH`) la prima
+    riga è un **banner** d'avviso. Logica pura: la GUI la disegna e basta."""
+    rules_by_target = {r.target: r for r in defn.rules}
+    rows: "list[TableRow]" = []
+    if diag.message_error:
+        rows.append(TableRow(
+            target=diag.message_error, status="⛔ ERR", reason=explain(diag.message_error),
+            start_after="", end_before="", extracted="", ok=False, banner=True))
+    for fd in diag.fields:
+        start, end = _fmt_delim(rules_by_target.get(fd.target))
+        extracted = fd.raw if (fd.final == fd.raw or not fd.final) else f"{fd.raw} → {fd.final}"
+        rows.append(TableRow(
+            target=fd.target, status="✅ OK" if fd.ok else "⛔ ERR",
+            reason="" if fd.ok else explain(fd.error),
+            start_after=start, end_before=end, extracted=extracted,
+            ok=fd.ok, required=fd.required))
+    return rows
+
+
 def format_report(diag: Diagnosis) -> str:
     """Report testuale leggibile della diagnostica (per la GUI / copia negli appunti)."""
     head = "PRONTO ✅" if diag.placeable else f"NON PRONTO ⛔  (status: {diag.status})"

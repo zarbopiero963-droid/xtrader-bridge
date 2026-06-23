@@ -179,3 +179,43 @@ def test_format_report_pronto():
         defn, "🆚Inter v Milan\nQuota 1.85", provider="TG",
         mode=recognition.NAME_ONLY, value_maps_registry=_BUILTIN))
     assert report.startswith("PRONTO")
+
+
+# ── tabella diagnostica (vista del builder, CP-08b) ──────────────────────────
+
+def _row(rows, target):
+    return next(r for r in rows if r.target == target)
+
+
+def test_diagnostic_table_ok_ed_errore_per_campo():
+    # Una riga per colonna: stato/motivo/delimitatori/valore estratto già pronti.
+    defn = _defn(
+        FieldRule(target="EventName", start_after="🆚", end_before="\n", required=True),
+        FieldRule(target="Price", start_after="Quota:", required=True),  # delimitatore assente nel msg
+    )
+    diag = pd.diagnose(defn, "🆚Inter v Milan\n", mode=recognition.NAME_ONLY,
+                       value_maps_registry=_BUILTIN)
+    rows = pd.diagnostic_table(diag, defn)
+    ev = _row(rows, "EventName")
+    assert ev.ok is True and ev.status == "✅ OK"
+    assert ev.extracted == "Inter v Milan"
+    assert ev.start_after == "🆚" and ev.end_before == "↵"   # newline reso leggibile
+    pr = _row(rows, "Price")
+    assert pr.ok is False and pr.status == "⛔ ERR"
+    assert pr.reason == pd.explain(pd.START_NOT_FOUND)
+    assert pr.end_before == "(fine riga)"                    # end_before vuoto = default
+
+
+def test_diagnostic_table_valore_fisso_e_banner_no_content():
+    # Tutti fissi → NO_CONTENT_MATCH: prima riga = banner; i fissi mostrano "(valore fisso)".
+    defn = _full_name_rules()
+    diag = pd.diagnose(defn, "messaggio non pertinente", provider="TG",
+                       mode=recognition.NAME_ONLY, value_maps_registry=_BUILTIN)
+    rows = pd.diagnostic_table(diag, defn)
+    assert rows[0].banner is True
+    assert rows[0].target == pd.NO_CONTENT_MATCH and rows[0].ok is False
+    assert _row(rows, "EventName").start_after == "(valore fisso)"
+    # mapping mostrato come "grezzo → finale" quando la value-map cambia il valore
+    defn2 = _defn(FieldRule(target="SelectionName", start_after="S:", value_map="bettype", required=True))
+    diag2 = pd.diagnose(defn2, "S: back", value_maps_registry=_BUILTIN)
+    assert _row(pd.diagnostic_table(diag2, defn2), "SelectionName").extracted == "back → PUNTA"
