@@ -291,6 +291,38 @@ Reason:
 
 ---
 
+## Documentation maintenance — required
+
+Whenever you **add, change, or remove** code (function, class, module, behavior, config
+key, CSV column, parser rule, value-map, recognition mode, gate, GUI), you **must update
+the corresponding documentation in the same PR**. Docs must never drift from code: a new
+function with no doc, or a removed one whose doc still lingers, is an incomplete PR.
+
+In the same PR:
+
+- behavior/usage → update `README.md` and the domain docs (`docs/custom_parser.md`,
+  `docs/xtrader_csv_contract.md`);
+- new/removed **function, class, or module** → update the function reference docs when
+  they exist (see below); until then, describe it in the relevant domain doc and keep the
+  **docstring** at the top of the function/module;
+- new/removed **config key, CSV column, recognition mode, gate** → update the related docs
+  and flag breaking changes in the PR body;
+- architecture/audit decisions → `docs/audit/roadmap.md` when relevant.
+
+The post-fix micro-audit and final hard verify must include a **"docs updated for the
+change: PASS/FAIL"** check. If you touched code and touched no docs, confirm whether a doc
+needs updating; if it genuinely does not (e.g. an internal fix with no impact on documented
+behavior/API), state that as a note.
+
+**Future goal (not active yet).** An **auto-generated** function reference (modules →
+classes → functions + signature + docstring) in **Markdown + JSONL**, used as the knowledge
+base for an in-bridge **AI assistant** (OpenAI vector store + screenshots). Once the
+generator (`tools/gen_api_docs.py` or equivalent) and its **CI gate** exist, regenerating
+the docs becomes a **mandatory part** of every PR that touches code (the CI gate fails if
+they are out of date). Until then, the manual rule above applies.
+
+---
+
 ## Post-fix micro-audit
 
 After patching and before running tests, committing, pushing, resolving comments, or declaring completion, the agent must perform a post-fix micro-audit.
@@ -315,7 +347,8 @@ The micro-audit must verify:
 - Telegram chat filtering was not weakened;
 - config persistence was not broken;
 - Windows compatibility was preserved;
-- tests or manual verification were updated for changed behavior.
+- tests or manual verification were updated for changed behavior;
+- documentation was updated for the change (README / domain docs / docstring), or a note explains why none was needed.
 
 Required micro-audit output:
 
