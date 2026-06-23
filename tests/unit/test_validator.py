@@ -49,8 +49,11 @@ def test_prezzo_valido_appena_sopra_uno():
 
 
 def test_require_price_disattivabile():
-    # Con require_price=False una riga senza prezzo (ma riconoscibile) passa.
+    # Con require_price=False una riga senza prezzo (ma riconoscibile) passa. A runtime
+    # questo flag è guidato dalla riga Price del parser (CustomParserDef.price_required).
     assert validator.is_valid(_row(Price=""), "NAME_ONLY", require_price=False) is True
+    # Con require_price=True (Price obbligatorio nel parser) una riga senza prezzo è scartata.
+    assert validator.is_valid(_row(Price=""), "NAME_ONLY", require_price=True) is False
 
 
 def test_bettype_sconosciuto_bloccato():
@@ -66,16 +69,6 @@ def test_campi_nome_mancanti_bloccati():
     assert "SelectionName" in detail
 
 
-def test_require_price_enabled_solo_false_disattiva():
-    # Solo il booleano False disattiva il gate; tutto il resto = default sicuro True.
-    assert validator.require_price_enabled({}) is True
-    assert validator.require_price_enabled({"require_price": True}) is True
-    assert validator.require_price_enabled({"require_price": False}) is False
-    # Valori malformati (config editata a mano / migrazione) → richiedi prezzo.
-    assert validator.require_price_enabled({"require_price": None}) is True
-    assert validator.require_price_enabled({"require_price": 0}) is True
-    assert validator.require_price_enabled({"require_price": ""}) is True
-    assert validator.require_price_enabled({"require_price": "false"}) is True
 
 
 def test_points_resta_vuoto_non_normalizzato():

@@ -5,7 +5,9 @@ dalla modalità, verifica due cose safety-critical:
 
 - il **prezzo** (`Price`) è una quota valida, cioè un numero **> 1.0** (una quota
   a 1.00 non dà guadagno e non è piazzabile; sotto 1 è una linea di mercato, non
-  una quota). `require_price` rende il controllo disattivabile;
+  una quota). Il parametro `require_price` rende il controllo disattivabile: a
+  runtime è guidato dalla riga Price del parser (`CustomParserDef.price_required`),
+  non più da una chiave di config globale;
 - il **BetType** è `PUNTA`/`BANCA` (un lato sconosciuto pizzerebbe la scommessa
   sbagliata).
 
@@ -100,13 +102,3 @@ def validate(row: dict, mode: str, require_price: bool = True):
 def is_valid(row: dict, mode: str, require_price: bool = True) -> bool:
     """True se la riga supera la validazione completa."""
     return validate(row, mode, require_price)[0] == VALID
-
-
-def require_price_enabled(cfg: dict) -> bool:
-    """Interpreta l'opzione `require_price` dalla config in modo sicuro.
-
-    Solo il booleano JSON `false` disattiva il gate prezzo. Qualsiasi altro valore
-    (assente, `null`, `0`, `""`, la stringa `"false"`, ecc.) ricade sul default
-    sicuro `True`: una config malformata non deve mai far passare segnali senza prezzo.
-    """
-    return cfg.get("require_price", True) is not False

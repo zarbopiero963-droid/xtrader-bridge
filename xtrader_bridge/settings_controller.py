@@ -10,7 +10,6 @@ Impostazioni gestite (tutte già presenti in `config_store.DEFAULTS`):
 
 - `recognition_mode`  (ID_ONLY / NAME_ONLY / BOTH)        — riusa `recognition`
 - `queue_mode`        (OVERWRITE_LAST / APPEND_ACTIVE / …) — riusa `signal_queue`
-- `require_price`     (bool)                               — riusa `validator`
 - `dry_run`           (bool, simulazione)                  — riusa `safety_guard`
 - `max_per_day`       (intero > 0)                         — riusa `safety_guard`
 - `xtrader_notification_chat_id` (str, chat conferme XTrader)
@@ -23,7 +22,7 @@ chiavi: ogni altra impostazione (token, chat, sorgenti, parser, ecc.) è preserv
 
 import copy
 
-from . import autostart, config_store, recognition, safety_guard, signal_queue, validator
+from . import autostart, config_store, recognition, safety_guard, signal_queue
 
 # Default del timeout conferme: fonte unica = config_store.DEFAULTS.
 DEFAULT_CONFIRMATION_TIMEOUT = config_store.DEFAULTS["confirmation_timeout"]
@@ -32,7 +31,6 @@ DEFAULT_CONFIRMATION_TIMEOUT = config_store.DEFAULTS["confirmation_timeout"]
 MANAGED_KEYS = (
     "recognition_mode",
     "queue_mode",
-    "require_price",
     "dry_run",
     "max_per_day",
     "xtrader_notification_chat_id",
@@ -79,7 +77,6 @@ def current_values(cfg: dict) -> dict:
     return {
         "recognition_mode": recognition.normalize_mode(rec),
         "queue_mode": signal_queue.normalize_mode(qm),
-        "require_price": validator.require_price_enabled(cfg),
         "dry_run": safety_guard.is_dry_run(cfg),
         "max_per_day": _coerce_int_display(cfg.get("max_per_day"), safety_guard.DEFAULT_MAX_PER_DAY),
         "xtrader_notification_chat_id": str(cfg.get("xtrader_notification_chat_id", "") or "").strip(),
@@ -145,7 +142,6 @@ def apply_advanced(cfg: dict, form: dict) -> tuple:
     else:
         updates["queue_mode"] = qm
 
-    updates["require_price"] = _as_bool(form.get("require_price", True))
     updates["dry_run"] = _as_bool(form.get("dry_run", True))
     # Avvio automatico del listener: default sicuro False (parte solo con START).
     updates["auto_start_listener"] = _as_bool(form.get("auto_start_listener", False))

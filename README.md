@@ -150,9 +150,11 @@ Pulsanti aggiuntivi:
 
 Queste impostazioni vivono in `config.json` (`%APPDATA%\XTraderBridge\config.json`).
 **Diverse sono ora modificabili anche dalla GUI**, nelle tab *Riconoscimento /
-Sicurezza / Conferme XTrader*: `recognition_mode`, `require_price`, `dry_run`,
+Sicurezza / Conferme XTrader*: `recognition_mode`, `dry_run`,
 `max_per_day`, `queue_mode`, `xtrader_notification_chat_id`, `confirmation_timeout`,
-`confirmation_keywords`, `rejection_keywords`. Le **chat sorgente**
+`confirmation_keywords`, `rejection_keywords`. La **quota obbligatoria** sì/no NON è
+più un interruttore globale: la comanda la casella **«Obblig.» sulla riga `Price`** di
+ogni Parser Personalizzato. Le **chat sorgente**
 (`source_chats`) **e** l'override parser per chat (`parser_by_chat`) si modificano dal
 pulsante **"📡 Chat sorgenti"** (vedi [Più chat sorgenti](#più-chat-sorgenti-multi-chat)).
 Nella tab *Conferme XTrader* le parole chiave si scrivono **separate da virgola**
@@ -163,7 +165,7 @@ chiave è comunque **preservata** quando salvi dalla GUI, quindi non si perde.
 | Chiave | Default | Valori | A cosa serve |
 |---|---|---|---|
 | `recognition_mode` | `NAME_ONLY` | `ID_ONLY`, `NAME_ONLY`, `BOTH` | Come XTrader riconosce il segnale. Oggi gli ID non arrivano dal messaggio Telegram, quindi `NAME_ONLY` (nomi) è il default. `ID_ONLY` richiede `MarketId`/`SelectionId`; `BOTH` entrambi. |
-| `require_price` | `true` | `true`/`false` | Se `true`, un segnale senza quota valida (> 1.0) viene **scartato** (default sicuro). |
+| *(quota obbligatoria)* | — | — | NON è più una chiave globale: la comanda la casella **«Obblig.» sulla riga `Price`** di ogni Parser Personalizzato. `Price` obbligatorio → segnale senza quota valida (> 1.0) **scartato**; non obbligatorio → quota opzionale. |
 | `dry_run` | `true` | `true`/`false` | **Simulazione**: se `true`, il CSV operativo **non** viene scritto. Mettilo a `false` solo per l'uso reale, consapevolmente. |
 | `max_per_day` | `200` | intero | Tetto di segnali nuovi accettati in un giorno (UTC). Oltre, i segnali in eccesso non scrivono. |
 | `queue_mode` | `OVERWRITE_LAST` | `OVERWRITE_LAST`, `APPEND_ACTIVE`, `QUEUE_UNTIL_CONFIRMED` | Quanti segnali attivi tenere nel CSV. `OVERWRITE_LAST` = uno solo (sicuro). Le altre due scrivono **più righe** = più scommesse simultanee. |

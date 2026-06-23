@@ -149,6 +149,22 @@ def test_required_targets():
     assert d.required_targets() == ["EventName", "Price", "BetType"]
 
 
+def test_price_required_segue_la_riga_price():
+    # Unico comando della quota: price_required() True solo se la riga Price è Obblig.
+    d = _valid_def()
+    assert d.price_required() is True                       # _valid_def ha Price required
+    # Stesso parser con Price NON obbligatorio → quota opzionale.
+    for r in d.rules:
+        if r.target == "Price":
+            r.required = False
+    assert d.price_required() is False
+    # Un parser senza alcuna regola Price → quota opzionale.
+    no_price = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="EventName", start_after="m:", end_before="\n", required=True),
+    ])
+    assert no_price.price_required() is False
+
+
 # ── skeleton ───────────────────────────────────────────────────────────────
 
 def test_skeleton_e_valido_e_targets_nel_contratto():

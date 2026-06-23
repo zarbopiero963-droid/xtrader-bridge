@@ -14,7 +14,7 @@ def test_current_values_default_sicuri_su_config_vuota():
     v = sc.current_values({})
     assert v["recognition_mode"] == recognition.DEFAULT_MODE   # NAME_ONLY
     assert v["queue_mode"] == signal_queue.DEFAULT_MODE         # OVERWRITE_LAST
-    assert v["require_price"] is True                           # default sicuro
+    assert "require_price" not in v                             # rimosso: ora è per-parser
     assert v["dry_run"] is True                                 # default sicuro (simulazione)
     assert v["max_per_day"] == safety_guard.DEFAULT_MAX_PER_DAY
     assert v["xtrader_notification_chat_id"] == ""
@@ -27,13 +27,13 @@ def test_current_values_default_sicuri_su_config_vuota():
 def test_current_values_legge_la_config():
     cfg = {
         "recognition_mode": "both", "queue_mode": "APPEND_ACTIVE",
-        "require_price": False, "dry_run": False, "max_per_day": 50,
+        "dry_run": False, "max_per_day": 50,
         "xtrader_notification_chat_id": "  -100777  ",
     }
     v = sc.current_values(cfg)
     assert v["recognition_mode"] == "BOTH"
     assert v["queue_mode"] == "APPEND_ACTIVE"
-    assert v["require_price"] is False
+    assert "require_price" not in v
     assert v["dry_run"] is False
     assert v["max_per_day"] == 50
     assert v["xtrader_notification_chat_id"] == "-100777"
@@ -61,7 +61,7 @@ def test_apply_valido_fonde_preservando_le_altre_chiavi():
     cfg = {"bot_token": "T", "chat_id": "42", "source_chats": [{"chat_id": "1"}]}
     form = {
         "recognition_mode": "ID_ONLY", "queue_mode": "QUEUE_UNTIL_CONFIRMED",
-        "require_price": False, "dry_run": False, "max_per_day": "10",
+        "dry_run": False, "max_per_day": "10",
         "xtrader_notification_chat_id": "-100999", "confirmation_timeout": "45",
     }
     new_cfg, errors = sc.apply_advanced(cfg, form)
@@ -70,7 +70,7 @@ def test_apply_valido_fonde_preservando_le_altre_chiavi():
     # Chiavi gestite aggiornate...
     assert new_cfg["recognition_mode"] == "ID_ONLY"
     assert new_cfg["queue_mode"] == "QUEUE_UNTIL_CONFIRMED"
-    assert new_cfg["require_price"] is False
+    assert "require_price" not in new_cfg                       # non più gestita qui
     assert new_cfg["dry_run"] is False
     assert new_cfg["max_per_day"] == 10
     assert new_cfg["xtrader_notification_chat_id"] == "-100999"
@@ -127,17 +127,18 @@ def test_apply_chat_notifiche_vuota_ammessa():
     assert new_cfg["xtrader_notification_chat_id"] == ""
 
 
-def test_apply_require_price_e_dry_run_da_stringhe():
+def test_apply_dry_run_da_stringhe():
     # I checkbox danno bool, ma una config/stringa può arrivare come testo.
     form = {
         "recognition_mode": "NAME_ONLY", "queue_mode": "OVERWRITE_LAST",
-        "require_price": "false", "dry_run": "off", "max_per_day": "200",
+        "dry_run": "off", "max_per_day": "200",
         "confirmation_timeout": "90",
     }
     new_cfg, errors = sc.apply_advanced({}, form)
     assert errors == []
-    assert new_cfg["require_price"] is False
     assert new_cfg["dry_run"] is False
+    # require_price non è più gestita dal controller (governata per-parser).
+    assert "require_price" not in new_cfg
 
 
 # ── PR-17c: timeout conferma + parole chiave conferma/rifiuto ───────────────

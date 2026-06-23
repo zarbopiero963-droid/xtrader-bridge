@@ -78,15 +78,16 @@ possono restare vuoti in entrambe le modalità (gli esempi reali li lasciano vuo
 
 - **Per XTrader** `Price` può essere vuoto (la quota può essere indicata nell'azione
   "Piazza Scommessa su Segnali").
-- **Per il bridge**, di default `require_price` è `true`: un segnale **senza** `Price`
-  valido (numerico, > 1.0) viene **scartato** (stato `INVALID_MISSING_PRICE`). Per
-  scrivere righe con `Price` vuoto devi impostare in `config.json` il booleano JSON
-  **`"require_price": false`** (non la stringa `"false"`, non `0`).
+- **Per il bridge** la quota obbligatoria sì/no è governata da un **unico comando**: la
+  casella **«Obblig.» sulla riga `Price`** del Parser Personalizzato. Se `Price` è
+  obbligatorio, un segnale **senza** `Price` valido (numerico, > 1.0) viene **scartato**
+  (stato `INVALID_MISSING_PRICE` / "Non pronto"). Se `Price` **non** è obbligatorio, la
+  quota è opzionale e si scrive la riga col `Price` vuoto.
 
-Nel **Parser Personalizzato**, per lasciare `Price` vuoto: non configurare la regola
-`Price` (nessun `fixed_value`/`start_after`/`end_before`) **e** impostare
-`require_price: false`. `MinPrice`/`MaxPrice`/`Points` si lasciano vuoti semplicemente
-non configurando la loro regola.
+Nel **Parser Personalizzato**, per lasciare `Price` vuoto: lascia la riga `Price` **non
+obbligatoria** (casella «Obblig.» spenta). Non esiste più un interruttore globale
+`require_price`: la quota la comanda la riga `Price` di ogni parser.
+`MinPrice`/`MaxPrice`/`Points` si lasciano vuoti semplicemente non configurando la loro regola.
 
 ## Regole di scrittura
 

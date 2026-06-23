@@ -201,7 +201,6 @@ def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str =
     `chat_id` è la chat di ORIGINE del messaggio (dal live): se passato ha la
     precedenza sul `chat_id` di config, così l'override `parser_by_chat` funziona
     anche in setup multi-chat dove il singolo `chat_id` non è impostato."""
-    require_price = validator.require_price_enabled(cfg)
     chat = str((chat_id if chat_id is not None else cfg.get("chat_id", "")) or "")
     # Provider PER-CHAT (PR-24): per una sorgente multi-chat attiva usa il suo provider
     # (esplicito, o derivato dalla modalità PRE→TG_PRE / LIVE→TG_LIVE); altrimenti il
@@ -218,6 +217,10 @@ def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str =
         # comportamento dopo l'upgrade (Codex P1).
         mode = recognition.normalize_mode(
             defn.mode or cfg.get("recognition_mode", recognition.DEFAULT_MODE))
+        # Quota obbligatoria sì/no è governata SOLO dalla riga Price del parser
+        # (`Obblig.` sulla colonna Price): unico comando, niente più interruttore
+        # globale. Price obbligatorio → quota richiesta; opzionale → Price vuoto ammesso.
+        require_price = defn.price_required()
         res = custom_pipeline.build_validated_row(
             defn, text, provider=provider, mode=mode, require_price=require_price)
         if not res.placeable:

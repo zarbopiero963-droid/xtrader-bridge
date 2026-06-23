@@ -82,13 +82,21 @@ def test_default_recognition_mode_name_only():
     assert config_store.DEFAULTS["recognition_mode"] == "NAME_ONLY"
 
 
-def test_require_price_default_true_e_roundtrip(tmp_path):
-    # Default sicuro: il gate prezzo è attivo.
-    assert config_store.DEFAULTS["require_price"] is True
-    # L'opt-out require_price=False deve sopravvivere a save→load (non riazzerato).
+def test_require_price_non_e_piu_chiave_globale(tmp_path):
+    # La quota obbligatoria sì/no NON è più un default globale: la governa la riga
+    # Price di ogni Parser Personalizzato (CustomParserDef.price_required).
+    assert "require_price" not in config_store.DEFAULTS
+    # Una chiave custom arbitraria sopravvive comunque a save→load (config non la perde).
     p = str(tmp_path / "config.json")
-    config_store.save_config({"provider": "TG", "require_price": False}, p)
-    assert config_store.load_config(p)["require_price"] is False
+    config_store.save_config({"provider": "TG", "custom_flag": False}, p)
+    assert config_store.load_config(p)["custom_flag"] is False
+    # Compat: una vecchia config con `require_price` NON va in crash e la chiave legacy
+    # sopravvive (semplicemente ignorata a runtime, governata ora dalla riga Price).
+    p2 = str(tmp_path / "legacy.json")
+    config_store.save_config({"provider": "TG", "require_price": False}, p2)
+    loaded = config_store.load_config(p2)
+    assert loaded["require_price"] is False        # non rimossa, non causa errori
+    assert loaded["provider"] == "TG"
 
 
 # ── PR-04: cartella utente, migrazione, versione ──
