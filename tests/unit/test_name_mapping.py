@@ -132,6 +132,16 @@ def test_split_event_separatore_alfabetico_non_spezza_nome_interno():
     assert nm.split_event("Aston Villa v Everton", "v") == ("Aston Villa", "Everton")
 
 
+def test_split_event_non_spezza_punteggiatura_interna_al_nome():
+    # Codex: "Paris Saint-Germain - Lyon" col separatore "-" deve dividere sul " - "
+    # con spazi, non sul trattino interno a "Saint-Germain".
+    assert nm.split_event("Paris Saint-Germain - Lyon", "-") == ("Paris Saint-Germain", "Lyon")
+    # Forma compatta (fallback solo per simboli) quando non c'è la forma con spazi.
+    assert nm.split_event("Liverpool/Leeds", "/") == ("Liverpool", "Leeds")
+    # Con spazi attorno a "/" funziona comunque (match con spazi preferito).
+    assert nm.split_event("Inter / Milan", "/") == ("Inter", "Milan")
+
+
 def test_split_event_casi_non_separabili():
     assert nm.split_event("Solo Una Squadra", "v") is None
     assert nm.split_event("", "v") is None
@@ -148,6 +158,16 @@ def test_resolve_event_name_fail_closed_se_una_squadra_ignota():
     profiles = nm.entries_for_profiles(_cfg(), ["Premier"])
     assert nm.resolve_event_name("Liverpool FC v Arsenal", "v", profiles) is None
     assert nm.resolve_event_name("Solo Liverpool FC", "v", profiles) is None
+
+
+def test_resolve_event_name_nome_con_trattino_interno():
+    # Nome che contiene il separatore "-" internamente: il match con spazi lo preserva.
+    cfg = {"name_mappings": {"L1": [
+        {"betfair": "Paris Saint-Germain", "provider": "PSG"},
+        {"betfair": "Lyon", "provider": "OL"},
+    ]}}
+    profiles = nm.entries_for_profiles(cfg, ["L1"])
+    assert nm.resolve_event_name("PSG - OL", "-", profiles) == "Paris Saint-Germain - Lyon"
 
 
 # ── Integrazione pipeline (build_validated_row) ──────────────────────────────
@@ -200,11 +220,12 @@ def test_pipeline_nessuna_mappatura_se_parser_senza_profili():
     assert res.row["EventName"] == "Liverpool FC v Leeds Utd"   # non tradotto
 
 
-def test_pipeline_mappatura_saltata_se_profili_none():
-    # Diagnostica senza config: profili None → mappatura saltata, EventName invariato.
+def test_pipeline_fail_closed_se_mappatura_richiesta_ma_profili_none():
+    # Codex: anteprima senza config (profili None) NON deve mostrare "Pronto" per un
+    # evento non mappato. Mappatura richiesta → obbligatoria → MAPPING_MISSING.
     res = pipe.build_validated_row(_mapping_parser(), _MSG, name_mapping_profiles=None)
-    assert res.status == validator.VALID
-    assert res.row["EventName"] == "Liverpool FC v Leeds Utd"
+    assert res.status == pipe.MAPPING_MISSING
+    assert res.placeable is False
 
 
 # ── (de)serializzazione dei nuovi campi del parser ───────────────────────────
@@ -221,6 +242,17 @@ def test_custom_parser_default_retrocompatibile():
     back = cp.CustomParserDef.from_dict({"name": "X", "rules": [{"target": "EventName"}]})
     assert back.name_mapping_profiles == []
     assert back.team_separator == ""
+
+
+def test_diagnose_non_mente_se_mappatura_richiesta_senza_profili():
+    # Codex: "Prova messaggio" senza profili risolti deve risultare NON pronta
+    # (MAPPING_MISSING su EventName), non un falso "Pronto" col nome grezzo.
+    from xtrader_bridge import parser_diagnostics as pd
+    diag = pd.diagnose(_mapping_parser(), _MSG)            # name_mapping_profiles=None
+    assert diag.placeable is False
+    assert diag.status == pipe.MAPPING_MISSING
+    event_fd = next(fd for fd in diag.fields if fd.target == "EventName")
+    assert event_fd.error == pd.MAPPING_MISSING
 
 
 def test_parser_builder_preserva_campi_mappatura_nel_roundtrip():

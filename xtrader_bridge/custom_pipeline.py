@@ -124,10 +124,11 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
 
     `name_mapping_profiles` (lista di liste-di-righe, vedi `name_mapping_store`):
     se il parser richiede la mappatura nomi (`defn.name_mapping_profiles` non vuoto)
-    **e** questi dati sono forniti (non `None`), l'`EventName` provider viene tradotto
-    nel nome Betfair/XTrader PRIMA della validazione; se non è traducibile lo stato è
-    `MAPPING_MISSING` (fail-closed, nessuna riga). Quando è `None` (es. diagnostica
-    senza config) la mappatura è saltata e l'`EventName` resta invariato.
+    l'`EventName` provider viene tradotto nel nome Betfair/XTrader PRIMA della
+    validazione; se non è traducibile lo stato è `MAPPING_MISSING` (fail-closed,
+    nessuna riga). La mappatura è **obbligatoria** quando richiesta: profili assenti
+    (`None`) sono trattati come lista vuota → `MAPPING_MISSING` (l'anteprima senza
+    config non deve mostrare "Pronto" per un evento che il runtime scarterebbe).
 
     Ritorna un `PipelineResult`: `placeable` True solo se supera il gate "Non
     pronto" del parser, ha un `Provider` E passa la validazione (modalità +
@@ -153,12 +154,14 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
         return PipelineResult(INVALID_HANDICAP, row, list(res.missing_required))
 
     # Mappatura nomi squadra: traduce l'EventName provider nel nome Betfair/XTrader.
-    # Si applica solo se il parser la richiede E i profili sono forniti (il chiamante
-    # live li risolve da config; la diagnostica senza config passa None → salta).
-    if defn.name_mapping_profiles and name_mapping_profiles is not None:
+    # Se il parser la richiede è **obbligatoria** e fail-closed: profili assenti
+    # (`None`, es. anteprima senza config) sono trattati come "nessun profilo" →
+    # MAPPING_MISSING, così l'anteprima NON mostra "Pronto" per un evento che il
+    # runtime scarterebbe (Codex). Senza profili richiesti l'EventName resta invariato.
+    if defn.name_mapping_profiles:
         sep = (defn.team_separator or "").strip() or _DEFAULT_TEAM_SEPARATOR
         mapped = name_mapping_store.resolve_event_name(
-            row.get("EventName", ""), sep, name_mapping_profiles)
+            row.get("EventName", ""), sep, name_mapping_profiles or [])
         if mapped is None:
             return PipelineResult(MAPPING_MISSING, row, list(res.missing_required))
         row = dict(row)

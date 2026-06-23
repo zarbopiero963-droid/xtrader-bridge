@@ -174,19 +174,22 @@ def split_event(event_name: str, separator: str):
     o ``None`` se non si riesce a separarlo in due nomi non vuoti.
 
     Il separatore è **testo libero** configurato dall'utente (es. "v", "vs", "-",
-    "/"). Per i separatori **alfabetici** ("v"/"vs") si richiedono spazi attorno
-    (``\\s+v\\s+``) così "Liverpool" non viene spezzato sulla 'v' interna; per i
-    **simboli** ("-"/"/") gli spazi attorno sono opzionali. Solo la prima
-    occorrenza separa (``maxsplit=1``)."""
+    "/"). Si preferisce **sempre** il delimitatore **con spazi attorno**
+    (``\\s+<sep>\\s+``): così non si spezza su punteggiatura/lettere interne al nome
+    (es. "Paris Saint-Germain - Lyon" → "Paris Saint-Germain" / "Lyon", non sulla
+    prima "-"). Solo per separatori **simbolici** ("-"/"/"), se la forma con spazi non
+    c'è, si ripiega sulla forma **compatta** (``\\s*<sep>\\s*``, es. "Liverpool/Leeds");
+    per i separatori **alfabetici** ("v"/"vs") non c'è fallback compatto, altrimenti
+    "v" senza spazi spezzerebbe "Liverpool". Solo la prima occorrenza separa
+    (``maxsplit=1``)."""
     name = str(event_name or "").strip()
     sep = str(separator or "").strip()
     if not name or not sep:
         return None
-    if sep.isalpha():
-        pattern = re.compile(r"\s+" + re.escape(sep) + r"\s+", re.IGNORECASE)
-    else:
-        pattern = re.compile(r"\s*" + re.escape(sep) + r"\s*")
-    parts = pattern.split(name, maxsplit=1)
+    esc = re.escape(sep)
+    parts = re.compile(r"\s+" + esc + r"\s+", re.IGNORECASE).split(name, maxsplit=1)
+    if len(parts) != 2 and not sep.isalpha():
+        parts = re.compile(r"\s*" + esc + r"\s*").split(name, maxsplit=1)
     if len(parts) != 2:
         return None
     home, away = parts[0].strip(), parts[1].strip()
