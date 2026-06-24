@@ -440,7 +440,9 @@ def _rename_profile_in_files(attr: str, old: str, new: str, dir_path: str = None
             defn = load_parser(path)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        profiles = getattr(defn, attr)
+        # default [] per robustezza sullo scan dell'intera cartella: un parser vecchio/
+        # parziale privo dell'attributo non deve abortire la sincronizzazione (Sourcery).
+        profiles = getattr(defn, attr, []) or []
         if o not in profiles:
             continue
         seen, newlist = set(), []
@@ -486,7 +488,7 @@ def _parsers_using_profile(attr: str, name: str, dir_path: str = None) -> list:
             defn = load_parser(path)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if n in getattr(defn, attr):
+        if n in (getattr(defn, attr, []) or []):    # default [] per robustezza (Sourcery)
             out.append(defn.name)
     return out
 

@@ -328,7 +328,9 @@ class NameMappingPanel(ctk.CTkFrame):
         except Exception:                        # noqa: BLE001 — l'avviso è best-effort
             affected = []
         cfg = name_mapping_store.delete_profile(cfg, name)
-        self._current = None
+        # NON azzerare `_current` prima del salvataggio: su fallimento `_persist` non ricarica
+        # e la UI mostrerebbe "nessun profilo" col profilo ancora su disco (desync, Sourcery).
+        # Su successo è `_reload_profiles` a portarlo a None; su fallimento resta coerente.
         ok = self._persist(cfg, ok_msg=f"🗑 Profilo «{name}» eliminato.",
                            fail_msg=f"❌ Salvataggio FALLITO: «{name}» non eliminato.")
         if ok and affected:
@@ -476,9 +478,13 @@ class MarketMappingPanel(ctk.CTkFrame):
         e_phrase.insert(0, phrase)
         e_phrase.pack(side="left", padx=3)
 
-        market_var = ctk.StringVar(value=market or (self._markets[0] if self._markets else ""))
+        # Mercato VUOTO di default su una riga nuova: l'utente deve sceglierlo esplicitamente.
+        # Un mercato preselezionato a caso rischierebbe di salvare la frase sul mercato
+        # SBAGLIATO (= scommessa sbagliata); una riga senza mercato è poi scartata da
+        # `set_entries` (incompleta), quindi non si crea mai una mappatura involontaria (Sourcery).
+        market_var = ctk.StringVar(value=market or "")
         market_menu = ctk.CTkOptionMenu(row, variable=market_var, width=240,
-                                        values=self._markets or [""])
+                                        values=["", *self._markets])
         market_menu.pack(side="left", padx=3)
 
         sels = self._selections_for(market_var.get())
@@ -651,7 +657,10 @@ class MarketMappingPanel(ctk.CTkFrame):
         except Exception:                        # noqa: BLE001 — l'avviso è best-effort
             affected = []
         cfg = market_mapping_store.delete_profile(cfg, name)
-        self._current = None
+        # NON azzerare `_current` prima del salvataggio: se `_persist` fallisce non ricarica,
+        # e la UI mostrerebbe "nessun profilo" mentre il profilo è ancora su disco (desync,
+        # Sourcery). Su successo è `_reload_profiles` a portarlo a None (il profilo non c'è
+        # più); su fallimento resta selezionato il profilo tuttora esistente (coerente).
         ok = self._persist(cfg, ok_msg=f"🗑 Profilo «{name}» eliminato.",
                            fail_msg=f"❌ Salvataggio FALLITO: «{name}» non eliminato.")
         if ok and affected:
