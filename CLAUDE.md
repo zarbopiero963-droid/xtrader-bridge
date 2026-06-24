@@ -241,7 +241,8 @@ Il micro-audit deve verificare:
 - non hai rotto svuotamento CSV;
 - non hai aumentato rischio doppia scommessa;
 - non hai cambiato header CSV senza richiesta;
-- non hai fatto refactor largo non richiesto.
+- non hai fatto refactor largo non richiesto;
+- hai aggiornato le docs per il cambiamento (README/docs di dominio/docstring), o hai scritto perché non serviva.
 
 Formato obbligatorio:
 
@@ -523,6 +524,40 @@ Preserva sempre:
 8. Token e dati sensibili non finiscono nel repository.
 9. Windows rimane il target principale.
 10. Il merge rimane manuale.
+
+---
+
+## DOCUMENTAZIONE — AGGIORNAMENTO OBBLIGATORIO
+
+Ogni volta che **aggiungi, modifichi o elimini** codice (funzione, classe, modulo,
+comportamento, opzione di config, colonna CSV, regola del parser, value-map, modalità,
+gate, GUI), **DEVI aggiornare la documentazione corrispondente nello stesso PR**. Le
+docs non devono mai restare disallineate dal codice: una funzione nuova senza doc, o una
+rimossa con la doc ancora presente, è un PR incompleto.
+
+In pratica, nello stesso PR:
+
+- comportamento/uso → aggiorna `README.md` e i doc di dominio
+  (`docs/custom_parser.md`, `docs/xtrader_csv_contract.md`);
+- nuova/rimossa **funzione, classe o modulo** → aggiorna la documentazione delle funzioni
+  quando esiste (vedi sotto); finché non esiste il generatore, almeno descrivila nel doc
+  di dominio pertinente e mantieni il **docstring** in testa alla funzione/modulo;
+- nuova/rimossa **chiave di config, colonna CSV, modalità di riconoscimento, gate** →
+  aggiorna i doc relativi e, se è un breaking change, segnalalo nel PR body;
+- scelte d'architettura/audit → `docs/audit/roadmap.md` se pertinente.
+
+Il `POST_FIX_MICRO_AUDIT` e il `FINAL_HARD_VERIFY` devono includere il controllo
+**"docs aggiornate per il cambiamento": PASS/FAIL**. Se hai toccato il codice e non hai
+toccato nessuna doc, fermati e verifica se serve aggiornarne una; se davvero non serve
+(es. fix interno senza impatto su comportamento/API documentata), scrivilo come nota.
+
+**Obiettivo futuro (non ancora attivo).** Una documentazione delle funzioni
+**generata automaticamente** dal codice (moduli → classi → funzioni + firma + docstring),
+in formato **Markdown + JSONL**, da usare come knowledge base per un **assistente AI del
+bridge** (vector store OpenAI + screenshot). Quando il generatore (`tools/gen_api_docs.py`
+o equivalente) e il relativo **gate CI** esisteranno, **rigenerare le docs sarà parte
+obbligatoria** di ogni PR che tocca il codice (il gate CI fallisce se sono disallineate).
+Finché non esistono, vale la regola manuale qui sopra.
 
 ---
 
