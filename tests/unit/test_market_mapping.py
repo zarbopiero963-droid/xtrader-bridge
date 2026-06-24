@@ -168,6 +168,20 @@ def test_resolve_profili_vuoti_o_none():
     assert mms.resolve_market("qualcosa", None).status == "none"
 
 
+def test_resolve_difesa_runtime_voce_grezza_senza_delimitatori():
+    # Difesa sul percorso runtime (profili passati GREZZI, non ripuliti da _clean_entry):
+    # una voce senza delimitatori non deve combaciare su tutto il messaggio (Sourcery).
+    bad = [[{"start_after": "", "end_before": "", "phrase": "gol gol",
+             "market_type": "", "market_name": "Entrambe le squadre a segno",
+             "selection_name": "Sì"}]]
+    assert mms.resolve_market("ovunque gol gol nel testo", bad).status == "none"
+    # Voce con delimitatori ma Testo mercato vuoto → ignorata.
+    empty_phrase = [[{"start_after": "Mercato:", "end_before": "\n", "phrase": "",
+                      "market_type": "", "market_name": "Entrambe le squadre a segno",
+                      "selection_name": "Sì"}]]
+    assert mms.resolve_market("Mercato: qualcosa\n", empty_phrase).status == "none"
+
+
 # ── CRUD profili ──────────────────────────────────────────────────────────────
 
 def test_add_get_set_entries():

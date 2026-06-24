@@ -274,10 +274,19 @@ def resolve_market(text: str, profiles, rows=None) -> MarketResolution:
     found = []
     for entries in (profiles or []):
         for e in entries:
+            sa = str(e.get("start_after", "") or "").strip()
+            eb = str(e.get("end_before", "") or "").strip()
+            ph = str(e.get("phrase", "") or "").strip()
+            # Difesa ANCHE sul percorso runtime (i profili possono arrivare grezzi, non solo
+            # ripuliti da _clean_entry): una voce senza testo mercato o senza alcun
+            # delimitatore è ignorata qui, così non può MAI combaciare su tutto il messaggio
+            # (la modalità "frase su tutto il testo" non deve rientrare di nascosto, Sourcery).
+            if not ph or (not sa and not eb):
+                continue
             # Leggi il mercato SOLO dalla posizione delimitata (niente scansione dell'intero
             # messaggio): l'estrazione usa il testo grezzo (i delimitatori sono case-sensitive
             # come nel Parser), poi il testo mercato si confronta sul campo normalizzato.
-            region = extract_between(text, e.get("start_after", ""), e.get("end_before", ""))
+            region = extract_between(text, sa, eb)
             if not region:
                 continue
             if not _phrase_in_text(e.get("phrase", ""), _normalize_text(region)):

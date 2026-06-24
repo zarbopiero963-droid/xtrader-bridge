@@ -570,11 +570,20 @@ class MarketMappingPanel(ctk.CTkFrame):
         cfg = self._load_cfg()
         if cfg is None:
             return
-        cfg = market_mapping_store.set_entries(cfg, self._current, self._collect_rows())
+        rows = self._collect_rows()
+        cfg = market_mapping_store.set_entries(cfg, self._current, rows)
         n = len(market_mapping_store.get_entries(cfg, self._current))
+        # Avvisa se righe NON vuote sono state scartate perché incomplete (serve almeno un
+        # delimitatore + Testo mercato + Mercato + Selezione): non devono sparire in silenzio.
+        nonempty = sum(1 for r in rows if any(str(r.get(k, "")).strip() for k in
+                       ("start_after", "end_before", "phrase", "market_name", "selection_name")))
+        ok_msg = f"💾 Profilo «{self._current}» salvato ({n} regole valide)."
+        if nonempty - n > 0:
+            ok_msg += (f"  ⚠️ {nonempty - n} riga/e ignorata/e perché incomplete: servono almeno "
+                       "un delimitatore (Inizia dopo/Finisce prima), il Testo mercato, Mercato e Selezione.")
         self._persist(
             cfg,
-            ok_msg=f"💾 Profilo «{self._current}» salvato ({n} regole valide).",
+            ok_msg=ok_msg,
             fail_msg=f"❌ Salvataggio FALLITO: «{self._current}» non salvato (andrebbe perso al "
                      "riavvio). Controlla permessi/spazio del file config.",
             select=self._current)
