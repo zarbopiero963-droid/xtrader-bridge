@@ -140,10 +140,18 @@ nomi squadra, così al parsing si traducono **sia** i nomi **sia** i mercati.
    logica + test hard** (`tests/unit/test_market_mapping.py`, 18 test): match univoco,
    nessun match, ambiguità fail-closed (D2), confini di parola (D3), CRUD profili,
    immutabilità. Nessuna GUI, nessun runtime.
-2. **Aggancio runtime** in `custom_pipeline` con la regola di precedenza §4 e
-   `MARKET_MAPPING_MISSING`, + `defn.market_mapping_profiles` nel modello parser. Test hard
-   end-to-end (frase → riga CSV corretta; nessun match → niente riga; ambiguo → niente
-   riga; regola-colonna vince).
+2. **Aggancio runtime** — ✅ **FATTO** — hook in `custom_pipeline.build_validated_row()`
+   con la regola di precedenza §4 e `MARKET_MAPPING_MISSING`; campo
+   `CustomParserDef.market_mapping_profiles` (modello + `to_dict`/`from_dict`); wiring
+   `signal_router` (risolve le voci da config), `parser_builder` (round-trip + anteprima
+   `test_message`), `parser_diagnostics` (overlay su Mercato/Selezione). Fallback **mode-aware**
+   (`_row_has_market`): in assenza di match a frase il fail-closed scatta solo se le
+   regole-colonna non hanno prodotto un mercato **per la modalità di riconoscimento** (NAME →
+   MarketType+SelectionName; ID → MarketId+SelectionId), così una riga ID valida non viene
+   scartata per errore. Test hard end-to-end in `tests/unit/test_market_mapping_runtime.py`
+   (dizionario vince; ambiguo → niente riga; nessun match → fallback colonna; nessun match e
+   nessun mercato → niente riga; voce incoerente ignorata; match sul messaggio grezzo;
+   round-trip modello/builder; instradamento reale `signal_router`).
 3. **GUI** — area 🎯 Mercati + selettore nel Parser. Verifica manuale su Windows.
 
 Ogni passo: Phase 0, micro-audit, test hard veritieri, una PR, merge manuale.
