@@ -708,6 +708,15 @@ della GUI a carico del proprietario su Windows (l'ambiente CI è headless).
 > **Stato:** FASE 1 **completata** — Tappa 1 (Provider+Profili), Tappa 2 (Chat sorgenti +
 > rinomina Mapping con aree Calcio/Mercati) e Tappa 3 (Parser nella hub + unico pulsante
 > "🧰 Strumenti") implementate e mergiate. Resta la **FASE 2** (mappatura mercati).
+>
+> **Follow-up noto (P2 UX, da Codex su #96) — refresh cross-scheda della hub:** poiché la
+> hub costruisce tutte le schede subito, alcune liste-opzioni derivate dal config restano
+> stantie finché non si riapre Strumenti. Casi: (a) un parser appena salvato non compare nel
+> dropdown "Parser" di Chat sorgenti; (b) dopo il caricamento di un profilo, la scheda Parser
+> mantiene `provider`/`recognition_mode`/opzioni vecchie. **Non è un rischio CSV/scommessa**
+> (il preview non scrive; la definizione del parser non dipende dal profilo). Fix proposto:
+> aggiornare le liste-opzioni dei pannelli all'attivazione della scheda (o dopo un salvataggio
+> parser), **senza** scartare le modifiche in corso. Da fare come PR dedicata.
 
 ### FASE 1 — consolidazione finestra "🧰 Strumenti" a schede
 Pattern: il contenuto di ogni finestra-strumento diventa un **Pannello** (`CTkFrame`)
