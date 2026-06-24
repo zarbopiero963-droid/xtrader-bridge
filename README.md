@@ -449,18 +449,60 @@ esegue la suite offline.
 
 ---
 
+## Dependency lockfile / build EXE riproducibile (A7)
+
+Per rendere la build Windows dell'EXE **riproducibile e verificabile**, le dipendenze
+sono espresse come file sorgente `.in` (vincoli "morbidi" top-level) da cui si genera un
+**lockfile completo con hash** sulla stessa piattaforma della build.
+
+| File | Cos'è | Si modifica a mano? |
+|---|---|---|
+| `requirements.in` | dipendenze **runtime** top-level (FLOOR `>=`, con la motivazione di sicurezza) | sì |
+| `requirements-build.in` | tutto ciò che la **build Windows** installa: `-r requirements.in` + `pytest` + `pyinstaller` + `httpx` | sì |
+| `requirements-build.lock` | **lockfile completo con hash** (versioni esatte di TUTTE le transitive) generato su **Windows + Python 3.11** | **NO** — si rigenera dal workflow |
+| `requirements.txt` / `requirements-dev.txt` | install "soft" usato dalla CI di test e dagli sviluppatori (stessi vincoli runtime) | sì |
+
+> ⚠️ Il lockfile **non va generato da Linux**: gli hash e le wheel devono corrispondere a
+> quelli che la build Windows installa davvero. Per questo si genera in CI su Windows.
+
+### Come (ri)generare il lockfile
+
+1. Modifica `requirements.in` e/o `requirements-build.in` se cambi le dipendenze.
+2. Vai su **Actions → "Generate Windows Lockfile" → Run workflow** (oppure si avvia da
+   solo in una PR che tocca quei file). Gira su `windows-latest` + Python 3.11, esegue
+   `pip-compile --generate-hashes` e **valida** il lock con `pip install --require-hashes`.
+3. Apri la run → **Artifacts** → scarica `requirements-build-lock-windows-py311`
+   (contiene `requirements-build.lock`).
+4. **Committa** `requirements-build.lock` nel repository (root).
+
+### Effetto sulla build
+
+`build.yaml` rileva automaticamente il lock:
+
+- se **`requirements-build.lock` è presente** → installa **solo** da lì con
+  `python -m pip install --require-hashes -r requirements-build.lock` (riproducibile);
+- se **assente** → install legacy (`requirements-dev.txt` + `pyinstaller httpx`), così la
+  build non si rompe finché il lock non è stato committato.
+
+La compilazione dell'EXE con **PyInstaller** resta invariata.
+
+---
+
 ## Struttura del progetto
 
 ```text
 xtrader-bridge/
-├── main.py             ← entrypoint (avvia la GUI)
-├── xtrader_bridge/     ← pacchetto Python (parser, CSV, config, GUI, router, guardrail)
-├── tests/              ← test automatici (pytest: unit, integration, safety, smoke)
-├── data/               ← dizionario XTrader + parser personalizzati (data/parsers/)
-├── docs/               ← contratto CSV, guida parser, audit
-├── requirements.txt    ← dipendenze Python
-├── README.md           ← questo file
-└── .github/workflows/  ← CI + build EXE Windows
+├── main.py                 ← entrypoint (avvia la GUI)
+├── xtrader_bridge/         ← pacchetto Python (parser, CSV, config, GUI, router, guardrail)
+├── tests/                  ← test automatici (pytest: unit, integration, safety, smoke)
+├── data/                   ← dizionario XTrader + parser personalizzati (data/parsers/)
+├── docs/                   ← contratto CSV, guida parser, audit
+├── requirements.in         ← dipendenze runtime top-level (sorgente del lock)
+├── requirements-build.in   ← dipendenze build EXE (sorgente del lock di build)
+├── requirements-build.lock ← lockfile con hash (generato su Windows; va committato)
+├── requirements.txt        ← dipendenze Python (install "soft")
+├── README.md               ← questo file
+└── .github/workflows/      ← CI + build EXE Windows + Generate Windows Lockfile
 ```
 
 ---

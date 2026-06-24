@@ -1,0 +1,17 @@
+# Dipendenze runtime TOP-LEVEL — SORGENTE del lockfile riproducibile (pip-compile).
+#
+# Questi sono FLOOR (>=) di sicurezza/compatibilità, NON un lock: il lock completo con
+# hash è `requirements-build.lock`, generato su Windows + Python 3.11 dal workflow
+# "Generate Windows Lockfile" (vedi README). Tenere ALLINEATO con `requirements.txt`
+# (stesso set di vincoli runtime): `requirements.txt` resta l'install "soft" usato dalla
+# CI di test e dagli sviluppatori; questi `.in` sono la sorgente del lock di build.
+#
+# Vincoli applicati:
+# - customtkinter >=5.2.2: la 5.2.0 importa `distutils` (rimosso in Python 3.12) → si
+#   rompe all'avvio su 3.12+. Le 5.2.x successive usano `packaging` (compatibili).
+# - python-telegram-bot >=21.0: la 20.0 trascina `h11 0.14` (CVE GHSA-vqfr-h8mv-ghfj,
+#   request smuggling). API usate dal bridge stabili dalla 20.x → upgrade a basso rischio.
+# - h11 >=0.16.0: esclude la CVE (dipendenza transitiva via httpx→httpcore).
+customtkinter>=5.2.2
+python-telegram-bot>=21.0
+h11>=0.16.0

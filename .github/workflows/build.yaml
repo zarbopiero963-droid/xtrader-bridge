@@ -21,9 +21,22 @@ jobs:
         python-version: '3.11'
 
     - name: Installa Dipendenze
+      # Build riproducibile (A7): se `requirements-build.lock` è committato, si installa
+      # SOLO da lì con `--require-hashes` (versioni+hash bloccati, generati su Windows dal
+      # workflow "Generate Windows Lockfile"). Finché il lock non è presente, si usa
+      # l'install legacy così la build non si rompe — passerà automaticamente al lock
+      # appena committato. Il lock include runtime + pytest + pyinstaller + httpx, quindi
+      # copre anche lo step dei test e la compilazione dell'EXE.
+      shell: pwsh
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements-dev.txt pyinstaller httpx
+        if (Test-Path "requirements-build.lock") {
+          Write-Host "requirements-build.lock trovato: install riproducibile con --require-hashes."
+          python -m pip install --require-hashes -r requirements-build.lock
+        } else {
+          Write-Warning "requirements-build.lock assente: install legacy (passera' a --require-hashes appena il lock generato dalla CI Windows sara' committato)."
+          python -m pip install -r requirements-dev.txt pyinstaller httpx
+        }
 
     - name: Verifica compilazione (compileall)
       run: python -m compileall main.py xtrader_bridge tests
