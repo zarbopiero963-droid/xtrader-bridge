@@ -102,8 +102,10 @@ regole-colonna restano per gli altri campi e come fallback quando nessuna frase 
    `MARKET_MAPPING_MISSING` (non si tira a indovinare). *Alternativa* (se preferisci):
    match della frase **più lunga/più specifica**. Default proposto: **fail-closed**.
 3. **Coerenza Mercato↔Selezione.** La selezione deve appartenere al mercato scelto
-   (garantito già in fase di GUI: la tendina Selezione dipende dal Mercato). Lo store
-   rifiuta voci incoerenti.
+   (garantito già in fase di GUI: la tendina Selezione dipende dal Mercato). In più
+   **`resolve_market` valida ogni voce contro il Catalogo XTrader** (`_coherent`): una
+   coppia non presente nel catalogo (config editata a mano o bug) viene **ignorata** —
+   mai scritta nel CSV. Così anche un bypass della GUI resta fail-safe (Codex).
 4. **Una sola riga attiva.** Invariato: il CSV resta one-signal-at-a-time, svuotato dopo
    il timeout. La mappatura mercati non cambia questa catena.
 5. **Match su che testo? — DA CONFERMARE (default: testo grezzo del messaggio).** La frase

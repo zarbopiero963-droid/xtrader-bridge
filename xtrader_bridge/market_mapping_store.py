@@ -42,6 +42,8 @@ NB: la **precedenza D1** ("il dizionario vince" sulla regola-colonna) è una sce
 import re
 from collections import namedtuple
 
+from . import dizionario
+
 # Chiave di config che ospita i profili di mappatura mercati.
 _STORE_KEY = "market_mappings"
 
@@ -182,6 +184,28 @@ def rename_profile(cfg: dict, old: str, new: str) -> dict:
     return out
 
 
+def _coherent(market_name: str, selection_name: str, rows=None) -> bool:
+    """``True`` se ``(market_name, selection_name)`` è una coppia VALIDA del Catalogo
+    XTrader: un mercato **fisso** esistente + una sua selezione **non dinamica**.
+
+    Validazione safety-critical (design §5.3): una config editata a mano (o un futuro bug
+    GUI) potrebbe salvare una coppia incoerente (es. mercato "Over/Under 2.5" con selezione
+    "Sì") che XTrader non riconoscerebbe; ``resolve_market`` scarta tali voci invece di
+    farle scrivere nel CSV. Confronto case/spazio-insensitive (``dizionario.normalize``).
+    ``rows`` permette di iniettare un catalogo nei test; di default usa quello reale."""
+    mn = str(market_name or "").strip()
+    sn = str(selection_name or "").strip()
+    if not mn or not sn:
+        return False
+    fixed = {dizionario.normalize(m) for m in dizionario.market_names(rows=rows, fixed_only=True)}
+    if dizionario.normalize(mn) not in fixed:
+        return False
+    sels = {dizionario.normalize(s["SelectionName"])
+            for s in dizionario.selections_for_market(mn, rows)
+            if not s["dynamic"] and s["SelectionName"]}
+    return dizionario.normalize(sn) in sels
+
+
 def _phrase_in_text(phrase: str, text_norm: str) -> bool:
     """``True`` se ``phrase`` compare in ``text_norm`` (già normalizzato) come
     sottostringa su **confini di parola**. I lookaround ``(?<!\\w)``/``(?!\\w)`` evitano
@@ -193,12 +217,14 @@ def _phrase_in_text(phrase: str, text_norm: str) -> bool:
     return re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", text_norm) is not None
 
 
-def resolve_market(text: str, profiles) -> MarketResolution:
+def resolve_market(text: str, profiles, rows=None) -> MarketResolution:
     """Risolve il mercato canonico XTrader dalla frase del provider nel ``text``.
 
     ``profiles`` è una lista di liste-di-voci (vedi ``entries_for_profiles``). Si
-    raccolgono TUTTE le voci la cui frase compare nel testo (D3: testo grezzo,
-    case-insensitive, confini di parola). Poi (D2):
+    raccolgono le voci la cui frase compare nel testo (D3: testo grezzo, case-insensitive,
+    confini di parola) **e** la cui coppia Mercato/Selezione è **coerente col Catalogo
+    XTrader** (``_coherent``, §5.3): una voce incoerente (config a mano/bug) viene ignorata,
+    mai scritta. ``rows`` inietta un catalogo nei test. Poi (D2):
 
     - 0 match → ``MarketResolution("none", None)``;
     - match che indicano **lo stesso** ``(market_type, market_name, selection_name)``
@@ -212,9 +238,15 @@ def resolve_market(text: str, profiles) -> MarketResolution:
     found = []
     for entries in (profiles or []):
         for e in entries:
-            if _phrase_in_text(e.get("phrase", ""), t):
-                found.append((e.get("market_type", ""), e.get("market_name", ""),
-                              e.get("selection_name", "")))
+            if not _phrase_in_text(e.get("phrase", ""), t):
+                continue
+            mn = e.get("market_name", "")
+            sn = e.get("selection_name", "")
+            # Coppia incoerente col Catalogo (config a mano / bug) → IGNORATA: non si scrive
+            # mai un mercato che XTrader non riconosce (design §5.3, Codex).
+            if not _coherent(mn, sn, rows):
+                continue
+            found.append((e.get("market_type", ""), mn, sn))
     if not found:
         return MarketResolution("none", None)
     if len(set(found)) > 1:

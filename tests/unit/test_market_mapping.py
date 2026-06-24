@@ -8,7 +8,9 @@ parola). Vedi `docs/audit/mercati_mapping_design.md`.
 from xtrader_bridge import market_mapping_store as mms
 
 
-def _entry(phrase, market="Over/Under 2.5", selection="Over 2.5", mtype="OVER_UNDER"):
+# Coppie Mercato/Selezione REALI del Catalogo XTrader (resolve_market valida la coerenza
+# contro il catalogo, design §5.3): usare valori inesistenti darebbe sempre "none".
+def _entry(phrase, market="Entrambe le squadre a segno", selection="Sì", mtype="GOAL_NOGOAL"):
     return {"phrase": phrase, "market_type": mtype,
             "market_name": market, "selection_name": selection}
 
@@ -19,9 +21,9 @@ def test_resolve_match_univoco():
     profiles = [[_entry("goal prima di 70")]]
     res = mms.resolve_market("Consiglio: goal prima di 70, quota 1.8", profiles)
     assert res.status == "ok"
-    assert res.market == {"market_type": "OVER_UNDER",
-                          "market_name": "Over/Under 2.5",
-                          "selection_name": "Over 2.5"}
+    assert res.market == {"market_type": "GOAL_NOGOAL",
+                          "market_name": "Entrambe le squadre a segno",
+                          "selection_name": "Sì"}
 
 
 def test_resolve_nessun_match():
@@ -41,40 +43,62 @@ def test_resolve_case_insensitive():
 
 
 def test_resolve_confine_di_parola_no_falso_positivo():
-    # "over" non deve combaciare dentro "overflow"/"discover".
-    profiles = [[_entry("over", market="Over/Under 0.5", selection="Over 0.5")]]
+    # "over" non deve combaciare dentro "overflow"/"discover". Coppia reale del catalogo.
+    profiles = [[_entry("over", market="1º tempo - Totale goal 0,5",
+                        selection="Over 0,5 goal")]]
     assert mms.resolve_market("data overflow discover", profiles).status == "none"
     # ma combacia come parola a sé
     assert mms.resolve_market("punta over adesso", profiles).status == "ok"
 
 
 def test_resolve_frase_con_numeri_e_punteggiatura():
-    profiles = [[_entry("over 2.5", market="Over/Under 2.5", selection="Over 2.5")]]
-    assert mms.resolve_market("vai di over 2.5!", profiles).status == "ok"
-    # "over 2.55" non deve combaciare con la frase "over 2.5" (confine dopo il 5)
-    assert mms.resolve_market("over 2.55", profiles).status == "none"
+    profiles = [[_entry("over 0,5", market="1º tempo - Totale goal 0,5",
+                        selection="Over 0,5 goal")]]
+    assert mms.resolve_market("vai di over 0,5!", profiles).status == "ok"
+    # "over 0,55" non deve combaciare con la frase "over 0,5" (confine dopo il 5)
+    assert mms.resolve_market("over 0,55", profiles).status == "none"
 
 
 def test_resolve_ambiguo_mercati_diversi_failclosed():
-    # Due frasi diverse combaciano e indicano mercati DIVERSI → ambiguous (D2).
+    # Due frasi diverse combaciano e indicano selezioni DIVERSE → ambiguous (D2).
     profiles = [[
-        _entry("over", market="Over/Under 2.5", selection="Over 2.5"),
-        _entry("under", market="Over/Under 2.5", selection="Under 2.5"),
+        _entry("gol gol", market="Entrambe le squadre a segno", selection="Sì"),
+        _entry("no gol", market="Entrambe le squadre a segno", selection="No"),
     ]]
-    res = mms.resolve_market("scommetti over e under", profiles)
+    res = mms.resolve_market("scommetti gol gol e no gol", profiles)
     assert res.status == "ambiguous"
     assert res.market is None
 
 
 def test_resolve_match_doppio_stesso_mercato_non_ambiguo():
-    # Due frasi diverse ma con LO STESSO mercato/selezione → ok (non ambiguo).
+    # Due frasi diverse ma con LA STESSA selezione → ok (non ambiguo).
     profiles = [[
-        _entry("over", market="Over/Under 2.5", selection="Over 2.5"),
-        _entry("piu di 2.5", market="Over/Under 2.5", selection="Over 2.5"),
+        _entry("gol gol", market="Entrambe le squadre a segno", selection="Sì"),
+        _entry("entrambe segnano", market="Entrambe le squadre a segno", selection="Sì"),
     ]]
-    res = mms.resolve_market("over e piu di 2.5", profiles)
+    res = mms.resolve_market("gol gol e entrambe segnano", profiles)
     assert res.status == "ok"
-    assert res.market["selection_name"] == "Over 2.5"
+    assert res.market["selection_name"] == "Sì"
+
+
+def test_resolve_voce_incoerente_col_catalogo_ignorata():
+    # Mercato/Selezione NON nel catalogo XTrader → la voce è ignorata anche se la frase
+    # combacia: mai scrivere un mercato non riconoscibile (design §5.3).
+    profiles = [[_entry("frase x", market="Mercato Inventato", selection="Selezione X")]]
+    assert mms.resolve_market("frase x", profiles).status == "none"
+    # Coppia reale ma INCOERENTE (selezione di un altro mercato) → ignorata.
+    bad = [[_entry("frase y", market="Entrambe le squadre a segno", selection="Over 0,5 goal")]]
+    assert mms.resolve_market("frase y", bad).status == "none"
+
+
+def test_resolve_catalogo_iniettato_nei_test():
+    # `rows` permette di iniettare un catalogo (purezza/testabilità): qui un catalogo
+    # finto minimale rende coerente una coppia altrimenti inesistente.
+    fake_rows = [{"MarketType_XTrader": "T", "MarketName_XTrader": "Mercato Finto",
+                  "SelectionRole": "", "SelectionName_XTrader": "Sel Finta",
+                  "Linea": "", "Handicap": "", "BetType_XTrader": "", "Lingua": ""}]
+    profiles = [[_entry("xyz", market="Mercato Finto", selection="Sel Finta")]]
+    assert mms.resolve_market("gioca xyz", profiles, rows=fake_rows).status == "ok"
 
 
 def test_resolve_multi_profilo():
