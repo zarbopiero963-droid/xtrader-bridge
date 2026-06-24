@@ -22,8 +22,10 @@ import customtkinter as ctk
 from . import config_store, custom_parser, gui_utils, name_mapping_store
 
 
-class NameMappingWindow(ctk.CTkToplevel):
-    """Finestra del Dizionario nomi squadra.
+class NameMappingPanel(ctk.CTkFrame):
+    """Pannello del Dizionario nomi squadra (area "Calcio" del Mapping) — incassabile
+    in finestra standalone (`NameMappingWindow`) o come area della scheda "Mapping"
+    della finestra "🧰 Strumenti".
 
     `on_saved(new_cfg)`: callback opzionale chiamata dopo ogni salvataggio riuscito,
     così la GUI principale aggiorna la propria config in memoria."""
@@ -32,12 +34,18 @@ class NameMappingWindow(ctk.CTkToplevel):
 
     def __init__(self, master=None, on_saved=None):
         super().__init__(master)
-        self.title("Dizionario nomi squadra")
-        gui_utils.fit_to_screen(self, 760, 620, 680, 460)
         self._on_saved = on_saved
         self._current = None              # nome profilo selezionato
         self._row_widgets = []            # [{frame, country, betfair, provider}, ...]
         self._build_ui()
+        self._reload_profiles(select_first=True)
+
+    def refresh(self):
+        """Ricarica profili e righe del dizionario nomi dalla config su disco.
+
+        Da chiamare quando la config cambia da FUORI (es. un profilo applicato nella
+        stessa finestra "🧰 Strumenti"): senza, un Salva successivo riscriverebbe il
+        dizionario nomi stantio sopra il profilo (Codex)."""
         self._reload_profiles(select_first=True)
 
     # ── costruzione UI ─────────────────────────────────────────────────────
@@ -322,3 +330,52 @@ class NameMappingWindow(ctk.CTkToplevel):
                      f"({', '.join(affected)}): quei segnali verranno scartati (MAPPING_MISSING) "
                      "finché non togli il profilo da quei parser.",
                 text_color="#ffa726")
+
+
+class MappingPanel(ctk.CTkFrame):
+    """Scheda "Mapping" della finestra "🧰 Strumenti": raccoglie i dizionari di
+    traduzione provider → XTrader in DUE aree (sotto-schede):
+
+    - **⚽ Calcio**: nomi squadre/campionati (`NameMappingPanel`, già funzionante);
+    - **🎯 Mercati**: traduzione frase-mercato → mercato/selezione XTrader. Area
+      PREDISPOSTA ma ancora vuota: la logica di riconoscimento mercati (a frase) è una
+      fase a sé (vedi `docs/audit/roadmap.md`, FASE 2) perché tocca CSV → scommessa.
+
+    `on_saved(new_cfg)`: inoltrata all'area Calcio (il dizionario nomi persiste su config)."""
+
+    def __init__(self, master=None, on_saved=None):
+        super().__init__(master)
+        self._tabs = ctk.CTkTabview(self)
+        self._tabs.pack(fill="both", expand=True, padx=4, pady=4)
+
+        calcio = self._tabs.add("⚽ Calcio")
+        self._calcio = NameMappingPanel(calcio, on_saved=on_saved)
+        self._calcio.pack(fill="both", expand=True)
+
+        mercati = self._tabs.add("🎯 Mercati")
+        ctk.CTkLabel(
+            mercati,
+            text="🎯 Mappatura Mercati — in arrivo.\n\n"
+                 "Qui potrai definire regole frase → mercato/selezione XTrader\n"
+                 "(es. «goal prima di 70» ⇒ Over 2.5), scelti dal Catalogo XTrader\n"
+                 "come nel Parser Personalizzato. È una fase a sé perché incide\n"
+                 "sul CSV (scommessa): vedi la roadmap.",
+            justify="left", anchor="w", text_color="gray").pack(padx=16, pady=16, anchor="w")
+
+    def refresh(self):
+        """Ricarica l'area Calcio (dizionario nomi) dalla config su disco. L'area Mercati
+        è un placeholder senza stato, niente da ricaricare."""
+        self._calcio.refresh()
+
+
+class NameMappingWindow(ctk.CTkToplevel):
+    """Finestra standalone che ospita `NameMappingPanel` a tutta finestra.
+
+    Mantenuta per compatibilità; la stessa `NameMappingPanel` vive anche come area
+    "⚽ Calcio" della scheda "Mapping" (`MappingPanel`) in "🧰 Strumenti"."""
+
+    def __init__(self, master=None, on_saved=None):
+        super().__init__(master)
+        self.title("Dizionario nomi squadra")
+        gui_utils.fit_to_screen(self, 760, 620, 680, 460)
+        NameMappingPanel(self, on_saved=on_saved).pack(fill="both", expand=True)

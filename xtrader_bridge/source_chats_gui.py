@@ -35,16 +35,15 @@ def _none_sentinel(names) -> str:
     return label
 
 
-class SourceChatsWindow(ctk.CTkToplevel):
-    """Finestra editor delle sorgenti multi-chat.
+class SourceChatsPanel(ctk.CTkFrame):
+    """Pannello editor delle sorgenti multi-chat — incassabile in finestra standalone
+    (`SourceChatsWindow`) o come scheda della finestra "🧰 Strumenti".
 
     `on_saved(new_cfg)`: callback opzionale chiamata dopo un salvataggio riuscito,
     così la GUI principale può aggiornare la propria config in memoria."""
 
     def __init__(self, master=None, on_saved=None):
         super().__init__(master)
-        self.title("Chat sorgenti (multi-chat)")
-        gui_utils.fit_to_screen(self, 1080, 560, 820, 460)
         self._on_saved = on_saved
         self._editor = SourceEditor(config_store.load_config(config_store.CONFIG_FILE))
         self._modes = self._editor.mode_options()
@@ -55,6 +54,25 @@ class SourceChatsWindow(ctk.CTkToplevel):
         self._parser_options = [self._no_parser] + self._parser_names
         self._rows = []   # widget refs per sorgente
         self._build_ui()
+        for src in self._editor.sources:
+            self._add_row(src)
+
+    def refresh(self):
+        """Ricarica editor e righe dalla config su disco.
+
+        Da chiamare quando la config cambia da FUORI questo pannello (es. un profilo
+        applicato nella stessa finestra "🧰 Strumenti"): senza, un Salva successivo
+        riscriverebbe le `source_chats` STANTIE sopra il profilo appena caricato,
+        indebolendo il filtro chat (Codex P1). Le modifiche non salvate vengono scartate:
+        il profilo appena caricato è la nuova verità."""
+        self._editor = SourceEditor(config_store.load_config(config_store.CONFIG_FILE))
+        self._modes = self._editor.mode_options()
+        self._parser_names = self._editor.parser_options()
+        self._no_parser = _none_sentinel(self._parser_names)
+        self._parser_options = [self._no_parser] + self._parser_names
+        for refs in self._rows:
+            refs["frame"].destroy()
+        self._rows = []
         for src in self._editor.sources:
             self._add_row(src)
 
@@ -159,3 +177,16 @@ class SourceChatsWindow(ctk.CTkToplevel):
         if warnings:
             msg += "\n⚠️ " + "  ·  ".join(warnings)
         self._status.configure(text=msg, text_color="#66bb6a")
+
+
+class SourceChatsWindow(ctk.CTkToplevel):
+    """Finestra standalone che ospita `SourceChatsPanel` a tutta finestra.
+
+    Mantenuta per compatibilità; la stessa `SourceChatsPanel` vive anche come scheda
+    della finestra "🧰 Strumenti"."""
+
+    def __init__(self, master=None, on_saved=None):
+        super().__init__(master)
+        self.title("Chat sorgenti (multi-chat)")
+        gui_utils.fit_to_screen(self, 1080, 560, 820, 460)
+        SourceChatsPanel(self, on_saved=on_saved).pack(fill="both", expand=True)

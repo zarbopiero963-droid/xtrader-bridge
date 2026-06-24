@@ -119,10 +119,13 @@ scommessa sbagliata). Nessun nome squadra viene mai tradotto "a caso". Un parser
 **senza profili** non applica alcuna mappatura (`EventName` invariato,
 retro-compatibile).
 
-**GUI**: i profili si gestiscono nel **Dizionario nomi squadra** (pulsante «🗺️
-Dizionario nomi» nella finestra principale, `name_mapping_gui.NameMappingWindow`):
-una **finestra separata** con il selettore profilo (nuovo/rinomina/elimina) e la
-tabella `Country | Betfair/XTrader | Provider`. Nel **Parser Personalizzato** scegli
+**GUI**: i profili si gestiscono nella scheda **Mapping** della finestra «🧰 Strumenti»
+(pulsante «🗺️ Mapping» nella finestra principale → `name_mapping_gui.MappingPanel`),
+**area ⚽ Calcio** (`NameMappingPanel`): selettore profilo (nuovo/rinomina/elimina) e
+tabella `Country | Betfair/XTrader | Provider`. L'area **🎯 Mercati** è predisposta ma
+vuota (riconoscimento mercati a frase: vedi `docs/audit/roadmap.md`, FASE 2). La classe
+`NameMappingWindow` resta come finestra standalone (compatibilità). Nel **Parser
+Personalizzato** scegli
 il **separatore** squadre e spunti i **profili** da usare (checkbox multi-selezione);
 «Prova messaggio» risolve i profili dalla config e mostra l'`EventName` tradotto (o
 `MAPPING_MISSING` se non mappabile), coerente col runtime.
@@ -294,7 +297,7 @@ comportamento legacy (tutte le chat ammesse — responsabilità dell'utente).
 | Motore di estrazione (delimitatori tolleranti) | `custom_parser_engine.py` | `tests/unit/test_custom_parser_engine.py` |
 | Value-map (bettype + dizionario) | `value_maps.py` | `tests/unit/test_value_maps.py` |
 | Mappatura nomi squadra (profili) | `name_mapping_store.py` | `tests/unit/test_name_mapping.py` |
-| GUI Dizionario nomi (finestra) | `name_mapping_gui.py` | verifica manuale (GUI) |
+| GUI Mapping nomi — area ⚽ Calcio (+ 🎯 Mercati predisposta) | `name_mapping_gui.py` (`MappingPanel`, `NameMappingPanel`) | verifica manuale (GUI) |
 | Trasformazioni | `transforms.py` | `tests/unit/test_transforms.py` |
 | Riga validata col contratto | `custom_pipeline.py` | `tests/unit/test_custom_pipeline.py` |
 | Diagnostica «Prova messaggio» (per-campo) | `parser_diagnostics.py` | `tests/unit/test_parser_diagnostics.py` |

@@ -393,7 +393,7 @@ class App(ctk.CTk):
         ctk.CTkButton(
             tools_frame, text="📡  Chat sorgenti", width=180, height=38,
             fg_color="#00695c", hover_color="#004d40",
-            command=self._open_source_chats).pack(side="left", padx=5)
+            command=lambda: self._open_tools("📡 Chat sorgenti")).pack(side="left", padx=5)
         tools_frame2 = ctk.CTkFrame(self, fg_color="transparent")
         tools_frame2.pack(fill="x", padx=15, pady=(0, 4))
         ctk.CTkButton(
@@ -405,9 +405,9 @@ class App(ctk.CTk):
             fg_color="#5d4037", hover_color="#3e2723",
             command=lambda: self._open_tools("📁 Profili")).pack(side="left", padx=5)
         ctk.CTkButton(
-            tools_frame2, text="🗺️  Dizionario nomi", width=200, height=38,
+            tools_frame2, text="🗺️  Mapping", width=200, height=38,
             fg_color="#37474f", hover_color="#263238",
-            command=self._open_name_mapping).pack(side="left", padx=5)
+            command=lambda: self._open_tools("🗺️ Mapping")).pack(side="left", padx=5)
 
         # Monitoraggio a schede (B3): Chat ascoltate / Stato / Dashboard / Log erano
         # quattro pannelli impilati che allungavano molto la finestra. Ora vivono in un
@@ -1457,20 +1457,6 @@ class App(ctk.CTk):
                                  on_saved=_on_saved)
         win.focus()
 
-    def _open_source_chats(self):
-        """Apre l'editor delle sorgenti multi-chat (PR-13b). Import lazy: la GUI
-        dell'editor non serve all'avvio del bridge. Al salvataggio aggiorna la
-        config in memoria, così START usa subito le sorgenti modificate."""
-        from .source_chats_gui import SourceChatsWindow
-
-        def _on_saved(new_cfg):
-            self._config = new_cfg
-            self._refresh_listened_chats()
-            self._log(f"📡 Sorgenti multi-chat aggiornate ({len(new_cfg.get('source_chats', []))}).")
-
-        win = SourceChatsWindow(self, on_saved=_on_saved)
-        win.focus()
-
     def _open_tools(self, initial=None):
         """Apre la finestra hub "🧰 Strumenti" a schede (consolidazione GUI, roadmap).
         Import lazy: le GUI degli strumenti non servono all'avvio del bridge. Qui si
@@ -1482,6 +1468,8 @@ class App(ctk.CTk):
         from .tools_gui import ToolsWindow
         from .provider_gui import ProviderPanel
         from .profiles_gui import ProfilesPanel
+        from .source_chats_gui import SourceChatsPanel
+        from .name_mapping_gui import MappingPanel
 
         # UNA sola finestra hub: se è già aperta, si cambia scheda e la si porta in primo
         # piano invece di aprirne una seconda identica (CodeRabbit). `winfo_exists` è 0 se
@@ -1510,26 +1498,52 @@ class App(ctk.CTk):
             self._save_ok = ok
             self._populate_form(saved)
             self._refresh_listened_chats()
-            # Un profilo applicato può sostituire la lista `providers`: nella stessa hub
-            # il pannello Provider è già costruito e mostrerebbe nomi STANTII finché non lo
-            # si modifica → lo si ricarica dal disco appena salvato (Codex). Best-effort:
-            # un errore di refresh non deve far fallire il caricamento del profilo.
-            pv = panel_refs.get("provider")
-            if pv is not None:
-                try:
-                    pv.refresh()
-                except Exception:           # noqa: BLE001
-                    pass
+            # Un profilo applicato cambia config.json: TUTTI i pannelli editabili già
+            # costruiti nella stessa hub (Provider, Chat sorgenti, Mapping) hanno stato
+            # STANTIO in memoria. Senza refresh, un loro Salva successivo riscriverebbe il
+            # vecchio stato sopra il profilo — per Chat sorgenti significa riscrivere
+            # `source_chats` vecchie e INDEBOLIRE il filtro chat (Codex P1). Si ricaricano
+            # tutti dal disco appena salvato. Best-effort: un refresh fallito non blocca il
+            # caricamento del profilo.
+            for _key in ("provider", "sources", "mapping"):
+                _panel = panel_refs.get(_key)
+                if _panel is not None:
+                    try:
+                        _panel.refresh()
+                    except Exception:       # noqa: BLE001
+                        pass
             if ok:
                 self._log("📁 Profilo caricato e applicato (token invariato).")
             else:
                 self._log("⚠️ Profilo applicato in memoria, ma salvataggio su disco "
                           "FALLITO (token invariato). Controlla permessi/spazio.")
 
+        def _sources_saved(new_cfg):
+            """Sorgenti salvate: aggiorna config in memoria + chat ascoltate (START usa
+            subito le sorgenti modificate)."""
+            self._config = new_cfg
+            self._refresh_listened_chats()
+            self._log(f"📡 Sorgenti multi-chat aggiornate ({len(new_cfg.get('source_chats', []))}).")
+
+        def _mapping_saved(new_cfg):
+            """Dizionario nomi (area Calcio del Mapping) salvato: aggiorna la config in
+            memoria (anti-stale, stesso pattern di Provider/Sorgenti)."""
+            self._config = new_cfg
+
         def _make_provider(parent):
             """Crea il pannello Provider e ne tiene il riferimento per il refresh."""
             panel_refs["provider"] = ProviderPanel(parent, on_saved=_provider_saved)
             return panel_refs["provider"]
+
+        def _make_sources(parent):
+            """Crea il pannello Chat sorgenti e ne tiene il riferimento per il refresh."""
+            panel_refs["sources"] = SourceChatsPanel(parent, on_saved=_sources_saved)
+            return panel_refs["sources"]
+
+        def _make_mapping(parent):
+            """Crea il pannello Mapping e ne tiene il riferimento per il refresh."""
+            panel_refs["mapping"] = MappingPanel(parent, on_saved=_mapping_saved)
+            return panel_refs["mapping"]
 
         panels = [
             ("📇 Provider", _make_provider),
@@ -1537,22 +1551,11 @@ class App(ctk.CTk):
              lambda parent: ProfilesPanel(
                  parent, get_current_cfg=self._save_config, on_loaded=_profiles_loaded,
                  is_running=lambda: self._running)),
+            ("📡 Chat sorgenti", _make_sources),
+            ("🗺️ Mapping", _make_mapping),
         ]
         self._tools_win = ToolsWindow(self, panels=panels, initial=initial)
         self._tools_win.focus()
-
-    def _open_name_mapping(self):
-        """Apre il Dizionario nomi squadra (profili di mappatura provider → Betfair/
-        XTrader). Import lazy: la GUI non serve all'avvio. Al salvataggio aggiorna la
-        config in memoria, così un successivo Salva/Avvia non riscrive il file perdendo
-        le mappature (stesso pattern di Provider/Sorgenti)."""
-        from .name_mapping_gui import NameMappingWindow
-
-        def _on_saved(new_cfg):
-            self._config = new_cfg
-
-        win = NameMappingWindow(self, on_saved=_on_saved)
-        win.focus()
 
     def _populate_form(self, cfg: dict) -> None:
         """Ripopola i campi del form (base + avanzati) dalla config passata: usato dopo
