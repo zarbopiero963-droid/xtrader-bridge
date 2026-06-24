@@ -39,8 +39,9 @@ del proprietario, vedi ``docs/audit/mercati_mapping_design.md``:
 - **D3 match sul campo estratto**: il mercato si legge SOLO tra i delimitatori
   ``Inizia dopo``/``Finisce prima`` (non su tutto il messaggio), poi il testo mercato si
   confronta case-insensitive e su **confini di token** (no falsi positivi tipo "over" dentro
-  "overflow"). Niente delimitatori → voce scartata (la modalità "frase su tutto il
-  messaggio" è stata RIMOSSA);
+  "overflow"). Una voce **senza delimitatori** è **preservata** in config ma **non
+  applicata** (``resolve_market`` la salta, fail-closed): la modalità "frase su tutto il
+  messaggio" è rimossa, ma le voci vecchie non vengono cancellate (no perdita dati);
 - nessun match → stato ``"none"`` (il chiamante decide il fallback, vedi precedenza D1
   nel runtime). ``resolve_market`` non inventa mai un mercato.
 
@@ -99,24 +100,25 @@ def _clean_entry(entry) -> dict:
     """Normalizza una voce in ``{start_after, end_before, phrase, market_type, market_name,
     selection_name}`` (stringhe ripulite), o ``None`` se inutile.
 
-    Una voce serve solo se ha: **almeno un delimitatore** (``start_after`` o ``end_before``),
-    il **testo mercato** (``phrase``, il valore da riconoscere nel campo estratto),
-    **market_name** e **selection_name**. Senza un delimitatore la voce cercherebbe su tutto
-    il messaggio: modalità RIMOSSA (un banner/menu darebbe falsi match), quindi è scartata
-    (fail-closed). ``market_type`` può essere vuoto (lo ricava ``_canonical_market`` dal
-    catalogo)."""
+    Una voce è valida se ha **testo mercato** (``phrase``), **market_name** e
+    **selection_name**: senza, non può formare un mercato. I delimitatori ``start_after``/
+    ``end_before`` sono **facoltativi a livello dati**: così una config vecchia senza
+    delimitatori NON viene cancellata al load/save (niente perdita dati, CodeRabbit). È
+    ``resolve_market`` a **non applicare** una voce senza delimitatori — la **salta**
+    (fail-closed) — invece di eliminarla. Dei delimitatori si tolgono **solo spazi/tab** ai
+    bordi (come ``_delim_pattern`` del Parser), **preservando i newline** (es. ``"\\nMercato:"``
+    resta ancorato a inizio riga, Codex). ``market_type`` può essere vuoto (lo ricava
+    ``_canonical_market`` dal catalogo)."""
     if not isinstance(entry, dict):
         return None
-    start_after = str(entry.get("start_after", "") or "").strip()
-    end_before = str(entry.get("end_before", "") or "").strip()
+    start_after = str(entry.get("start_after", "") or "").strip(" \t")
+    end_before = str(entry.get("end_before", "") or "").strip(" \t")
     phrase = str(entry.get("phrase", "") or "").strip()
     market_type = str(entry.get("market_type", "") or "").strip()
     market_name = str(entry.get("market_name", "") or "").strip()
     selection_name = str(entry.get("selection_name", "") or "").strip()
     if not phrase or not market_name or not selection_name:
         return None
-    if not start_after and not end_before:
-        return None    # nessun delimitatore → niente estrazione → voce scartata (fail-closed)
     return {"start_after": start_after, "end_before": end_before, "phrase": phrase,
             "market_type": market_type, "market_name": market_name,
             "selection_name": selection_name}
@@ -274,18 +276,20 @@ def resolve_market(text: str, profiles, rows=None) -> MarketResolution:
     found = []
     for entries in (profiles or []):
         for e in entries:
-            sa = str(e.get("start_after", "") or "").strip()
-            eb = str(e.get("end_before", "") or "").strip()
+            sa = str(e.get("start_after", "") or "")
+            eb = str(e.get("end_before", "") or "")
             ph = str(e.get("phrase", "") or "").strip()
             # Difesa ANCHE sul percorso runtime (i profili possono arrivare grezzi, non solo
             # ripuliti da _clean_entry): una voce senza testo mercato o senza alcun
-            # delimitatore è ignorata qui, così non può MAI combaciare su tutto il messaggio
-            # (la modalità "frase su tutto il testo" non deve rientrare di nascosto, Sourcery).
-            if not ph or (not sa and not eb):
+            # delimitatore è ignorata qui (non applicata, fail-closed), così non può MAI
+            # combaciare su tutto il messaggio (Sourcery/CodeRabbit). "Vuoto" = solo spazi/tab
+            # ai bordi, come `_delim_pattern`: un delimitatore di soli newline conta.
+            if not ph or (not sa.strip(" \t") and not eb.strip(" \t")):
                 continue
             # Leggi il mercato SOLO dalla posizione delimitata (niente scansione dell'intero
-            # messaggio): l'estrazione usa il testo grezzo (i delimitatori sono case-sensitive
-            # come nel Parser), poi il testo mercato si confronta sul campo normalizzato.
+            # messaggio): i delimitatori RAW vanno a extract_between, che preserva i newline
+            # (ancoraggio a inizio riga, Codex); poi il testo mercato si confronta sul campo
+            # normalizzato. I delimitatori sono case-sensitive come nel Parser.
             region = extract_between(text, sa, eb)
             if not region:
                 continue

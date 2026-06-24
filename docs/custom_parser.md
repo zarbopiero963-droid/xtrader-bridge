@@ -146,8 +146,9 @@ traducono nel **Mercato + Selezione XTrader** canonici (gli stessi del Catalogo 
   testa un **banner/menu** con più mercati (es. `P.Bet. 30/0,5HT/1,5HT/1 ASIATICO`); cercare
   la frase nell'intero testo darebbe falsi match/ambiguità. Leggendo **solo** il campo
   delimitato (es. fra `Quota` e `Prematch`) si prende il mercato vero e si ignora il banner.
-  Una voce **senza** delimitatori è **scartata** (la modalità "frase su tutto il messaggio"
-  è stata rimossa);
+  Una voce **senza** delimitatori è **preservata** in config (le mappature vecchie non si
+  perdono) ma **non applicata** dal bridge finché non aggiungi i delimitatori — la modalità
+  "frase su tutto il messaggio" è rimossa, ma senza cancellare dati;
 - **precedenza (D1): il dizionario VINCE.** Se una voce combacia in modo univoco, imposta
   `MarketType`/`MarketName`/`SelectionName` **sovrascrivendo** quelli eventualmente estratti
   dalle regole-colonna. Se **nessuna** voce combacia, restano i valori delle regole-colonna.

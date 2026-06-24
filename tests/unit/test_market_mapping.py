@@ -76,6 +76,36 @@ def test_resolve_end_before_vuoto_fino_a_fine_riga():
     profiles = [[_entry("gol gol", start_after="Mercato:", end_before="")]]
     assert mms.resolve_market("Mercato: gol gol", profiles).status == "ok"
     assert mms.resolve_market("Mercato: gol gol\naltro", profiles).status == "ok"
+    # Regressione (CodeRabbit): l'estrazione deve FERMARSI a fine riga — il testo della riga
+    # 2 non deve combaciare (se "spillasse" oltre il newline, "no gol" matcherebbe).
+    p2 = [[_entry("no gol", start_after="Mercato:", end_before="")]]
+    assert mms.resolve_market("Mercato: gol gol\nbanner: no gol", p2).status == "none"
+
+
+def test_resolve_voce_legacy_senza_delimitatori_preservata_ma_inerte():
+    # Una voce vecchia (solo phrase, niente delimitatori) NON va persa al round-trip
+    # set/get (CodeRabbit), ma il resolver non la applica (fail-closed).
+    legacy = {"phrase": "gol gol", "market_type": "",
+              "market_name": "Entrambe le squadre a segno", "selection_name": "Sì"}
+    cfg = mms.set_entries({}, "P", [legacy])
+    assert len(mms.get_entries(cfg, "P")) == 1            # preservata
+    # ...ma non applicata: nessun delimitatore → saltata.
+    assert mms.resolve_market("ovunque gol gol nel testo",
+                              mms.entries_for_profiles(cfg, ["P"])).status == "none"
+
+
+def test_resolve_delimitatore_con_newline_preservato():
+    # Codex: un delimitatore con newline ("\nQuota") deve restare ancorato a inizio riga —
+    # i newline NON vengono tolti (solo spazi/tab ai bordi, come nel Parser).
+    cfg = mms.set_entries({}, "P", [_entry(
+        "0,5 HT", start_after="\nQuota ", end_before="Prematch",
+        market="1º tempo - Totale goal 0,5", selection="Over 0,5 goal", mtype="")])
+    e = mms.get_entries(cfg, "P")[0]
+    assert e["start_after"] == "\nQuota"                  # newline preservato, spazi tolti
+    prof = mms.entries_for_profiles(cfg, ["P"])
+    # "Quota" a inizio riga → combacia; "Quota" inline nel banner non basta da solo.
+    assert mms.resolve_market("Tip\nQuota 0,5 HT Prematch:0", prof).status == "ok"
+    assert mms.resolve_market("banner Quota 0,5 HT Prematch inline", prof).status == "none"
 
 
 def test_resolve_nessun_match_testo_diverso():
@@ -196,18 +226,22 @@ def test_add_get_set_entries():
 
 
 def test_clean_entry_scarta_incomplete():
-    # Mancano delimitatore / phrase / market_name / selection_name → voce scartata.
+    # Mancano phrase / market_name / selection_name → voce scartata. La voce SENZA
+    # delimitatori è invece PRESERVATA (no perdita dati): sarà il resolver a non applicarla.
     cfg = mms.set_entries({}, "P", [
         {"start_after": "M:", "end_before": "", "phrase": "x",
          "market_name": "M", "selection_name": "S", "market_type": "T"},      # ok
         {"start_after": "M:", "phrase": "", "market_name": "M", "selection_name": "S"},  # no phrase
         {"start_after": "M:", "phrase": "y", "market_name": "", "selection_name": "S"},  # no market
         {"start_after": "M:", "phrase": "z", "market_name": "M", "selection_name": ""},  # no selection
-        {"phrase": "w", "market_name": "M", "selection_name": "S"},   # nessun delimitatore → scartata
+        {"phrase": "w", "market_name": "M", "selection_name": "S"},   # nessun delimitatore → PRESERVATA
         "non-dict",
     ])
     entries = mms.get_entries(cfg, "P")
-    assert [e["phrase"] for e in entries] == ["x"]
+    assert [e["phrase"] for e in entries] == ["x", "w"]
+    # La voce legacy è preservata con delimitatori vuoti.
+    w = entries[1]
+    assert w["start_after"] == "" and w["end_before"] == ""
 
 
 def test_market_type_opzionale_preservato():

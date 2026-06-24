@@ -132,7 +132,8 @@ regole-colonna restano per gli altri campi e come fallback quando nessuna frase 
    Il mercato si legge **solo** dal campo ritagliato dai delimitatori ``Inizia dopo`` /
    ``Finisce prima`` della voce (stesso motore del Parser, ``custom_parser_engine.extract_between``);
    poi il **Testo mercato** della voce si confronta in quel campo (case-insensitive, confini
-   di token). Una voce **senza** delimitatori è scartata. *Motivo del cambio*: molti provider
+   di token). Una voce **senza** delimitatori è **preservata** in config (no perdita dati) ma
+   **non applicata** (il resolver la salta, fail-closed). *Motivo del cambio*: molti provider
    mettono in testa un banner/menu con più mercati (es. ``30/0,5HT/1,5HT/1``); cercare la frase
    in **tutto** il messaggio dava falsi match/ambiguità. Leggendo solo il campo delimitato
    (es. fra «Quota» e «Prematch») si prende il mercato vero e si ignora il banner.
