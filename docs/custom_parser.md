@@ -278,6 +278,11 @@ comportamento legacy (tutte le chat ammesse — responsabilità dell'utente).
   file corrotto compare in lista col nome del file, senza nascondere gli altri.
   L'**attivazione** resta nella finestra "📡 Chat sorgenti" (parser globale o
   per-chat); la finestra builder serve a creare/modificare/gestire le definizioni.
+- **Adattamento allo schermo:** la finestra builder è interamente **scrollabile**
+  (un solo contenitore: griglia 14 colonne, area "Prova messaggio" e tabella
+  diagnostica restano raggiungibili anche su schermi piccoli). Come tutte le finestre
+  del bridge, si apre con altezza **clampata all'area schermo** e un `minsize`, tramite
+  l'helper condiviso `gui_utils.fit_to_screen(...)`, così non sfora sotto la taskbar.
 
 ---
 
@@ -294,6 +299,7 @@ comportamento legacy (tutte le chat ammesse — responsabilità dell'utente).
 | Riga validata col contratto | `custom_pipeline.py` | `tests/unit/test_custom_pipeline.py` |
 | Diagnostica «Prova messaggio» (per-campo) | `parser_diagnostics.py` | `tests/unit/test_parser_diagnostics.py` |
 | Builder GUI (controller + vista) | `parser_builder.py`, `custom_parser_gui.py` | `tests/unit/test_parser_builder.py` |
+| Adattamento finestre allo schermo (clamp altezza + minsize) | `gui_utils.py` | `tests/smoke/test_imports.py` |
 | Parser attivo / override per chat | `parser_manager.py` | `tests/unit/test_parser_manager.py` |
 | Import/export + esempio | `parser_io.py` | `tests/unit/test_parser_io.py` |
 | Instradamento live + gate | `signal_router.py` | `tests/unit/test_signal_router.py` |
