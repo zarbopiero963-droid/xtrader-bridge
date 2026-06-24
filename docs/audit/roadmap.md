@@ -705,8 +705,9 @@ Concordata con il proprietario. **Una PR alla volta**; dopo ogni merge si proced
 automatico con la successiva. Merge sempre **manuale** del proprietario. Verifica visiva
 della GUI a carico del proprietario su Windows (l'ambiente CI è headless).
 
-> **Stato:** Tappa 1 (Provider+Profili) e Tappa 2 (Chat sorgenti + rinomina Mapping con
-> aree Calcio/Mercati) implementate e mergiate. Resta la Tappa 3 (Parser) e la FASE 2.
+> **Stato:** FASE 1 **completata** — Tappa 1 (Provider+Profili), Tappa 2 (Chat sorgenti +
+> rinomina Mapping con aree Calcio/Mercati) e Tappa 3 (Parser nella hub + unico pulsante
+> "🧰 Strumenti") implementate e mergiate. Resta la **FASE 2** (mappatura mercati).
 
 ### FASE 1 — consolidazione finestra "🧰 Strumenti" a schede
 Pattern: il contenuto di ogni finestra-strumento diventa un **Pannello** (`CTkFrame`)
