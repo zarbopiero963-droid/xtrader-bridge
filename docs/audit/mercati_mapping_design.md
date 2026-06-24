@@ -128,9 +128,11 @@ nomi squadra, così al parsing si traducono **sia** i nomi **sia** i mercati.
 
 ## 7. Piano di implementazione (PR piccole, una alla volta)
 
-1. **`market_mapping_store.py`** — funzioni pure + `resolve_market(text, profiles)` che
-   ritorna `(market_type, market_name, selection_name)` o `None`/ambiguo. **Solo logica +
-   test hard** (nessuna GUI, nessun runtime). Tutti i casi di §5 coperti da test.
+1. **`market_mapping_store.py`** — ✅ **FATTO** — funzioni pure + `resolve_market(text,
+   profiles)` → `MarketResolution(status, market)` con status `ok`/`ambiguous`/`none`. **Solo
+   logica + test hard** (`tests/unit/test_market_mapping.py`, 18 test): match univoco,
+   nessun match, ambiguità fail-closed (D2), confini di parola (D3), CRUD profili,
+   immutabilità. Nessuna GUI, nessun runtime.
 2. **Aggancio runtime** in `custom_pipeline` con la regola di precedenza §4 e
    `MARKET_MAPPING_MISSING`, + `defn.market_mapping_profiles` nel modello parser. Test hard
    end-to-end (frase → riga CSV corretta; nessun match → niente riga; ambiguo → niente

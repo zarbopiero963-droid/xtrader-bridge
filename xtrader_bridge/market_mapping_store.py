@@ -1,0 +1,197 @@
+"""Dizionario di mappatura mercati: frase del provider → Mercato/Selezione XTrader.
+
+Alcuni provider (canali Telegram) scrivono il mercato **a parole** ("goal prima di
+70") invece che in un campo strutturato. Questo modulo tiene **profili** di regole
+``frase → (MarketType, MarketName, SelectionName)`` e, dato il testo di un messaggio,
+risolve il mercato canonico XTrader. I valori di mercato/selezione **non** sono testo
+libero: vanno scelti dal **Catalogo XTrader** (vedi GUI), così ciò che finisce nel CSV
+è sempre canonico.
+
+Modello dati (config, chiave ``market_mappings``)::
+
+    cfg["market_mappings"] = {
+        "<nome profilo>": [
+            {"phrase": "goal prima di 70",
+             "market_type": "OVER_UNDER",
+             "market_name": "Over/Under 2.5",
+             "selection_name": "Over 2.5"},
+            ...
+        ],
+        ...
+    }
+
+Logica PURA su un ``dict`` di config: nessuna GUI, nessun I/O — la persistenza è del
+chiamante (``config_store.save_config``), come ``name_mapping_store``/``provider_store``.
+Le funzioni di modifica ritornano una COPIA della config, non mutano l'originale.
+
+Sicurezza (safety-critical: un mercato sbagliato = scommessa sbagliata). Decisioni
+del proprietario, vedi ``docs/audit/mercati_mapping_design.md``:
+- **D2 fail-closed sull'ambiguità**: se più frasi combaciano e indicano mercati
+  **diversi**, ``resolve_market`` ritorna stato ``"ambiguous"`` → il chiamante NON
+  scrive nulla (niente mercato "a caso");
+- **D3 match sul testo grezzo**: la frase si cerca nel messaggio originale,
+  case-insensitive e su **confini di parola** (no falsi positivi tipo "over" dentro
+  "overflow");
+- nessun match → stato ``"none"`` (il chiamante decide il fallback, vedi precedenza D1
+  nel runtime). ``resolve_market`` non inventa mai un mercato.
+
+NB: la **precedenza D1** ("il dizionario vince" sulla regola-colonna) è una scelta del
+**runtime** (``custom_pipeline``), non di questo store: qui si risolve solo la frase.
+"""
+
+import re
+from collections import namedtuple
+
+# Chiave di config che ospita i profili di mappatura mercati.
+_STORE_KEY = "market_mappings"
+
+# Esito della risoluzione di un mercato da una frase.
+#   status: "ok"        → match univoco; `market` = {market_type, market_name, selection_name}
+#           "ambiguous" → più frasi combaciano con mercati DIVERSI (fail-closed, D2); market=None
+#           "none"      → nessuna frase combacia; market=None
+MarketResolution = namedtuple("MarketResolution", ["status", "market"])
+
+
+def _normalize_text(s) -> str:
+    """Testo normalizzato per il confronto: spazi collassati + casefold (case-insensitive)."""
+    return re.sub(r"\s+", " ", str(s or "")).strip().casefold()
+
+
+def _store(cfg: dict) -> dict:
+    """Sezione ``market_mappings`` della config (dict vuoto se assente/malformata)."""
+    raw = (cfg or {}).get(_STORE_KEY, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def _clean_entry(entry) -> dict:
+    """Normalizza una voce in ``{phrase, market_type, market_name, selection_name}``
+    (stringhe ripulite), o ``None`` se inutile. Una voce serve solo se ha **frase**,
+    **market_name** e **selection_name**: senza, non potrebbe impostare un mercato
+    valido. ``market_type`` può essere vuoto (alcuni mercati non lo usano)."""
+    if not isinstance(entry, dict):
+        return None
+    phrase = str(entry.get("phrase", "") or "").strip()
+    market_type = str(entry.get("market_type", "") or "").strip()
+    market_name = str(entry.get("market_name", "") or "").strip()
+    selection_name = str(entry.get("selection_name", "") or "").strip()
+    if not phrase or not market_name or not selection_name:
+        return None
+    return {"phrase": phrase, "market_type": market_type,
+            "market_name": market_name, "selection_name": selection_name}
+
+
+def profile_names(cfg: dict) -> list:
+    """Nomi dei profili mercati salvati, ordinati (case-insensitive). Per la GUI."""
+    names = [str(k).strip() for k in _store(cfg).keys() if str(k).strip()]
+    return sorted(names, key=str.casefold)
+
+
+def get_entries(cfg: dict, name: str) -> list:
+    """Voci (ripulite) di un profilo, nell'ordine salvato. Profilo assente → ``[]``.
+    Le voci vuote/incomplete vengono filtrate, così il resolver non itera su rumore."""
+    rows = _store(cfg).get(str(name), [])
+    if not isinstance(rows, (list, tuple)):
+        return []
+    out = []
+    for e in rows:
+        ce = _clean_entry(e)
+        if ce is not None:
+            out.append(ce)
+    return out
+
+
+def entries_for_profiles(cfg: dict, names) -> list:
+    """Lista di liste-di-voci per i profili indicati (ordine preservato): è la forma
+    attesa da ``resolve_market``. Un profilo mancante contribuisce con ``[]``."""
+    return [get_entries(cfg, n) for n in (names or []) if str(n or "").strip()]
+
+
+def set_entries(cfg: dict, name: str, entries) -> dict:
+    """Copia di ``cfg`` con il profilo ``name`` impostato/sostituito da ``entries``
+    (ripulite). Nome vuoto → config invariata. Crea il profilo se non esiste."""
+    out = dict(cfg or {})
+    nm = str(name or "").strip()
+    if not nm:
+        return out
+    store = dict(_store(out))
+    store[nm] = [ce for ce in (_clean_entry(e) for e in (entries or [])) if ce is not None]
+    out[_STORE_KEY] = store
+    return out
+
+
+def add_profile(cfg: dict, name: str) -> dict:
+    """Copia di ``cfg`` con un profilo vuoto ``name`` (no-op se esiste già o nome
+    vuoto): la creazione non deve mai cancellare le voci di un profilo omonimo."""
+    out = dict(cfg or {})
+    nm = str(name or "").strip()
+    store = dict(_store(out))
+    if nm and nm not in store:
+        store[nm] = []
+    out[_STORE_KEY] = store
+    return out
+
+
+def delete_profile(cfg: dict, name: str) -> dict:
+    """Copia di ``cfg`` senza il profilo ``name`` (idempotente)."""
+    out = dict(cfg or {})
+    nm = str(name or "").strip()
+    store = {k: v for k, v in _store(out).items() if str(k) != nm}
+    out[_STORE_KEY] = store
+    return out
+
+
+def rename_profile(cfg: dict, old: str, new: str) -> dict:
+    """Copia di ``cfg`` con il profilo ``old`` rinominato ``new`` (conserva le voci).
+    No-op se ``old`` non esiste, ``new`` è vuoto, o ``new`` esiste già (non si
+    sovrascrive in silenzio un altro profilo)."""
+    out = dict(cfg or {})
+    o = str(old or "").strip()
+    n = str(new or "").strip()
+    store = dict(_store(out))
+    if o == n or o not in store or not n or n in store:
+        return out
+    store[n] = store.pop(o)
+    out[_STORE_KEY] = store
+    return out
+
+
+def _phrase_in_text(phrase: str, text_norm: str) -> bool:
+    """``True`` se ``phrase`` compare in ``text_norm`` (già normalizzato) come
+    sottostringa su **confini di parola**. I lookaround ``(?<!\\w)``/``(?!\\w)`` evitano
+    falsi positivi (es. "over" dentro "overflow") e funzionano anche con frasi che
+    iniziano/finiscono con cifre o punteggiatura (es. "over 2.5")."""
+    p = _normalize_text(phrase)
+    if not p:
+        return False
+    return re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", text_norm) is not None
+
+
+def resolve_market(text: str, profiles) -> MarketResolution:
+    """Risolve il mercato canonico XTrader dalla frase del provider nel ``text``.
+
+    ``profiles`` è una lista di liste-di-voci (vedi ``entries_for_profiles``). Si
+    raccolgono TUTTE le voci la cui frase compare nel testo (D3: testo grezzo,
+    case-insensitive, confini di parola). Poi (D2):
+
+    - 0 match → ``MarketResolution("none", None)``;
+    - match che indicano **lo stesso** ``(market_type, market_name, selection_name)``
+      → ``MarketResolution("ok", {...})``;
+    - match che indicano mercati **diversi** → ``MarketResolution("ambiguous", None)``
+      (fail-closed: il chiamante non scrive nulla, niente mercato a caso).
+    """
+    t = _normalize_text(text)
+    if not t:
+        return MarketResolution("none", None)
+    found = []
+    for entries in (profiles or []):
+        for e in entries:
+            if _phrase_in_text(e.get("phrase", ""), t):
+                found.append((e.get("market_type", ""), e.get("market_name", ""),
+                              e.get("selection_name", "")))
+    if not found:
+        return MarketResolution("none", None)
+    if len(set(found)) > 1:
+        return MarketResolution("ambiguous", None)
+    mt, mn, sn = found[0]
+    return MarketResolution("ok", {"market_type": mt, "market_name": mn,
+                                   "selection_name": sn})
