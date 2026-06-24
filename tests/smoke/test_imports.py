@@ -16,7 +16,8 @@ import xtrader_bridge
 # Moduli con side-effect all'import (GUI/servizi): testati separatamente.
 _IMPURE = {"xtrader_bridge.app", "xtrader_bridge.custom_parser_gui",
            "xtrader_bridge.source_chats_gui", "xtrader_bridge.profiles_gui",
-           "xtrader_bridge.provider_gui", "xtrader_bridge.name_mapping_gui"}
+           "xtrader_bridge.provider_gui", "xtrader_bridge.name_mapping_gui",
+           "xtrader_bridge.tools_gui"}
 
 # Moduli core che DEVONO sempre essere presenti (guardia contro discovery rotta).
 _CORE = {
@@ -86,3 +87,9 @@ def test_name_mapping_gui_import_opzionale():
     # La GUI del Dizionario nomi dipende da customtkinter: skip se assente.
     pytest.importorskip("customtkinter")
     assert importlib.import_module("xtrader_bridge.name_mapping_gui") is not None
+
+
+def test_tools_gui_import_opzionale():
+    # La finestra hub "🧰 Strumenti" dipende da customtkinter: skip se assente.
+    pytest.importorskip("customtkinter")
+    assert importlib.import_module("xtrader_bridge.tools_gui") is not None
