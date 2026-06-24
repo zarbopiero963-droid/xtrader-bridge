@@ -85,13 +85,22 @@ class SourceChatsPanel(ctk.CTkFrame):
             editor = SourceEditor(config_store.load_config(config_store.CONFIG_FILE))
         except Exception:               # noqa: BLE001 — config illeggibile: niente refresh
             return
+        old_no_parser = self._no_parser
         self._parser_names = editor.parser_options()
         self._no_parser = _none_sentinel(self._parser_names)
         self._parser_options = [self._no_parser] + self._parser_names
         for refs in self._rows:
+            var = refs["parser"]
+            # Se il sentinella "nessun override" è cambiato (es. è stato creato un parser
+            # con lo stesso nome del vecchio sentinella, e `_none_sentinel` lo disambigua),
+            # migra le righe che erano su "no override" al NUOVO sentinella: senza, un Save
+            # le salverebbe come override al parser reale omonimo, cambiando in silenzio il
+            # parser usato per quelle chat (Codex).
+            if old_no_parser != self._no_parser and var.get() == old_no_parser:
+                var.set(self._no_parser)
             menu = refs.get("parser_menu")
             if menu is not None:
-                cur = refs["parser"].get()
+                cur = var.get()
                 vals = list(self._parser_options)
                 if cur and cur not in vals:
                     vals.append(cur)        # preserva la selezione anche se il parser è sparito

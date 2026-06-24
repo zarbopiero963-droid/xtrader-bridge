@@ -202,6 +202,10 @@ class CustomParserPanel(ctk.CTkFrame):
             return
         self._providers = provider_store.provider_names(cfg)
         self._global_mode = str(cfg.get("recognition_mode", "")).strip()
+        # Anche il provider per l'anteprima: `_test()` passa `self._provider` a
+        # test_message()/diagnose(); senza aggiornarlo, un parser con colonna Provider non
+        # fissa verrebbe provato col provider VECCHIO dopo un cambio profilo (Codex).
+        self._provider = str(cfg.get("provider", "")).strip()
         for refs in self._rows:
             menu = refs.get("provider_menu")
             if menu is not None:
