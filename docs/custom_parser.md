@@ -300,6 +300,7 @@ comportamento legacy (tutte le chat ammesse — responsabilità dell'utente).
 | Diagnostica «Prova messaggio» (per-campo) | `parser_diagnostics.py` | `tests/unit/test_parser_diagnostics.py` |
 | Builder GUI (controller + vista) | `parser_builder.py`, `custom_parser_gui.py` | `tests/unit/test_parser_builder.py` |
 | Adattamento finestre allo schermo (clamp altezza + minsize) | `gui_utils.py` | `tests/smoke/test_imports.py` |
+| Finestra hub "🧰 Strumenti" a schede (consolidazione GUI) | `tools_gui.py` | `tests/smoke/test_imports.py` |
 | Parser attivo / override per chat | `parser_manager.py` | `tests/unit/test_parser_manager.py` |
 | Import/export + esempio | `parser_io.py` | `tests/unit/test_parser_io.py` |
 | Instradamento live + gate | `signal_router.py` | `tests/unit/test_signal_router.py` |

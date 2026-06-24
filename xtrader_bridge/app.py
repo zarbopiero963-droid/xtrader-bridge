@@ -399,11 +399,11 @@ class App(ctk.CTk):
         ctk.CTkButton(
             tools_frame2, text="📇  Provider", width=220, height=38,
             fg_color="#00838f", hover_color="#006064",
-            command=self._open_provider_manager).pack(side="left", padx=5)
+            command=lambda: self._open_tools("📇 Provider")).pack(side="left", padx=5)
         ctk.CTkButton(
             tools_frame2, text="📁  Profili", width=180, height=38,
             fg_color="#5d4037", hover_color="#3e2723",
-            command=self._open_profiles).pack(side="left", padx=5)
+            command=lambda: self._open_tools("📁 Profili")).pack(side="left", padx=5)
         ctk.CTkButton(
             tools_frame2, text="🗺️  Dizionario nomi", width=200, height=38,
             fg_color="#37474f", hover_color="#263238",
@@ -1471,17 +1471,42 @@ class App(ctk.CTk):
         win = SourceChatsWindow(self, on_saved=_on_saved)
         win.focus()
 
-    def _open_provider_manager(self):
-        """Apre l'anagrafica Provider (aggiungi/rimuovi nomi riusabili nella colonna
-        Provider del Parser Personalizzato). Import lazy: la GUI non serve all'avvio.
-        Al salvataggio aggiorna la config in memoria, così un successivo Salva/Avvia
-        non riscrive il file perdendo i provider (stesso pattern delle Sorgenti)."""
-        from .provider_gui import ProviderWindow
+    def _open_tools(self, initial=None):
+        """Apre la finestra hub "🧰 Strumenti" a schede (consolidazione GUI, roadmap).
+        Import lazy: le GUI degli strumenti non servono all'avvio del bridge. Qui si
+        cablano le callback dei pannelli (la GUI principale ha la config viva), così
+        `ProviderPanel`/`ProfilesPanel` aggiornano la config in memoria come facevano da
+        finestre separate (stesso pattern anti-stale di Provider/Profili/Sorgenti).
 
-        def _on_saved(new_cfg):
+        `initial`: titolo della scheda da mostrare all'apertura (es. dal pulsante)."""
+        from .tools_gui import ToolsWindow
+        from .provider_gui import ProviderPanel
+        from .profiles_gui import ProfilesPanel
+
+        def _provider_saved(new_cfg):
             self._config = new_cfg
 
-        win = ProviderWindow(self, on_saved=_on_saved)
+        def _profiles_loaded(new_cfg):
+            saved, ok = save_config(new_cfg, CONFIG_FILE)
+            self._config = saved
+            self._save_ok = ok
+            self._populate_form(saved)
+            self._refresh_listened_chats()
+            if ok:
+                self._log("📁 Profilo caricato e applicato (token invariato).")
+            else:
+                self._log("⚠️ Profilo applicato in memoria, ma salvataggio su disco "
+                          "FALLITO (token invariato). Controlla permessi/spazio.")
+
+        panels = [
+            ("📇 Provider",
+             lambda parent: ProviderPanel(parent, on_saved=_provider_saved)),
+            ("📁 Profili",
+             lambda parent: ProfilesPanel(
+                 parent, get_current_cfg=self._save_config, on_loaded=_profiles_loaded,
+                 is_running=lambda: self._running)),
+        ]
+        win = ToolsWindow(self, panels=panels, initial=initial)
         win.focus()
 
     def _open_name_mapping(self):
@@ -1495,29 +1520,6 @@ class App(ctk.CTk):
             self._config = new_cfg
 
         win = NameMappingWindow(self, on_saved=_on_saved)
-        win.focus()
-
-    def _open_profiles(self):
-        """Apre la finestra dei profili di impostazioni (A3). Import lazy: la GUI dei
-        profili non serve all'avvio del bridge. Salvare un profilo persiste prima il
-        form (così il profilo riflette ciò che è a schermo); caricarne uno applica le
-        impostazioni preservando il token Telegram e ripopola il form."""
-        from .profiles_gui import ProfilesWindow
-
-        def _on_loaded(new_cfg):
-            saved, ok = save_config(new_cfg, CONFIG_FILE)
-            self._config = saved
-            self._save_ok = ok
-            self._populate_form(saved)
-            self._refresh_listened_chats()
-            if ok:
-                self._log("📁 Profilo caricato e applicato (token invariato).")
-            else:
-                self._log("⚠️ Profilo applicato in memoria, ma salvataggio su disco "
-                          "FALLITO (token invariato). Controlla permessi/spazio.")
-
-        win = ProfilesWindow(self, get_current_cfg=self._save_config, on_loaded=_on_loaded,
-                             is_running=lambda: self._running)
         win.focus()
 
     def _populate_form(self, cfg: dict) -> None:

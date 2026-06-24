@@ -17,8 +17,9 @@ import customtkinter as ctk
 from . import gui_utils, profile_store
 
 
-class ProfilesWindow(ctk.CTkToplevel):
-    """Finestra dei profili di impostazioni.
+class ProfilesPanel(ctk.CTkFrame):
+    """Pannello dei profili di impostazioni — incassabile in una finestra standalone
+    (`ProfilesWindow`) o come scheda della finestra "🧰 Strumenti".
 
     `get_current_cfg()`: callback che ritorna la config viva (con token) da usare sia
     come base per il salvataggio sia per preservare il token al caricamento.
@@ -31,8 +32,6 @@ class ProfilesWindow(ctk.CTkToplevel):
     def __init__(self, master=None, get_current_cfg=None, on_loaded=None, on_saved=None,
                  is_running=None):
         super().__init__(master)
-        self.title("Profili impostazioni")
-        gui_utils.fit_to_screen(self, 560, 520, 480, 420)
         self._get_current_cfg = get_current_cfg or (lambda: {})
         self._on_loaded = on_loaded
         self._on_saved = on_saved
@@ -162,3 +161,18 @@ class ProfilesWindow(ctk.CTkToplevel):
             self._status.configure(text=f"🗑 Profilo {name!r} eliminato.", text_color="gray")
         else:
             self._status.configure(text=f"⚠️ Profilo {name!r} non trovato.", text_color="#ffa726")
+
+
+class ProfilesWindow(ctk.CTkToplevel):
+    """Finestra standalone che ospita `ProfilesPanel` a tutta finestra.
+
+    Mantenuta per compatibilità; la stessa `ProfilesPanel` vive anche come scheda
+    della finestra "🧰 Strumenti"."""
+
+    def __init__(self, master=None, get_current_cfg=None, on_loaded=None, on_saved=None,
+                 is_running=None):
+        super().__init__(master)
+        self.title("Profili impostazioni")
+        gui_utils.fit_to_screen(self, 560, 520, 480, 420)
+        ProfilesPanel(self, get_current_cfg=get_current_cfg, on_loaded=on_loaded,
+                      on_saved=on_saved, is_running=is_running).pack(fill="both", expand=True)

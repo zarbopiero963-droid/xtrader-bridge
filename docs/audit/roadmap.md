@@ -696,3 +696,39 @@ PR-A5  custom-content-gate    → matches_message() richiede una regola di      
 Ogni PR-Ax: branch dedicato, Phase 0, patch stretta, micro-audit, test hard veritieri,
 **una sola PR**, attesa fine check, triage review, merge **manuale** del proprietario.
 Obiettivo: a fine sequenza, audit Claude **e** Codex completamente chiusi (DONE).
+
+---
+
+## Roadmap GUI a schede + Mapping squadre/mercati (giugno 2026)
+
+Concordata con il proprietario. **Una PR alla volta**; dopo ogni merge si procede in
+automatico con la successiva. Merge sempre **manuale** del proprietario. Verifica visiva
+della GUI a carico del proprietario su Windows (l'ambiente CI è headless).
+
+### FASE 1 — consolidazione finestra "🧰 Strumenti" a schede
+Pattern: il contenuto di ogni finestra-strumento diventa un **Pannello** (`CTkFrame`)
+incassabile sia in una finestra standalone (compatibilità) sia come **scheda** della
+finestra hub `tools_gui.ToolsWindow`. La hub è disaccoppiata: riceve `(titolo, factory)`.
+
+- **Tappa 1 (questa PR)** — `ToolsWindow` + schede **Provider** (`ProviderPanel`) e
+  **Profili** (`ProfilesPanel`); i pulsanti "Provider"/"Profili" aprono la hub sulla
+  scheda giusta. Dizionario nomi / Chat sorgenti / Parser restano finestre separate (stato
+  transitorio).
+- **Tappa 2** — scheda **Chat sorgenti** + rinomina **"Dizionario nomi" → "Mapping"** con
+  **due aree**: **Calcio** (nomi squadre **+ campionati**) e **Mercati** (area predisposta,
+  vuota).
+- **Tappa 3** — scheda **Parser Personalizzato**; poi un unico pulsante **🧰 Strumenti** al
+  posto dei cinque.
+
+### FASE 2 — mappatura mercati (sensibile: CSV → scommessa)
+- **Design doc** del riconoscimento mercati **a frase**: modello dati, persistenza
+  per-profilo, punto di intervento nel runtime (nel router, **prima** del CSV), **regola
+  di precedenza** (regola-colonna del parser **vince** sul dizionario; il dizionario riempie
+  solo se il parser non ha estratto il mercato) e **fail-safe** (nessun match ⇒ **nessun
+  mercato inventato**, niente CSV ambiguo).
+- **Store mercati** (funzioni pure + test), **GUI Mercati** (menù a tendina dal Catalogo
+  XTrader, come nel Parser), **aggancio nel Parser** (selettore profilo-mercati accanto a
+  quello squadre) + integrazione runtime con test hard.
+
+Obiettivo: il Parser Personalizzato può "richiamare" sia il mapping squadre sia il mapping
+mercati → riconoscimento più automatico, restando prevedibile e fail-safe.

@@ -21,16 +21,15 @@ import customtkinter as ctk
 from . import config_store, gui_utils, provider_store
 
 
-class ProviderWindow(ctk.CTkToplevel):
-    """Finestra dell'anagrafica Provider.
+class ProviderPanel(ctk.CTkFrame):
+    """Pannello dell'anagrafica Provider — incassabile sia in una finestra standalone
+    (`ProviderWindow`) sia come scheda della finestra "🧰 Strumenti".
 
     `on_saved(new_cfg)`: callback opzionale chiamata dopo ogni salvataggio
     riuscito, così la GUI principale aggiorna la propria config in memoria."""
 
     def __init__(self, master=None, on_saved=None):
         super().__init__(master)
-        self.title("Anagrafica Provider")
-        gui_utils.fit_to_screen(self, 520, 520, 460, 420)
         self._on_saved = on_saved
         self._build_ui()
         self._reload()
@@ -139,3 +138,16 @@ class ProviderWindow(ctk.CTkToplevel):
             ok_msg=f"🗑 Provider «{name}» rimosso.",
             fail_msg=f"❌ Salvataggio FALLITO: «{name}» non rimosso (ricomparirebbe al riavvio). "
                      "Controlla permessi/spazio del file config.")
+
+
+class ProviderWindow(ctk.CTkToplevel):
+    """Finestra standalone che ospita `ProviderPanel` a tutta finestra.
+
+    Mantenuta per compatibilità (apertura come finestra separata); la stessa
+    `ProviderPanel` vive anche come scheda della finestra "🧰 Strumenti"."""
+
+    def __init__(self, master=None, on_saved=None):
+        super().__init__(master)
+        self.title("Anagrafica Provider")
+        gui_utils.fit_to_screen(self, 520, 520, 460, 420)
+        ProviderPanel(self, on_saved=on_saved).pack(fill="both", expand=True)
