@@ -101,6 +101,15 @@ regole-colonna restano per gli altri campi e come fallback quando nessuna frase 
    Se due voci diverse combaciano e indicano Mercato/Selezione **diversi**, è ambiguo →
    `MARKET_MAPPING_MISSING` (non si tira a indovinare). *Alternativa* (se preferisci):
    match della frase **più lunga/più specifica**. Default proposto: **fail-closed**.
+3bis. **Niente ID stantii quando il dizionario vince.** La mappatura mercati è *name-based*
+   (`resolve_market` non risolve `MarketId`/`SelectionId`: non sono nel Catalogo). Se le
+   regole-colonna hanno estratto una coppia ID e poi il dizionario vince, lasciare quegli ID
+   nella riga darebbe identificatori **contraddittori** (nel CSV, o in validazione ID/BOTH
+   gli ID vecchi "vincerebbero" ignorando la frase). Perciò, al match univoco, `MarketId`/
+   `SelectionId` vengono **azzerati**: la riga ha un solo mercato, la tupla a nome del
+   dizionario. In **ID_ONLY** ciò comporta fail-closed in validazione (combinazione
+   incoerente: phrase-mapping + riconoscimento a ID); in **BOTH** la coppia a nome basta e la
+   riga resta valida (CodeRabbit).
 3. **Coerenza + canonicalizzazione Mercato/Selezione.** La selezione deve appartenere al
    mercato scelto (garantito già in fase di GUI: la tendina Selezione dipende dal Mercato).
    In più **`resolve_market` risolve ogni voce nella tupla CANONICA del Catalogo XTrader**

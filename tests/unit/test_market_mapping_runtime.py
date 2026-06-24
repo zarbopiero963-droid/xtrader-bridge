@@ -130,6 +130,52 @@ def test_pipeline_nessun_profilo_mercati_retrocompat():
     assert res.row["SelectionName"] == "No"          # nessuna sovrascrittura
 
 
+def test_pipeline_override_azzera_id_stantii_both():
+    # CodeRabbit (Major): un parser BOTH che ha estratto MarketId/SelectionId dalle
+    # regole-colonna NON deve conservarli quando il dizionario (NAME-based) vince, o la
+    # riga porterebbe identificatori di mercato CONTRADDITTORI. La coppia ID va azzerata;
+    # in BOTH basta la coppia a nome → resta VALID, ma senza ID stantii.
+    defn = cp.CustomParserDef(
+        name="MktBoth", mode="BOTH", market_mapping_profiles=["Pandora"],
+        rules=[
+            cp.FieldRule(target="Provider", fixed_value="TG"),
+            cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
+            cp.FieldRule(target="Price", fixed_value="1.85", required=True),
+            cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+            cp.FieldRule(target="MarketType", fixed_value="MATCH_ODDS"),
+            cp.FieldRule(target="SelectionName", fixed_value="1"),
+            cp.FieldRule(target="MarketId", fixed_value="1.234"),       # ID stantio
+            cp.FieldRule(target="SelectionId", fixed_value="999"),      # ID stantio
+        ])
+    profiles = [[_entry("gol gol", selection="Sì")]]
+    res = pipe.build_validated_row(defn, "gol gol, quota 1.85",
+                                   market_mapping_profiles=profiles)
+    assert res.status == validator.VALID and res.placeable is True
+    assert res.row["SelectionName"] == "Sì"          # mercato a nome dal dizionario
+    assert res.row["MarketName"] == "Entrambe le squadre a segno"
+    assert res.row["MarketId"] == "" and res.row["SelectionId"] == ""  # ID stantii azzerati
+
+
+def test_pipeline_override_id_only_failclosed():
+    # Parser ID_ONLY + mappatura mercati a frase (config incoerente): quando il dizionario
+    # vince, gli ID vengono azzerati e la modalità ID non ha più un mercato → fail-closed
+    # (niente riga), invece di scommettere su ID che contraddicono la frase.
+    defn = cp.CustomParserDef(
+        name="MktId", mode="ID_ONLY", market_mapping_profiles=["Pandora"],
+        rules=[
+            cp.FieldRule(target="Provider", fixed_value="TG"),
+            cp.FieldRule(target="Price", fixed_value="1.85", required=True),
+            cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+            cp.FieldRule(target="MarketId", fixed_value="1.234", required=True),
+            cp.FieldRule(target="SelectionId", fixed_value="999", required=True),
+        ])
+    profiles = [[_entry("gol gol", selection="Sì")]]
+    res = pipe.build_validated_row(defn, "gol gol, quota 1.85",
+                                   market_mapping_profiles=profiles)
+    assert res.placeable is False                     # ID azzerati → ID_ONLY senza mercato
+    assert res.row["MarketId"] == "" and res.row["SelectionId"] == ""
+
+
 def test_pipeline_match_sul_messaggio_grezzo_non_su_campo():
     # D3: la frase si cerca nel MESSAGGIO grezzo, non in EventName (qui "Inter v Milan",
     # che non contiene la frase). Il match avviene comunque → override.

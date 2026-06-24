@@ -223,6 +223,16 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
             row["MarketType"] = resm.market["market_type"]
             row["MarketName"] = resm.market["market_name"]
             row["SelectionName"] = resm.market["selection_name"]
+            # La mappatura mercati è NAME-based (resolve_market non risolve gli ID, non sono
+            # nel catalogo): azzera la coppia ID quando il dizionario vince, così la riga non
+            # porta un MarketId/SelectionId STANTIO (estratto dalle regole-colonna) che
+            # contraddirebbe il mercato a nome — nel CSV identificatori incoerenti, o in
+            # validazione ID/BOTH gli ID vecchi "vincerebbero" ignorando la frase. Così il
+            # mercato della riga è univocamente la tupla a nome del dizionario; se la modalità
+            # richiedeva gli ID (ID_ONLY), la riga fa fail-closed in validazione — niente
+            # scommessa su un mercato ambiguo (CodeRabbit).
+            row["MarketId"] = ""
+            row["SelectionId"] = ""
         elif not _row_has_market(row, mode):
             # status "none": nessuna frase combacia. Si tengono i valori della regola-colonna
             # SE costituiscono già un mercato per la modalità; altrimenti il mercato resterebbe

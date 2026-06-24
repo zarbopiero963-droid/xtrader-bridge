@@ -155,6 +155,16 @@ ignorata (mai scritta); una valida ma non-canonica (case/spazi, `market_type` st
 riportata ai valori canonici del catalogo. Un parser **senza profili mercati** non applica
 alcuna mappatura (colonne invariate, retro-compatibile).
 
+La mappatura mercati è **basata sui nomi** (imposta `MarketType`/`MarketName`/
+`SelectionName`; il Catalogo non ha gli ID). Per evitare una riga con **identificatori
+contraddittori**, quando il dizionario vince la coppia `MarketId`/`SelectionId`
+eventualmente estratta dalle regole-colonna viene **azzerata**: il mercato della riga è
+univocamente la tupla a nome del dizionario. Conseguenza voluta: un parser in modalità
+**ID_ONLY** che usa anche la mappatura mercati a frase, al match, fa **fail-closed** in
+validazione (gli ID azzerati mancano) — è una combinazione incoerente e non deve produrre
+una scommessa su ID che contraddicono la frase. In **BOTH** la coppia a nome basta, quindi
+la riga resta valida senza ID stantii.
+
 **GUI**: l'area **🎯 Mercati** della scheda **Mapping** è predisposta ma ancora **vuota**;
 il selettore dei profili mercati nel Parser Personalizzato arriva nel passo 3 (vedi
 `docs/audit/mercati_mapping_design.md` §6-§7). Il modello (`market_mapping_profiles`), lo
