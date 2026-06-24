@@ -21,9 +21,33 @@ def test_resolve_match_univoco():
     profiles = [[_entry("goal prima di 70")]]
     res = mms.resolve_market("Consiglio: goal prima di 70, quota 1.8", profiles)
     assert res.status == "ok"
-    assert res.market == {"market_type": "GOAL_NOGOAL",
+    # market_type CANONICO dal catalogo (non quello passato in _entry): canonicalizzazione.
+    assert res.market == {"market_type": "BOTH_TEAMS_TO_SCORE",
                           "market_name": "Entrambe le squadre a segno",
                           "selection_name": "Sì"}
+
+
+def test_resolve_canonicalizza_type_e_nomi():
+    # config con market_type STANTIO e nomi non-canonici (case/spazi): resolve ritorna
+    # SEMPRE la tupla canonica del catalogo — niente type stantio, niente nomi grezzi (Codex).
+    profiles = [[{"phrase": "ggol",
+                  "market_type": "MATCH_ODDS",                       # stantio/errato
+                  "market_name": "entrambe   le  squadre a segno",   # spazi/case non-canonici
+                  "selection_name": "sì"}]]
+    res = mms.resolve_market("punta ggol", profiles)
+    assert res.status == "ok"
+    assert res.market == {"market_type": "BOTH_TEAMS_TO_SCORE",
+                          "market_name": "Entrambe le squadre a segno",
+                          "selection_name": "Sì"}
+
+
+def test_resolve_frase_corta_non_dentro_codici_slash():
+    # frase corta "x" non deve combaciare dentro codici tipo "1/x", "x/x", "1-x" (Codex):
+    # / e - non sono confini di token.
+    profiles = [[_entry("x")]]
+    for txt in ("doppio esito 1/x", "x/x ht-ft", "segna 1-x"):
+        assert mms.resolve_market(txt, profiles).status == "none", txt
+    assert mms.resolve_market("punta x adesso", profiles).status == "ok"
 
 
 def test_resolve_nessun_match():

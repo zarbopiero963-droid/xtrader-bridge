@@ -184,37 +184,50 @@ def rename_profile(cfg: dict, old: str, new: str) -> dict:
     return out
 
 
-def _coherent(market_name: str, selection_name: str, rows=None) -> bool:
-    """``True`` se ``(market_name, selection_name)`` è una coppia VALIDA del Catalogo
-    XTrader: un mercato **fisso** esistente + una sua selezione **non dinamica**.
+def _canonical_market(market_name: str, selection_name: str, rows=None):
+    """Risolve ``(market_name, selection_name)`` del config nella tupla **canonica** del
+    Catalogo XTrader ``{market_type, market_name, selection_name}``, o ``None`` se la
+    coppia non è valida.
 
-    Validazione safety-critical (design §5.3): una config editata a mano (o un futuro bug
-    GUI) potrebbe salvare una coppia incoerente (es. mercato "Over/Under 2.5" con selezione
-    "Sì") che XTrader non riconoscerebbe; ``resolve_market`` scarta tali voci invece di
-    farle scrivere nel CSV. Confronto case/spazio-insensitive (``dizionario.normalize``).
-    ``rows`` permette di iniettare un catalogo nei test; di default usa quello reale."""
+    Validazione + canonicalizzazione safety-critical (design §5.3): il match col catalogo è
+    case/spazio-insensitive (``dizionario.normalize``), ma ciò che si ritorna — e che il
+    runtime scriverà nel CSV — sono **sempre i valori canonici del catalogo** (MarketType,
+    MarketName, SelectionName), non quelli grezzi del config: così una config editata a
+    mano con case/spazi diversi (o un ``market_type`` stantio) non produce mai una tupla che
+    XTrader non riconosce. Mercato **fisso** + selezione **non dinamica** (Codex). ``rows``
+    inietta un catalogo nei test; di default usa quello reale."""
     mn = str(market_name or "").strip()
     sn = str(selection_name or "").strip()
     if not mn or not sn:
-        return False
-    fixed = {dizionario.normalize(m) for m in dizionario.market_names(rows=rows, fixed_only=True)}
-    if dizionario.normalize(mn) not in fixed:
-        return False
-    sels = {dizionario.normalize(s["SelectionName"])
-            for s in dizionario.selections_for_market(mn, rows)
-            if not s["dynamic"] and s["SelectionName"]}
-    return dizionario.normalize(sn) in sels
+        return None
+    nmn = dizionario.normalize(mn)
+    nsn = dizionario.normalize(sn)
+    canon_market = next((m for m in dizionario.market_names(rows=rows, fixed_only=True)
+                         if dizionario.normalize(m) == nmn), None)
+    if canon_market is None:
+        return None
+    for s in dizionario.selections_for_market(canon_market, rows):
+        if s.get("dynamic") or not s.get("SelectionName"):
+            continue
+        if dizionario.normalize(s["SelectionName"]) == nsn:
+            mtype = dizionario.market_type_for_name(canon_market, rows) or ""
+            return {"market_type": mtype, "market_name": canon_market,
+                    "selection_name": s["SelectionName"]}
+    return None
 
 
 def _phrase_in_text(phrase: str, text_norm: str) -> bool:
     """``True`` se ``phrase`` compare in ``text_norm`` (già normalizzato) come
-    sottostringa su **confini di parola**. I lookaround ``(?<!\\w)``/``(?!\\w)`` evitano
-    falsi positivi (es. "over" dentro "overflow") e funzionano anche con frasi che
-    iniziano/finiscono con cifre o punteggiatura (es. "over 2.5")."""
+    sottostringa su **confini di token**. I lookaround escludono dai confini sia i
+    caratteri di parola (``\\w``) sia ``/`` e ``-``: così "over" non combacia dentro
+    "overflow" **e** una frase corta come "x" non combacia dentro codici tipo "1/x" o
+    "1-x" (HT/FT), evitando falsi positivi che imposterebbero il mercato sbagliato
+    (Codex). Funziona comunque con frasi che finiscono con cifre/punteggiatura
+    (es. "over 2.5" seguito da spazio o "!")."""
     p = _normalize_text(phrase)
     if not p:
         return False
-    return re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", text_norm) is not None
+    return re.search(r"(?<![\w/-])" + re.escape(p) + r"(?![\w/-])", text_norm) is not None
 
 
 def resolve_market(text: str, profiles, rows=None) -> MarketResolution:
@@ -240,13 +253,14 @@ def resolve_market(text: str, profiles, rows=None) -> MarketResolution:
         for e in entries:
             if not _phrase_in_text(e.get("phrase", ""), t):
                 continue
-            mn = e.get("market_name", "")
-            sn = e.get("selection_name", "")
-            # Coppia incoerente col Catalogo (config a mano / bug) → IGNORATA: non si scrive
-            # mai un mercato che XTrader non riconosce (design §5.3, Codex).
-            if not _coherent(mn, sn, rows):
+            # Risolvi nella tupla CANONICA del catalogo (type+nomi esatti, ignorando i
+            # valori grezzi del config): una coppia incoerente → None → IGNORATA, mai
+            # scritta; una coppia valida ma non-canonica (case/spazi) → valori canonici,
+            # così XTrader riconosce sempre la tupla (design §5.3, Codex).
+            canon = _canonical_market(e.get("market_name", ""), e.get("selection_name", ""), rows)
+            if canon is None:
                 continue
-            found.append((e.get("market_type", ""), mn, sn))
+            found.append((canon["market_type"], canon["market_name"], canon["selection_name"]))
     if not found:
         return MarketResolution("none", None)
     if len(set(found)) > 1:
