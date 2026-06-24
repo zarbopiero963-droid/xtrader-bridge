@@ -141,6 +141,12 @@ class CustomParserDef:
     # salvati PRIMA di questa feature (campo `mode` assente), per retro-compatibilità.
     mode: str = recognition.DEFAULT_MODE
     rules: "list[FieldRule]" = field(default_factory=list)
+    # Mappatura nomi squadra (name_mapping_store): profili selezionati per tradurre
+    # l'EventName provider → nome Betfair/XTrader. Vuoto = nessuna mappatura (EventName
+    # invariato, retro-compatibile). `team_separator` è il separatore casa/trasferta
+    # nei messaggi del canale (testo libero: "v"/"vs"/"-"/"/"); vuoto = default "v".
+    name_mapping_profiles: "list[str]" = field(default_factory=list)
+    team_separator: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -148,6 +154,8 @@ class CustomParserDef:
             "description": self.description,
             "version": self.version,
             "mode": self.mode,
+            "name_mapping_profiles": list(self.name_mapping_profiles),
+            "team_separator": self.team_separator,
             "rules": [r.to_dict() for r in self.rules],
         }
 
@@ -166,10 +174,18 @@ class CustomParserDef:
             version = int(version)
         except (TypeError, ValueError):
             version = SCHEMA_VERSION
+        # Profili di mappatura nomi: lista di stringhe non vuote (chiave assente o
+        # malformata → nessun profilo = nessuna mappatura, retro-compatibile).
+        raw_profiles = data.get("name_mapping_profiles", [])
+        if not isinstance(raw_profiles, list):
+            raw_profiles = []
+        profiles = [str(p).strip() for p in raw_profiles if str(p or "").strip()]
         return cls(
             name=str(data.get("name", "")),
             description=str(data.get("description", "")),
             version=version,
+            name_mapping_profiles=profiles,
+            team_separator=str(data.get("team_separator", "") or ""),
             # Modalità: SOLO la chiave assente/null (file legacy pre-feature) → "" =
             # eredita il globale. Un `mode` ESPLICITO valido è tenuto; `""` esplicito è
             # l'eredità scelta dalla GUI; un valore malformato (typo, file corrotto) →
@@ -367,6 +383,69 @@ def list_parser_files(dir_path: str = None) -> list:
         for f in os.listdir(base)
         if f.endswith(".json") and not f.startswith(".")
     )
+
+
+def rename_mapping_profile_in_files(old: str, new: str, dir_path: str = None) -> tuple:
+    """Aggiorna i riferimenti a un profilo di mappatura **rinominato** (``old`` → ``new``)
+    in tutti i parser salvati: i parser che hanno ``old`` in ``name_mapping_profiles``
+    vengono riscritti con ``new`` nella **stessa posizione** (l'ordine conta per la
+    precedenza in `name_mapping_store.resolve_team`), senza duplicati.
+
+    Ritorna la coppia ``(updated, failed)``: nomi dei parser aggiornati con successo e
+    nomi di quelli che referenziavano ``old`` ma **non si sono potuti riscrivere**
+    (cartella in sola lettura, collisione di nome file, I/O transitorio). I `failed` NON
+    vengono nascosti: il chiamante deve segnalarli, perché restano col vecchio nome mentre
+    la config ha già il nuovo → quei segnali andrebbero in ``MAPPING_MISSING`` (Codex).
+
+    Serve perché il nome del profilo è memorizzato **per stringa** nel JSON del parser e
+    risolto esatto dal `signal_router`. I file non caricabili/non validi vengono saltati
+    (non referenziano in modo affidabile ``old``); i parser che non usano ``old`` non
+    vengono toccati."""
+    o = str(old or "").strip()
+    n = str(new or "").strip()
+    if not o or not n or o == n:
+        return [], []
+    updated, failed = [], []
+    for path in list_parser_files(dir_path):
+        try:
+            defn = load_parser(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if o not in defn.name_mapping_profiles:
+            continue
+        seen, newlist = set(), []
+        for p in defn.name_mapping_profiles:
+            p2 = n if p == o else p
+            if p2 not in seen:
+                seen.add(p2)
+                newlist.append(p2)
+        defn.name_mapping_profiles = newlist
+        try:
+            save_parser(defn, dir_path)
+            updated.append(defn.name)
+        except (OSError, ValueError):
+            failed.append(defn.name)
+    return updated, failed
+
+
+def parsers_using_mapping_profile(name: str, dir_path: str = None) -> list:
+    """Nomi dei parser salvati che referenziano il profilo di mappatura ``name`` in
+    ``name_mapping_profiles``. Serve ad **avvisare** prima di eliminare un profilo in
+    uso: cancellarlo lascerebbe quei parser a chiedere un profilo inesistente → ogni
+    segnale mappato diventa ``MAPPING_MISSING`` (scartato). Best-effort: i file non
+    caricabili vengono saltati."""
+    n = str(name or "").strip()
+    if not n:
+        return []
+    out = []
+    for path in list_parser_files(dir_path):
+        try:
+            defn = load_parser(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if n in defn.name_mapping_profiles:
+            out.append(defn.name)
+    return out
 
 
 def delete_parser(name: str, dir_path: str = None) -> bool:

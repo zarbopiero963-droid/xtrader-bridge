@@ -27,6 +27,11 @@ class ParserBuilder:
             self.description = ""
             self.mode = recognition.DEFAULT_MODE
             self.rules = []
+            # Mappatura nomi squadra (name_mapping_store): vanno preservati nel
+            # round-trip del builder, altrimenti load+save/duplica azzererebbe la
+            # mappatura in silenzio (live scriverebbe l'EventName provider grezzo).
+            self.name_mapping_profiles = []
+            self.team_separator = ""
         else:
             self.name = defn.name
             self.description = defn.description
@@ -35,6 +40,11 @@ class ParserBuilder:
             # legacy ne scriverebbe NAME_ONLY perdendo l'ereditarietà (Codex).
             self.mode = getattr(defn, "mode", recognition.DEFAULT_MODE)
             self.rules = [FieldRule.from_dict(r.to_dict()) for r in defn.rules]  # copia
+            # Campi mappatura nomi: copiati (lista nuova) così il builder non perde i
+            # profili/separatore di un parser caricato (Codex). `getattr` per tollerare
+            # def costruite prima dei campi.
+            self.name_mapping_profiles = list(getattr(defn, "name_mapping_profiles", []) or [])
+            self.team_separator = getattr(defn, "team_separator", "") or ""
 
     # ── opzioni per i menu a tendina della GUI ─────────────────────────────
     def target_options(self) -> list:
@@ -134,8 +144,10 @@ class ParserBuilder:
 
     # ── modello / validazione ──────────────────────────────────────────────
     def to_def(self) -> CustomParserDef:
-        return CustomParserDef(name=self.name, description=self.description,
-                               mode=self.mode, rules=list(self.rules))
+        return CustomParserDef(
+            name=self.name, description=self.description, mode=self.mode,
+            name_mapping_profiles=list(self.name_mapping_profiles),
+            team_separator=self.team_separator, rules=list(self.rules))
 
     # ── Modalità di riconoscimento (per-parser) ────────────────────────────
     def set_mode(self, mode: str) -> None:
@@ -228,17 +240,23 @@ class ParserBuilder:
 
     # ── test-live ────────────────────────────────────────────────────────────
     def test_message(self, message: str, *, provider: str = "",
-                     mode: str = None, require_price: bool = None):
+                     mode: str = None, require_price: bool = None,
+                     name_mapping_profiles=None):
         """Applica il parser corrente a un messaggio e ritorna il `PipelineResult`
         (status + riga + piazzabilità), per l'anteprima del costruttore. La modalità
         usata è quella DEL PARSER (`self.mode`) salvo override esplicito.
 
         `require_price` di default (None) deriva dalla riga Price del parser
         (`price_required()`): l'anteprima riflette così l'unico comando della quota,
-        coerente col runtime."""
+        coerente col runtime.
+
+        `name_mapping_profiles` (righe dei profili risolte da config) è inoltrato al
+        pipeline: se il parser usa la mappatura nomi, l'anteprima traduce l'EventName
+        come il runtime (o fa fail-closed con MAPPING_MISSING)."""
         defn = self.to_def()
         if require_price is None:
             require_price = defn.price_required()
         return build_validated_row(defn, message, provider=provider,
                                    mode=self.mode if mode is None else mode,
-                                   require_price=require_price)
+                                   require_price=require_price,
+                                   name_mapping_profiles=name_mapping_profiles)

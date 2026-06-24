@@ -70,6 +70,49 @@ def test_chat_non_approvata_non_usa_parser_globale(tmp_path):
     assert res.placeable is False
 
 
+def _mapping_parser(name="Map", profiles=("Premier",), separator="v"):
+    return cp.CustomParserDef(
+        name=name, mode="NAME_ONLY",
+        name_mapping_profiles=list(profiles), team_separator=separator,
+        rules=[
+            cp.FieldRule(target="Provider", fixed_value="TG_CUSTOM"),
+            cp.FieldRule(target="EventName", start_after="Match:", end_before="\n", required=True),
+            cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
+            cp.FieldRule(target="SelectionName", start_after="Sel:", end_before="\n", required=True),
+            cp.FieldRule(target="Price", start_after="Quota:", end_before="\n", required=True),
+            cp.FieldRule(target="BetType", start_after="Lato:", value_map="bettype", required=True),
+        ])
+
+
+_MAP_MSG = "Match: Liverpool FC v Leeds Utd\nSel: Sì\nQuota: 1,85\nLato: BACK"
+
+
+def _map_cfg(name="Map"):
+    return {"provider": "TG", "active_parser": name, "chat_id": "42",
+            "recognition_mode": "NAME_ONLY",
+            "name_mappings": {"Premier": [
+                {"betfair": "Liverpool", "provider": "Liverpool FC"},
+                {"betfair": "Leeds", "provider": "Leeds Utd"},
+            ]}}
+
+
+def test_router_traduce_eventname_coi_profili(tmp_path):
+    cp.save_parser(_mapping_parser(), str(tmp_path))
+    res = signal_router.resolve_row(_MAP_MSG, _map_cfg(),
+                                    chat_id="42", parsers_dir=str(tmp_path))
+    assert res.source == signal_router.CUSTOM
+    assert res.placeable is True
+    assert res.row["EventName"] == "Liverpool - Leeds"   # nomi provider → Betfair/XTrader
+
+
+def test_router_scarta_se_squadra_non_mappata(tmp_path):
+    cp.save_parser(_mapping_parser(), str(tmp_path))
+    msg = "Match: Liverpool FC v Arsenal\nSel: Sì\nQuota: 1,85\nLato: BACK"
+    res = signal_router.resolve_row(msg, _map_cfg(), chat_id="42", parsers_dir=str(tmp_path))
+    assert res.placeable is False                        # fail-closed: niente riga CSV
+    assert res.status == custom_pipeline.MAPPING_MISSING
+
+
 def test_custom_solo_fixed_non_scrive_su_messaggio_arbitrario(tmp_path):
     # Parser con TUTTI gli obbligatori a fixed_value: build_validated_row sarebbe
     # piazzabile su qualsiasi testo. Il gate di contenuto lo scarta: senza
