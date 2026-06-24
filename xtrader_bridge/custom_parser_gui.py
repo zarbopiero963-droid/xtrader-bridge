@@ -12,7 +12,7 @@ coperta da `tests/unit/test_parser_builder.py`. Verifica manuale su Windows.
 
 import customtkinter as ctk
 
-from . import config_store, name_mapping_store, parser_diagnostics, provider_store
+from . import config_store, gui_utils, name_mapping_store, parser_diagnostics, provider_store
 from .parser_builder import ParserBuilder
 
 
@@ -162,7 +162,10 @@ class CustomParserWindow(ctk.CTkToplevel):
                  global_mode: str = "", on_saved=None):
         super().__init__(master)
         self.title("Parser Personalizzato")
-        self.geometry("1024x720")
+        # Apri entro lo schermo (clamp altezza) + minsize: su portatili l'altezza piena
+        # sforerebbe sotto la taskbar; il contenuto resta comunque tutto raggiungibile
+        # grazie al contenitore scrollabile in `_build_ui`.
+        gui_utils.fit_to_screen(self, 1024, 720, 760, 480)
         is_new = builder is None
         self.builder = builder or ParserBuilder()
         self._provider = provider
@@ -191,7 +194,18 @@ class CustomParserWindow(ctk.CTkToplevel):
 
     # ── costruzione UI ─────────────────────────────────────────────────────
     def _build_ui(self):
-        top = ctk.CTkFrame(self)
+        # TUTTA la finestra dentro UN solo contenitore scrollabile: il contenuto è alto
+        # (griglia 14 colonne + area test + diagnostica) e prima, su schermi piccoli, la
+        # parte bassa finiva fuori finestra senza modo di raggiungerla. Con lo scroll
+        # esterno ogni sezione resta sempre raggiungibile. Le sezioni interne che prima
+        # avevano uno scroll proprio (griglia regole, tabella diagnostica) diventano frame
+        # semplici: lo scorrimento lo gestisce SOLO questo contenitore (niente scroll
+        # verticali annidati, che si rubavano la rotellina a vicenda).
+        outer = ctk.CTkScrollableFrame(self)
+        outer.pack(fill="both", expand=True)
+        self._outer = outer
+
+        top = ctk.CTkFrame(outer)
         top.pack(fill="x", padx=10, pady=8)
         ctk.CTkLabel(top, text="Nome parser:").pack(side="left", padx=6)
         self._name_var = ctk.StringVar(value=self.builder.name)
@@ -210,7 +224,7 @@ class CustomParserWindow(ctk.CTkToplevel):
                       command=self._add_provider).pack(side="left", padx=6)
 
         # gestione parser salvati: lista + nuovo / carica / duplica / elimina
-        manage = ctk.CTkFrame(self)
+        manage = ctk.CTkFrame(outer)
         manage.pack(fill="x", padx=10, pady=(0, 6))
         ctk.CTkLabel(manage, text="Parser salvati:").pack(side="left", padx=6)
         self._saved_var = ctk.StringVar(value=self._NONE_SAVED)
@@ -225,7 +239,7 @@ class CustomParserWindow(ctk.CTkToplevel):
 
         # Catalogo XTrader (B2): scegli Mercato → Selezione (solo NON dinamici) e
         # inseriscili come regole FISSE, senza digitare i nomi canonici a mano.
-        cat = ctk.CTkFrame(self)
+        cat = ctk.CTkFrame(outer)
         cat.pack(fill="x", padx=10, pady=(0, 6))
         ctk.CTkLabel(cat, text="Catalogo XTrader:").pack(side="left", padx=6)
         self._markets = self.builder.market_options()
@@ -244,7 +258,7 @@ class CustomParserWindow(ctk.CTkToplevel):
 
         # Mappatura nomi squadra: separatore casa/trasferta del canale + profili
         # (checkbox multi-selezione) che traducono l'EventName provider → Betfair/XTrader.
-        nm = ctk.CTkFrame(self)
+        nm = ctk.CTkFrame(outer)
         nm.pack(fill="x", padx=10, pady=(0, 6))
         ctk.CTkLabel(nm, text="Mappatura nomi · separatore:").pack(side="left", padx=6)
         self._separator_var = ctk.StringVar(value=self.builder.team_separator)
@@ -260,34 +274,34 @@ class CustomParserWindow(ctk.CTkToplevel):
         self._reload_profile_checks()
 
         # intestazione colonne
-        head = ctk.CTkFrame(self)
+        head = ctk.CTkFrame(outer)
         head.pack(fill="x", padx=10)
         for txt, w in (("Colonna", 150), ("Inizia dopo", 150), ("Finisce prima", 150),
                        ("Valore fisso", 130), ("Trasformazione", 150), ("Value-map", 150),
                        ("Obblig.", 60), ("", 70)):
             ctk.CTkLabel(head, text=txt, width=w, anchor="w").pack(side="left", padx=2)
 
-        self._rows_frame = ctk.CTkScrollableFrame(self, height=320)
-        self._rows_frame.pack(fill="both", expand=True, padx=10, pady=6)
+        self._rows_frame = ctk.CTkFrame(outer)
+        self._rows_frame.pack(fill="x", padx=10, pady=6)
 
-        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions = ctk.CTkFrame(outer, fg_color="transparent")
         actions.pack(fill="x", padx=10, pady=4)
         ctk.CTkButton(actions, text="💾 Salva", command=self._save).pack(side="left", padx=4)
         ctk.CTkButton(actions, text="🧪 Prova messaggio", command=self._test).pack(side="left", padx=4)
         ctk.CTkButton(actions, text="📋 Copia diagnostica", command=self._copy_diag).pack(side="left", padx=4)
 
         # test-live
-        test = ctk.CTkFrame(self)
-        test.pack(fill="both", expand=True, padx=10, pady=6)
+        test = ctk.CTkFrame(outer)
+        test.pack(fill="x", padx=10, pady=6)
         ctk.CTkLabel(test, text="Messaggio di prova:").pack(anchor="w", padx=6)
         self._msg_box = ctk.CTkTextbox(test, height=120)
-        self._msg_box.pack(fill="both", expand=True, padx=6, pady=4)
+        self._msg_box.pack(fill="x", padx=6, pady=4)
         self._result = ctk.CTkLabel(test, text="", anchor="w", justify="left")
         self._result.pack(fill="x", padx=6, pady=4)
         # Diagnostica per-campo (CP-08b): TABELLA — perché "Non pronto", colonna per colonna.
         ctk.CTkLabel(test, text="Diagnostica (una riga per colonna):").pack(anchor="w", padx=6)
-        self._diag_table = ctk.CTkScrollableFrame(test, height=200)
-        self._diag_table.pack(fill="both", expand=True, padx=6, pady=(0, 4))
+        self._diag_table = ctk.CTkFrame(test)
+        self._diag_table.pack(fill="x", padx=6, pady=(0, 4))
         # Larghezze colonne della tabella diagnostica (px), in ordine.
         self._diag_cols = (("Colonna", 110), ("Stato", 64), ("Motivo", 280),
                            ("Inizia dopo", 120), ("Finisce prima", 120), ("Valore estratto", 170))
