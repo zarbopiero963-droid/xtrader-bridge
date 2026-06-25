@@ -100,6 +100,60 @@ def test_stato_sopravvive_al_riavvio_stesso_giorno():
 def test_restore_state_malformato_ignorato():
     lim = sg.DailyLimiter(max_per_day=5)
     for bad in (None, [], {"day": 1, "count": "x"}, {"count": -1, "day": "2026-01-01"}):
-        lim.restore_state(bad)                  # non deve sollevare
+        assert lim.restore_state(bad) is False  # malformato → False, non solleva
     # stato resta pulito: tetto pieno disponibile
     assert lim.remaining(now=1_000_000.0) == 5
+    # un payload valido viene applicato e ritorna True.
+    assert lim.restore_state({"day": "2026-01-01", "count": 2}) is True
+
+
+# ── audit #105 P2: persistenza daily state atomica + fsync ────────────────────
+
+def test_save_load_state_round_trip_senza_temporanei(tmp_path):
+    t = 1_000_000.0
+    lim = sg.DailyLimiter(max_per_day=3)
+    lim.allow(now=t)
+    lim.allow(now=t)
+    p = tmp_path / "daily.json"
+    assert sg.save_state(lim, str(p)) is True
+    assert not (tmp_path / "daily.json.tmp").exists()       # nessun temporaneo residuo
+    # ricarico in un nuovo limiter (riavvio same-day): conteggio preservato.
+    lim2 = sg.DailyLimiter(max_per_day=3)
+    assert sg.load_state(lim2, str(p)) is True
+    assert lim2.remaining(now=t) == 1
+
+
+def test_save_state_atomico_non_distrugge_il_file_su_errore(tmp_path, monkeypatch):
+    # audit #105 P2: una os.replace fallita NON deve troncare/cancellare lo stato esistente
+    # e non deve lasciare un .tmp (crash-safety, come signal_dedupe).
+    t = 1_000_000.0
+    p = tmp_path / "daily.json"
+    good = sg.DailyLimiter(max_per_day=5)
+    good.allow(now=t)
+    assert sg.save_state(good, str(p)) is True              # stato valido iniziale
+
+    def boom(src, dst):
+        raise OSError("rename interrotto (simulato)")
+
+    monkeypatch.setattr(sg.os, "replace", boom)
+    assert sg.save_state(sg.DailyLimiter(max_per_day=5), str(p)) is False
+    monkeypatch.undo()
+    # Il file su disco è ancora quello valido precedente; nessun .tmp lasciato.
+    lim2 = sg.DailyLimiter(max_per_day=5)
+    assert sg.load_state(lim2, str(p)) is True
+    assert lim2.remaining(now=t) == 4                        # 5 - 1 (lo stato "good")
+    assert not (tmp_path / "daily.json.tmp").exists()
+
+
+def test_load_state_file_assente_o_corrotto_ritorna_false(tmp_path):
+    lim = sg.DailyLimiter(max_per_day=5)
+    assert sg.load_state(lim, str(tmp_path / "mai_esistito.json")) is False
+    bad = tmp_path / "corrotto.json"
+    bad.write_text("{ non json ,,,")
+    assert sg.load_state(lim, str(bad)) is False
+    # JSON VALIDO ma struttura inattesa → load_state propaga il no-op di restore_state (False),
+    # non un falso "caricato" (Sourcery).
+    weird = tmp_path / "valido_ma_strano.json"
+    weird.write_text('{"foo": "bar"}')
+    assert sg.load_state(lim, str(weird)) is False
+    assert lim.remaining(now=1_000_000.0) == 5              # limiter invariato

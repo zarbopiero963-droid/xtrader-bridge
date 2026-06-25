@@ -17,7 +17,9 @@ puntata aggressivo. Tre responsabilità, tutte **pure** (nessuna GUI/CSV/Telegra
 wiring GUI/runtime (toggle, banner, blocco START) è un passo successivo.
 """
 
+import json
 import math
+import os
 import time
 from dataclasses import dataclass
 
@@ -145,12 +147,54 @@ class DailyLimiter:
         """Stato serializzabile (per sopravvivere a un riavvio nello stesso giorno)."""
         return {"day": self._day, "count": self._count}
 
-    def restore_state(self, data) -> None:
-        """Ripristina lo stato da `state()` (tollerante a dati malformati)."""
+    def restore_state(self, data) -> bool:
+        """Ripristina lo stato da `state()` (tollerante a dati malformati). Ritorna ``True``
+        se lo stato è stato effettivamente applicato, ``False`` se i dati erano malformati
+        (limiter lasciato invariato) — così `load_state` distingue un restore reale da un no-op."""
         if not isinstance(data, dict):
-            return
+            return False
         day = data.get("day")
         count = data.get("count")
         if isinstance(day, str) and isinstance(count, int) and count >= 0:
             self._day = day
             self._count = count
+            return True
+        return False
+
+
+def save_state(daily: DailyLimiter, path: str) -> bool:
+    """Salva lo stato del DailyLimiter su file JSON **atomicamente** (audit #105 P2): `.tmp`
+    nella stessa cartella + ``flush`` + ``os.fsync`` + ``os.replace``, con rimozione del
+    temporaneo su errore — esattamente come `signal_dedupe.save_state`. Prima il salvataggio
+    era best-effort SENZA fsync: in crash/blackout l'ultimo conteggio giornaliero poteva
+    perdersi, riducendo la protezione anti-overtrading dopo un riavvio. True se riuscito."""
+    tmp = path + ".tmp"
+    try:
+        d = os.path.dirname(os.path.abspath(path))
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(daily.state(), f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def load_state(daily: DailyLimiter, path: str) -> bool:
+    """Carica lo stato nel DailyLimiter da file JSON (best-effort). True se riuscito;
+    file assente/corrotto/malformato → lascia il limiter invariato e ritorna False."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False
+    # Propaga l'esito reale del restore: un JSON valido ma con struttura inattesa
+    # (ignorato da restore_state) ritorna False, non un falso "caricato" (Sourcery).
+    return daily.restore_state(data)
