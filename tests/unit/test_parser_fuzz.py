@@ -23,7 +23,7 @@ EXPECTED_KEYS = {
 # safety-critical (Quota/Banca/Lay/HT/FT/Prematch) così il fuzz li combina liberamente.
 HOSTILE_CHARS = list(
     "P.Bet.🏆🆚⚽⌚📊📈🔊✅🔇 \t\r\n0123456789,.:;@-/vVsS%"
-    "\x00\x01\x07‮​"   # NUL, control, RTL override, zero-width
+    "\x00\x01\x07\u202e\u200b"   # NUL, control, RTL override, zero-width
 ) + ["Quota", "Banca", "Lay", "Punta", "Back", "Prematch:", "HT", "FT", "live", "@"]
 
 # Pool di parole "innocue" per testare che il testo libero NON ribalti il lato a LAY:
@@ -36,11 +36,13 @@ SAFE_WORDS = [
 
 
 def _rand_hostile(rng, max_len=400):
+    """Genera una stringa casuale dal charset ostile (lunghezza 0..max_len)."""
     n = rng.randint(0, max_len)
     return "".join(rng.choice(HOSTILE_CHARS) for _ in range(n))
 
 
 def _assert_schema(result):
+    """Verifica che `result` sia il dict schema completo, con i tipi attesi."""
     assert isinstance(result, dict)
     assert set(result.keys()) == EXPECTED_KEYS
     assert isinstance(result["live"], bool)
@@ -60,6 +62,7 @@ def _assert_quota_invariant(q):
 
 
 def test_parse_message_e_totale_su_input_arbitrario():
+    """Per qualsiasi stringa ostile parse_message non solleva e ritorna lo schema completo."""
     # Per QUALSIASI stringa ostile parse_message non solleva e ritorna lo schema completo.
     rng = random.Random(20240625)
     for _ in range(500):
@@ -70,13 +73,15 @@ def test_parse_message_e_totale_su_input_arbitrario():
 
 
 def test_parse_message_robusto_su_casi_limite_di_struttura():
+    """Input degeneri (vuoto, newline, NUL, RTL/zero-width, marker isolati, 5000 righe) non rompono lo schema."""
     # Input degeneri non devono sollevare né rompere lo schema.
-    for text in ("", "\n\n\n", "\t", "\x00", "‮​", "P.Bet.", "🆚", "Quota",
+    for text in ("", "\n\n\n", "\t", "\x00", "\u202e\u200b", "P.Bet.", "🆚", "Quota",
                  "Quota\n@\nPrematch:", "\n".join(["a"] * 5000)):
         _assert_schema(parser.parse_message(text))
 
 
 def test_numero_nudo_senza_marker_non_diventa_quota():
+    """Fail-closed: un numero nudo senza marker di quota (Quota/@/HT/FT/Prematch) non diventa mai quota."""
     # Proprietà (generalizza il caso mirato '📈 1.2.3'): un numero senza un marker di
     # quota esplicito (Quota/@/HT/FT/Prematch) non deve MAI produrre una quota.
     rng = random.Random(7)
@@ -93,6 +98,7 @@ def test_numero_nudo_senza_marker_non_diventa_quota():
 
 
 def test_bet_type_non_flippa_a_lay_su_testo_libero():
+    """Safety: testo libero senza riga-lato dedicata lascia bet_type al default BACK (LAY = lato opposto)."""
     # Safety-critical: LAY è il lato OPPOSTO. Testo libero senza una riga-lato dedicata
     # (un solo token Banca/Lay) deve lasciare bet_type al default BACK.
     rng = random.Random(99)
@@ -107,6 +113,7 @@ def test_bet_type_non_flippa_a_lay_su_testo_libero():
 
 
 def test_riga_lato_dedicata_ribalta_solo_token_esatto():
+    """Contro-prova: solo una riga con esattamente il token Banca/Lay ribalta il lato."""
     # Contro-prova della proprietà: SOLO una riga con esattamente "banca"/"lay" ribalta.
     assert parser.parse_message("P.Bet. X\nInter v Milan\nBanca")["bet_type"] == "LAY"
     assert parser.parse_message("P.Bet. X\nInter v Milan\nLay")["bet_type"] == "LAY"
@@ -115,6 +122,7 @@ def test_riga_lato_dedicata_ribalta_solo_token_esatto():
 
 
 def test_parse_message_e_idempotente():
+    """Nessuno stato nascosto: parse dello stesso input due volte da' lo stesso risultato."""
     # Nessuno stato nascosto: stesso input → stesso output.
     rng = random.Random(123)
     for _ in range(200):
@@ -123,6 +131,7 @@ def test_parse_message_e_idempotente():
 
 
 def test_mutazione_di_messaggio_valido_resta_failsafe():
+    """Fuzz su delimitatori/quote di un messaggio valido: nessun raise, quota valida-o-vuota."""
     # Fuzz su delimitatori/quote di un messaggio VALIDO: ogni mutazione non deve sollevare
     # e la quota resta valida-o-vuota (mai malformata). Copre 'separatori/quote' di H1.
     rng = random.Random(2026)
