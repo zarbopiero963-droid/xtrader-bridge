@@ -279,8 +279,17 @@ Tutte queste protezioni sono **attive a runtime**:
 
 1. **Simulazione (`dry_run`)** — di default `true`: i segnali vengono riconosciuti
    ma il CSV operativo **non** viene scritto. Il log lo dichiara
-   (`🧪 DRY_RUN attivo`). Per l'uso reale metti `dry_run=false`: il log mostrerà
-   `⚠️ Modalità REALE`.
+   (`🧪 DRY_RUN attivo`). Per l'uso reale togli la spunta *Simulazione* nella tab
+   *Sicurezza* (`dry_run=false`).
+   - **Attivazione "frictionful" (audit #105 P2).** Passare da simulazione a **REALE**
+     richiede una **doppia conferma**: oltre alla spunta, devi **digitare** la parola
+     `REALE` in una finestra di conferma. Se annulli, il bridge resta in simulazione.
+   - **Banner rosso persistente** in alto finché sei in modalità reale; l'attivazione
+     viene **tracciata** nel log come evento `REAL_MODE_ENABLED`.
+   - **Esporta audit reale** (pulsante 🧾 nella tab *Stato*): salva in un file le righe
+     `REAL_MODE_ENABLED` estratte dai log giornalieri.
+   - La modalità reale, una volta confermata e salvata, **resta** tra i riavvii (la
+     conferma serve solo all'attivazione).
 2. **Filtro chat obbligatorio** — il bridge non parte senza almeno una chat/sorgente
    configurata, così non accetta segnali da chat arbitrarie.
 3. **Un segnale alla volta** — con `queue_mode=OVERWRITE_LAST` il CSV contiene un
