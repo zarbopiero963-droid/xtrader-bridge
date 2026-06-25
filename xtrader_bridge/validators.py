@@ -63,7 +63,7 @@ def require_finite_now(now) -> float:
     return f
 
 
-def safe_filename_core(name) -> str:
+def safe_filename_core(name: str) -> str:
     """Nucleo condiviso della sanitizzazione di un nome file (Windows).
 
     Tiene solo alfanumerici, ``-``, ``_`` e spazi (poi spazi → ``_``); evita path
@@ -72,7 +72,10 @@ def safe_filename_core(name) -> str:
     il fallback su vuoto è LASCIATO al chiamante, perché diverge per dominio —
     `custom_parser` usa un default (``"parser"``), `profile_store` rifiuta il nome
     vuoto. Per questo i due `_safe_filename` restano funzioni separate, ma il nucleo
-    è unico (anti-drift)."""
+    è unico (anti-drift).
+
+    Annotato `name: str` per il contratto, ma `str(name)` resta come rete difensiva:
+    un chiamante che passi un non-stringa per errore non deve far crashare l'I/O."""
     cleaned = "".join(c for c in str(name).strip() if c.isalnum() or c in " -_")
     cleaned = "_".join(cleaned.split())
     if cleaned.casefold() in WIN_RESERVED:

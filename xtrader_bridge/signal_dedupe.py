@@ -25,9 +25,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import atomic_io
-from .validators import require_finite_now as _require_finite_now
-from .validators import require_positive_int as _require_positive_int
+from . import atomic_io, validators
 
 # Stati del ciclo di vita del segnale (vocabolario condiviso; usati appieno in
 # PR-16/PR-17). DUPLICATE/RATE_LIMITED sono gli esiti decisi qui.
@@ -83,8 +81,8 @@ class SignalTracker:
     def __post_init__(self):
         # Parametri validati come in DailyLimiter (audit #105 P2): una finestra/limite
         # malformato (bool/NaN/<=0) renderebbe la protezione inefficace o sempre bloccante.
-        self.dedupe_window = _require_positive_int(self.dedupe_window, "dedupe_window")
-        self.max_per_minute = _require_positive_int(self.max_per_minute, "max_per_minute")
+        self.dedupe_window = validators.require_positive_int(self.dedupe_window, "dedupe_window")
+        self.max_per_minute = validators.require_positive_int(self.max_per_minute, "max_per_minute")
 
     def _prune(self, now: float) -> None:
         # Si conserva la storia per il MASSIMO tra finestra dedup e 60s: altrimenti
@@ -101,7 +99,7 @@ class SignalTracker:
         - **NEW**: accettato (e memorizzato).
 
         Un DUPLICATE o un RATE_LIMITED NON vengono memorizzati come nuovi."""
-        now = time.time() if now is None else _require_finite_now(now)
+        now = time.time() if now is None else validators.require_finite_now(now)
         self._prune(now)
         h = message_hash(text)
         # Duplicato: stesso hash entro la finestra di deduplica (NON l'intera
