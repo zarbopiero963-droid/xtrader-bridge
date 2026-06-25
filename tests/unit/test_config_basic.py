@@ -11,6 +11,271 @@ import os
 from xtrader_bridge import config_store
 
 
+def _fake_keyring(monkeypatch, store, available=True):
+    """Sostituisce `token_store` con un dizionario in memoria (deterministico, offline):
+    `available`/`save`/`load`/`delete` operano su `store["t"]`."""
+    monkeypatch.setattr(config_store.token_store, "available", lambda: available)
+    monkeypatch.setattr(config_store.token_store, "save_token",
+                        lambda t: bool(t) and (store.__setitem__("t", t) or True))
+    monkeypatch.setattr(config_store.token_store, "load_token", lambda: store.get("t"))
+
+    def _del():
+        existed = "t" in store
+        store.pop("t", None)
+        return existed
+    monkeypatch.setattr(config_store.token_store, "delete_token", _del)
+
+
+def test_save_config_token_va_nel_keyring_non_in_chiaro(tmp_path, monkeypatch):
+    # Audit #105 P1: con keyring disponibile il bot_token NON va in chiaro sul disco,
+    # ma resta nella config in memoria (per il runtime) e viene re-iniettato al load.
+    store = {}
+    _fake_keyring(monkeypatch, store)
+    p = tmp_path / "config.json"
+    saved, ok = config_store.save_config({"bot_token": "123:SECRET", "provider": "X"}, str(p))
+    assert ok is True
+    assert saved["bot_token"] == "123:SECRET"               # in memoria: presente (runtime)
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token"] == ""                       # su disco: NON in chiaro
+    assert on_disk["bot_token_storage"] == "keyring"        # sentinel di stato esplicito
+    assert store["t"] == "123:SECRET"                       # nel keyring
+    # load: sentinel "keyring" + chiave vuota → re-iniezione dal keyring.
+    loaded = config_store.load_config(str(p))
+    assert loaded["bot_token"] == "123:SECRET"
+
+
+def test_clear_con_delete_fallito_non_risuscita_il_token_al_load(tmp_path, monkeypatch):
+    # CodeRabbit (Major): un clear con delete keyring FALLITO non deve far risorgere il
+    # token al load successivo. Il sentinel "none" impedisce la reidratazione anche se un
+    # vecchio valore resta orfano nel keyring.
+    store = {"t": "OLD:TOKEN"}
+    _fake_keyring(monkeypatch, store)
+    monkeypatch.setattr(config_store.token_store, "delete_token", lambda: False)  # delete fallisce
+    p = tmp_path / "config.json"
+    config_store.save_config({"bot_token": "", "provider": "X"}, str(p))   # clear esplicito
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token_storage"] == "none"           # stato: cancellato
+    assert store["t"] == "OLD:TOKEN"                         # orfano nel keyring (delete fallito)
+    # load: sentinel "none" → NON reidrata, il token resta cancellato (niente resurrezione).
+    assert config_store.load_config(str(p))["bot_token"] == ""
+
+
+def test_save_config_fallback_plaintext_se_keyring_assente(tmp_path, monkeypatch):
+    # Senza backend keyring (`available()` → False) si RIPIEGA sul comportamento storico:
+    # token in chiaro nel config (il bridge resta usabile), nessun crash.
+    _fake_keyring(monkeypatch, {}, available=False)
+    p = tmp_path / "config.json"
+    saved, ok = config_store.save_config({"bot_token": "123:SECRET"}, str(p))
+    assert ok is True
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token"] == "123:SECRET"             # fallback: plaintext
+    assert saved["bot_token"] == "123:SECRET"
+
+
+def test_save_config_parziale_senza_bot_token_non_tocca_il_keyring(tmp_path, monkeypatch):
+    # Codex P1: un save che OMETTE `bot_token` (save parziale) NON deve cancellare il
+    # token migrato nel keyring.
+    store = {"t": "LIVE:TOKEN"}
+    _fake_keyring(monkeypatch, store)
+    p = tmp_path / "config.json"
+    config_store.save_config({"provider": "X", "chat_id": "1"}, str(p))   # niente bot_token
+    assert store.get("t") == "LIVE:TOKEN"                   # credenziale preservata (non cancellata)
+
+
+def test_save_full_poi_save_che_conserva_il_sentinel_reidrata(tmp_path, monkeypatch):
+    # Flusso realistico: un save completo migra il token nel keyring e scrive sentinel
+    # "keyring"; un save successivo che PORTA quel sentinel (come fa `self._config`) mantiene
+    # la chiave vuota su disco e il load reidrata.
+    store = {}
+    _fake_keyring(monkeypatch, store)
+    p = tmp_path / "config.json"
+    saved, _ = config_store.save_config({"bot_token": "123:SECRET"}, str(p))
+    # `saved` (config in memoria) ha il token; un re-save tipico parte da lì.
+    config_store.save_config({**saved, "provider": "Y"}, str(p))
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token"] == "" and on_disk["bot_token_storage"] == "keyring"
+    assert config_store.load_config(str(p))["bot_token"] == "123:SECRET"
+
+
+def test_save_config_disco_fallito_rollback_del_keyring(tmp_path, monkeypatch):
+    # Codex P2: se la scrittura del config fallisce, il keyring viene riportato allo stato
+    # precedente (rollback) — una save "fallita" non persiste il cambio credenziale.
+    store = {"t": "OLD:TOKEN"}
+    _fake_keyring(monkeypatch, store)
+
+    def _boom(*a, **k):
+        raise OSError("disco pieno (simulato)")
+    monkeypatch.setattr(config_store.atomic_io, "atomic_write_json", _boom)
+    p = tmp_path / "config.json"
+    saved, ok = config_store.save_config({"bot_token": "NEW:TOKEN", "provider": "X"}, str(p))
+    assert ok is False
+    assert store["t"] == "OLD:TOKEN"                        # keyring ROLLED BACK al valore prima
+    assert saved["bot_token"] == "NEW:TOKEN"                # in memoria resta il nuovo
+
+
+def test_save_config_keyring_first_token_nel_keyring_prima_del_disco(tmp_path, monkeypatch):
+    # Codex P2 (crash-safe): `save_token` deve avvenire PRIMA della scrittura su disco, così
+    # un crash tra le due non perde il token (il keyring ha già il valore quando il disco
+    # dice "keyring"). Verifichiamo l'ordine delle chiamate.
+    order = []
+    store = {}
+    _fake_keyring(monkeypatch, store)
+    real_save = config_store.token_store.save_token
+    monkeypatch.setattr(config_store.token_store, "save_token",
+                        lambda t: order.append("keyring") or real_save(t))
+    real_write = config_store.atomic_io.atomic_write_json
+    monkeypatch.setattr(config_store.atomic_io, "atomic_write_json",
+                        lambda *a, **k: order.append("disk") or real_write(*a, **k))
+    config_store.save_config({"bot_token": "123:SECRET"}, str(tmp_path / "config.json"))
+    assert order == ["keyring", "disk"]                     # keyring prima del disco
+
+
+def test_save_config_miss_transiente_keyring_non_declassa_il_sentinel(tmp_path, monkeypatch, caplog):
+    # Codex P2: se al load il keyring era TEMPORANEAMENTE non disponibile (available() False),
+    # la config in memoria ha bot_token="" ma bot_token_storage="keyring". Salvare un'altra
+    # impostazione NON deve declassare il sentinel a "none" (altrimenti, tornato il keyring,
+    # il token non verrebbe più reidratato e andrebbe perso). Si avvisa che un eventuale clear
+    # è differito.
+    store = {"t": "STILL:THERE"}   # token ancora memorizzato, ma keyring non leggibile ora
+    _fake_keyring(monkeypatch, store, available=False)
+    p = tmp_path / "config.json"
+    import logging
+    with caplog.at_level(logging.WARNING):
+        config_store.save_config(
+            {"bot_token": "", "bot_token_storage": "keyring", "provider": "X"}, str(p))
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token_storage"] == "keyring"        # sentinel PRESERVATO
+    assert store["t"] == "STILL:THERE"                      # keyring non toccato
+    assert any("keyring" in r.message.lower() for r in caplog.records)
+
+
+def test_save_config_mirror_sentinel_in_memoria(tmp_path, monkeypatch):
+    # Codex P2: la config restituita (poi tenuta come self._config) deve avere il sentinel
+    # COERENTE col disco, altrimenti un save successivo riscriverebbe uno stato sbagliato.
+    store = {"t": "OLD:TOKEN"}
+    _fake_keyring(monkeypatch, store, available=True)
+    p = tmp_path / "config.json"
+    saved, _ = config_store.save_config({"bot_token": "", "bot_token_storage": "keyring"}, str(p))
+    assert saved["bot_token_storage"] == "none"            # in memoria rispecchia il disco
+    # E un re-save che parte da `saved` non resuscita il token.
+    config_store.save_config({**saved, "provider": "Y"}, str(p))
+    assert json.loads(p.read_text(encoding="utf-8"))["bot_token_storage"] == "none"
+
+
+def test_save_config_outage_transiente_non_declassa_a_plaintext(tmp_path, monkeypatch):
+    # Codex P2: token in memoria + stato precedente "keyring" + keyring NON disponibile ORA
+    # (outage transiente) NON deve riscrivere il token in chiaro su disco (downgrade silenzioso).
+    _fake_keyring(monkeypatch, {}, available=False)
+    p = tmp_path / "config.json"
+    saved, ok = config_store.save_config(
+        {"bot_token": "REHYDRATED:TOKEN", "bot_token_storage": "keyring", "provider": "X"}, str(p))
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token"] == ""                      # NON in chiaro su disco
+    assert on_disk["bot_token_storage"] == "keyring"       # niente downgrade a plaintext
+
+
+def test_save_config_rollback_fallito_logga_errore(tmp_path, monkeypatch, caplog):
+    # Codex P2: se il disco fallisce E il rollback del keyring fallisce (save_token → False),
+    # va loggato un ERRORE esplicito (keyring/disco potenzialmente incoerenti).
+    store = {"t": "OLD:TOKEN"}   # stato precedente → il rollback userà save_token(prior)
+    _fake_keyring(monkeypatch, store, available=True)
+    # save_token: 1ª chiamata (set del nuovo token) riesce, 2ª (rollback) fallisce.
+    calls = {"n": 0}
+
+    def _save(t):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            store["t"] = t
+            return True
+        return False                                       # rollback fallisce
+    monkeypatch.setattr(config_store.token_store, "save_token", _save)
+
+    def _boom(*a, **k):
+        raise OSError("disco pieno (simulato)")
+    monkeypatch.setattr(config_store.atomic_io, "atomic_write_json", _boom)
+    p = tmp_path / "config.json"
+    import logging
+    with caplog.at_level(logging.ERROR):
+        _, ok = config_store.save_config({"bot_token": "NEW:TOKEN"}, str(p))
+    assert ok is False
+    assert any("rollback del keyring" in r.message.lower() for r in caplog.records)
+
+
+def test_save_config_clear_reale_con_keyring_disponibile(tmp_path, monkeypatch):
+    # Keyring LEGGIBILE + campo vuoto = clear reale (se ci fosse un token sarebbe stato
+    # reidratato al load). Il sentinel diventa "none" e il token viene rimosso.
+    store = {"t": "OLD:TOKEN"}
+    _fake_keyring(monkeypatch, store, available=True)
+    p = tmp_path / "config.json"
+    config_store.save_config({"bot_token": "", "bot_token_storage": "keyring"}, str(p))
+    assert json.loads(p.read_text(encoding="utf-8"))["bot_token_storage"] == "none"
+    assert "t" not in store                                 # token rimosso dal keyring
+
+
+def test_save_config_parziale_preserva_il_sentinel_dal_disco(tmp_path, monkeypatch):
+    # Codex P2: un save PARZIALE (senza bot_token) dopo che il token è stato migrato deve
+    # preservare bot_token/bot_token_storage già su disco, così il load continua a reidratare.
+    store = {}
+    _fake_keyring(monkeypatch, store, available=True)
+    p = tmp_path / "config.json"
+    config_store.save_config({"bot_token": "123:SECRET"}, str(p))   # migra: disco ha storage=keyring
+    # Save parziale: solo provider, niente bot_token.
+    config_store.save_config({"provider": "X"}, str(p))
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token_storage"] == "keyring"        # sentinel preservato
+    assert on_disk["bot_token"] == ""                       # ancora nel keyring, non in chiaro
+    assert on_disk["provider"] == "X"                       # l'impostazione parziale è salvata
+    assert config_store.load_config(str(p))["bot_token"] == "123:SECRET"   # reidrata ancora
+
+
+def test_save_config_fallback_write_fallita_ritorna_ok_false(tmp_path, monkeypatch):
+    # Codex P2: keyring `available()` ma `save_token` fallisce → fallback plaintext in UNA
+    # sola scrittura; se ANCHE quella fallisce, deve ritornare ok=False (niente falso "salvato").
+    monkeypatch.setattr(config_store.token_store, "available", lambda: True)
+    monkeypatch.setattr(config_store.token_store, "save_token", lambda t: False)
+    monkeypatch.setattr(config_store.token_store, "load_token", lambda: None)
+
+    def _boom(*a, **k):
+        raise OSError("disco pieno (simulato)")
+    monkeypatch.setattr(config_store.atomic_io, "atomic_write_json", _boom)
+    saved, ok = config_store.save_config({"bot_token": "NEW:TOKEN"}, str(tmp_path / "config.json"))
+    assert ok is False
+
+
+def test_save_config_clear_con_delete_fallito_avvisa(tmp_path, monkeypatch, caplog):
+    # Codex P2: clear esplicito ma delete dal keyring fallito → warning (non un clear "finto").
+    store = {"t": "OLD:TOKEN"}
+    _fake_keyring(monkeypatch, store)
+    monkeypatch.setattr(config_store.token_store, "delete_token", lambda: False)  # delete fallisce
+    p = tmp_path / "config.json"
+    import logging
+    with caplog.at_level(logging.WARNING):
+        config_store.save_config({"bot_token": "", "provider": "X"}, str(p))
+    assert any("rimuovere il bot token" in r.message.lower() or "keyring" in r.message.lower()
+               for r in caplog.records)
+
+
+def test_save_config_token_vuoto_rimuove_dal_keyring(tmp_path, monkeypatch):
+    # Azzerare il token (es. l'utente lo cancella) deve rimuovere anche la voce keyring.
+    store = {"t": "OLD:TOKEN"}
+    _fake_keyring(monkeypatch, store)
+    p = tmp_path / "config.json"
+    config_store.save_config({"bot_token": "", "provider": "X"}, str(p))
+    assert "t" not in store                                 # voce keyring rimossa
+    assert json.loads(p.read_text(encoding="utf-8"))["bot_token"] == ""
+
+
+def test_load_config_token_in_chiaro_preesistente_resta(tmp_path, monkeypatch):
+    # Config vecchia con token in chiaro e keyring vuoto: il token si usa com'è
+    # (verrà migrato nel keyring al prossimo save). Nessuna re-iniezione che lo sovrascrive.
+    store = {}
+    _fake_keyring(monkeypatch, store)
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"bot_token": "PLAIN:TOKEN", "provider": "X"}), encoding="utf-8")
+    loaded = config_store.load_config(str(p))
+    assert loaded["bot_token"] == "PLAIN:TOKEN"
+
+
 def test_config_file_e_config_json():
     assert config_store.CONFIG_FILE.endswith("config.json")
     assert os.path.isabs(config_store.CONFIG_FILE)
@@ -120,12 +385,16 @@ def test_backup_corrotto_fallito_logga_warning(tmp_path, caplog, monkeypatch):
                for r in caplog.records)
 
 
-def test_save_then_load_roundtrip(tmp_path):
+def test_save_then_load_roundtrip(tmp_path, monkeypatch):
+    # Forziamo l'assenza del keyring per un roundtrip deterministico: il token resta in
+    # chiaro su disco e il sentinel di stato vale "plaintext".
+    monkeypatch.setattr(config_store.token_store, "available", lambda: False)
     p = str(tmp_path / "config.json")
     data = {"bot_token": "X", "chat_id": "-1", "csv_path": "/tmp/s.csv",
             "clear_delay": 30, "provider": "TG_LIVE"}
     config_store.save_config(data, p)
-    assert config_store.load_config(p) == {**config_store.DEFAULTS, **data}
+    assert config_store.load_config(p) == {**config_store.DEFAULTS, **data,
+                                           "bot_token_storage": "plaintext"}
 
 
 def test_defaults_non_contengono_segreti():

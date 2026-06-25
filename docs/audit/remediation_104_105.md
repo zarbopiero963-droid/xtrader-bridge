@@ -84,19 +84,30 @@ risolte** da #104. Il resto è in gran parte **raccomandazioni architetturali/UX
 | #105-P2 confirm CSV retry | mancava il test: conferma → `write_rows` fallisce → coda già svuotata → retry riscrive → niente riscrittura dopo STOP | ✅ #128 (test in `test_confirmation_flow.py`; comportamento già corretto) |
 | #105-P2 clear_stale diagnostica | `clear_stale_csv` strict-header senza warning su mismatch | ✅ #129 (`logging.warning` con soli metadati strutturali, no contenuto — Codex P2) |
 | #105-P2 backup_corrupted logging | `_backup_corrupted()` silenzia `OSError` (niente diagnosi) | ✅ #130 (`logging.warning` con path+errore) |
-| #105-P1 token plain JSON (short-term) | documentare che `bot_token` è in JSON plain nel profilo utente | ✅ già documentato (README "Dove sta il Bot Token": in chiaro in `%APPDATA%`, tradeoff, rigenerare se trapela) |
+| #105-P1 token storage | `bot_token` non più in chiaro: salvato nel **keyring** di sistema | ✅ risolto (vedi sotto, sezione lavorazione #136 — `token_store` + `config_store`; fallback documentato in README "Dove sta il Bot Token") |
 | #105-P2 P.Bet hardcoded (doc) | documentare che il parser P.Bet è solo compat/test, non live | 🔧 README: nota "non attivo nel live" + chiarito `active_parser=""` (questa PR) |
 
 ### NEEDS_MANUAL — decisione del proprietario (non auto-patchabili in sicurezza)
 | ID | Finding | Perché manuale |
 |----|---------|----------------|
 | #105-P1 `app.py` monolite | refactor runtime in moduli (`session`/`telegram_listener`/`signal_executor`/…) | refactor ampio multi-sprint, alto rischio di regressioni — richiede scope/approvazione |
-| #105-P1 token storage | DPAPI/Windows Credential Manager / keyring | scelta di sicurezza + dipendenze/piattaforma |
 | #105-P2 dry-run real-mode UX | doppia conferma, banner rosso, evento `REAL_MODE_ENABLED`, armed-until-close | feature GUI/UX |
 | #105-P2 multi-signal UX | warning modale, max active signals, indicatore righe attive | feature GUI/UX |
 
 > **Lavorazione issue #136 (chiusura "sul serio" dei NEEDS_MANUAL, una PR alla volta).**
 > I punti sopra vengono affrontati singolarmente. Già fatto:
+> - **#105-P1 token storage sicuro** ✅ — nuovo modulo `xtrader_bridge/token_store.py`
+>   (wrapper `keyring`: Windows Credential Manager / macOS Keychain / Secret Service).
+>   `config_store.save_config` salva il `bot_token` nel keyring e lascia la chiave **vuota**
+>   sul disco; `load_config` lo re-inietta in memoria per il runtime. Un sentinel esplicito
+>   `bot_token_storage` (`keyring`/`plaintext`/`none`) disambigua lo stato così un delete
+>   fallito o un disco interrotto non fanno **risorgere** un token cancellato; il keyring è
+>   aggiornato **dopo** la scrittura su disco e un save parziale (senza la chiave) non lo
+>   tocca (hardening Codex/CodeRabbit). **Fallback** esplicito al token in chiaro (con avviso)
+>   se non c'è un backend. Dipendenza `keyring>=24.0` in `requirements.in` (+`bot_token_storage`
+>   tra le `SECRET_KEYS` dei profili). Test: `tests/unit/test_token_store.py`, `test_config_basic.py`.
+>   **Nota manuale:** aggiungendo una dipendenza runtime, il `requirements-build.lock` va
+>   **rigenerato su Windows** (workflow *Generate Windows Lockfile*) prima della build EXE.
 > - **#105-P1 privacy mode dei log** ✅ — flag `debug_message_payload` (default OFF =
 >   privacy on) in `config_store`; modulo puro `xtrader_bridge/log_privacy.py`
 >   (`redact_message`: hash sha256 + lunghezza + prima riga troncata; payload completo

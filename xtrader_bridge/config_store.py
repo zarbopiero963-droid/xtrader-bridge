@@ -15,7 +15,7 @@ import os
 import shutil
 import sys
 
-from . import atomic_io, autostart, confirmation_reader, safety_guard
+from . import atomic_io, autostart, confirmation_reader, safety_guard, token_store
 
 APP_DIR_NAME = "XTraderBridge"
 CONFIG_VERSION = 1
@@ -304,17 +304,41 @@ def load_config(path: str = CONFIG_FILE) -> dict:
             _backup_corrupted(path)
     # `config_version` è già garantito dai DEFAULTS; se il file ne porta uno
     # (futuro schema v2+) viene preservato così non perdiamo lo skew su disco.
-    return _migrate(cfg)
+    cfg = _migrate(cfg)
+    # Token storage sicuro (audit #105 P1): reidrata il token dal keyring SOLO se il
+    # sentinel di stato dice "keyring" e la chiave su disco è vuota (CodeRabbit). Gating
+    # sul sentinel (non sul solo `bot_token == ""`): così un token CANCELLATO — sentinel
+    # "none", anche se un vecchio valore è rimasto orfano nel keyring per un delete fallito
+    # — NON viene fatto risorgere. Una config vecchia con token in chiaro (nessun sentinel
+    # o "plaintext") si usa com'è e viene migrata nel keyring al prossimo salvataggio.
+    if cfg.get("bot_token_storage") == "keyring" and not str(cfg.get("bot_token") or ""):
+        stored = token_store.load_token()
+        if stored:
+            cfg["bot_token"] = stored
+    return cfg
 
 
 def save_config(cfg: dict, path: str = CONFIG_FILE):
     """Salva la configurazione su file (best-effort) in modo **atomico**.
 
     Ritorna una tupla ``(config_salvata, ok)``:
-    - ``config_salvata``: la config effettivamente serializzata (con `config_version`),
-      sempre restituita così il chiamante può tenerla in memoria anche se il disco fallisce;
+    - ``config_salvata``: la config tenuta IN MEMORIA (con `config_version` e, se presente,
+      il `bot_token` per il runtime), sempre restituita così il chiamante può tenerla anche
+      se il disco fallisce;
     - ``ok``: ``True`` se la scrittura su disco è riuscita, ``False`` altrimenti — così la
       GUI non può più segnalare "salvato" quando in realtà non lo è (finding A1).
+
+    **Token storage sicuro (audit #105 P1).** Il `bot_token` è una credenziale: se è
+    presente e c'è un keyring di sistema, viene salvato lì (`token_store`) e su disco la
+    chiave resta **vuota** (niente segreto in chiaro nel `config.json`). Se il keyring non
+    è disponibile si RIPIEGA sul comportamento storico (token in chiaro) con un avviso. La
+    config restituita in memoria mantiene comunque il token, così il runtime (`_start`) non
+    cambia. La chiave `bot_token` **assente** (save parziale) NON tocca il keyring; solo la
+    chiave **presente e vuota** è un clear esplicito. Il keyring viene aggiornato **prima**
+    della scrittura su disco e, se il disco fallisce, si esegue il **rollback** del keyring:
+    così un crash a metà non perde il token e un disco fallito non lascia keyring e disco
+    incoerenti. Un sentinel `bot_token_storage` (`keyring`/`plaintext`/`none`) registra dove
+    sta il token e `load_config` reidrata solo se vale "keyring".
 
     Scrittura **atomica** (tempfile nella stessa cartella + `flush`+`fsync` + `os.replace`,
     lo stesso schema di `csv_writer`/`signal_dedupe`/`profile_store`): un'interruzione a
@@ -325,20 +349,132 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
     # come source_chats, parser_by_chat) tra lo snapshot restituito e il `cfg` del chiamante.
     # Il chiamante fa `self._config = saved`: con l'aliasing una mutazione successiva di uno
     # avrebbe alterato silenziosamente l'altro. Con la copia profonda i due sono indipendenti.
-    to_save = copy.deepcopy(cfg)
-    to_save.setdefault("config_version", CONFIG_VERSION)
+    in_memory = copy.deepcopy(cfg)
+    in_memory.setdefault("config_version", CONFIG_VERSION)
+    # Copia separata per il DISCO: il token sicuro non va scritto in chiaro (vedi sotto),
+    # ma `in_memory` lo conserva per il runtime.
+    to_save = copy.deepcopy(in_memory)
+
+    # ── Routing del bot_token (audit #105 P1) ─────────────────────────────────────
+    # Casi DISTINTI: chiave `bot_token` ASSENTE = save PARZIALE → keyring e sentinel NON
+    # toccati (un save senza la chiave non cancella la credenziale migrata). Presente non
+    # vuota = set; presente e vuota = clear.
+    #
+    # Ordine KEYRING-FIRST con ROLLBACK (Codex P2): il keyring viene aggiornato PRIMA della
+    # scrittura su disco e, se il disco fallisce, si ripristina lo stato precedente. Così
+    # (a) un crash tra disco e keyring non perde il token — il keyring ha già il valore
+    # quando il disco dice "keyring"; (b) un disco fallito non lascia keyring e disco
+    # incoerenti. Il sentinel `bot_token_storage` (`keyring`/`plaintext`/`none`, CodeRabbit)
+    # disambigua `bot_token == ""`: `load_config` reidrata SOLO se vale "keyring".
+    token_present = "bot_token" in in_memory
+    token = str(in_memory.get("bot_token") or "")
+    prior_sentinel = str(in_memory.get("bot_token_storage") or "")
+    keyring_changed = False        # se True, su disco-fallito va eseguito il rollback
+    prior_keyring = None           # valore del keyring PRIMA della modifica (per il rollback)
+    if token_present:
+        if token:
+            if token_store.available():
+                prior_keyring = token_store.load_token()
+                if token_store.save_token(token):
+                    keyring_changed = True
+                    to_save["bot_token"] = ""                # niente segreto in chiaro su disco
+                    to_save["bot_token_storage"] = "keyring"
+                else:
+                    # `available()` True ma set fallito (raro): fallback al token in chiaro.
+                    to_save["bot_token_storage"] = "plaintext"
+                    logger.warning("Keyring non scrivibile: il bot token resta in chiaro in %s.", path)
+            elif prior_sentinel == "keyring":
+                # Stato precedente "keyring" + keyring NON disponibile ORA = outage TRANSIENTE
+                # (Codex P2). NON declassare a plaintext: esporrebbe il segreto su disco per un
+                # guasto temporaneo. Preserva "keyring" e NON scrivere il token in chiaro; il
+                # keyring conserva (ancora) il valore. Un eventuale token NUOVO non può essere
+                # salvato ora → save differito, con avviso.
+                to_save["bot_token"] = ""
+                to_save["bot_token_storage"] = "keyring"
+                logger.warning("Keyring non disponibile: il bot token NON è stato aggiornato ora "
+                               "(per non esporlo in chiaro nel config). Riprova quando il keyring "
+                               "è disponibile; il token già memorizzato resta valido.")
+            else:
+                # Nessun backend keyring e nessuno stato keyring precedente (prima installazione):
+                # token in chiaro su disco (comportamento storico).
+                to_save["bot_token_storage"] = "plaintext"
+                logger.warning("Keyring non disponibile: il bot token resta in chiaro in %s. "
+                               "Installa un backend keyring per cifrarlo.", path)
+        elif token_store.available():
+            # Clear (chiave presente e vuota) col keyring LEGGIBILE: l'ambiguità
+            # "clear vs miss transiente" non c'è (se ci fosse un token, al load sarebbe
+            # stato reidratato e il campo non sarebbe vuoto). È un clear REALE.
+            stored = token_store.load_token()
+            if stored is not None:
+                # C'è ancora un token nel keyring → rimuovilo.
+                prior_keyring = stored
+                if token_store.delete_token():
+                    keyring_changed = True
+                elif not keyring_changed:
+                    # delete fallito: il sentinel "none" evita che il bridge riusi il token
+                    # (niente clear "finto"), ma il segreto resta orfano nel keyring → avviso.
+                    logger.warning("Impossibile rimuovere il bot token dal keyring: potrebbe "
+                                   "restare memorizzato. Rimuovilo dal Credential Manager di sistema.")
+            to_save["bot_token_storage"] = "none"   # keyring leggibile e svuotato → niente reidratazione
+        else:
+            # Clear/empty col keyring NON leggibile: non posso né confermare un clear né
+            # cancellare. Se lo stato era "keyring", PRESERVALO (un token ancora memorizzato
+            # non va perso quando il keyring torna — MISS TRANSIENTE), ma se l'utente INTENDEVA
+            # cancellarlo non è stato possibile ora → avviso (Codex P2). Altrimenti è "none".
+            if prior_sentinel == "keyring":
+                to_save["bot_token_storage"] = "keyring"
+                logger.warning("Keyring non disponibile: impossibile rimuovere/azzerare il bot "
+                               "token ora. Se volevi cancellarlo, riprova quando il keyring è "
+                               "disponibile; il token memorizzato resta valido nel frattempo.")
+            else:
+                to_save["bot_token_storage"] = "none"
+    else:
+        # Chiave `bot_token` ASSENTE → save PARZIALE: preserva i campi del token già su disco
+        # (token + sentinel), così un save di sole altre impostazioni non perde il puntatore al
+        # keyring e `load_config` continua a reidratare (Codex P2). Il keyring non viene toccato.
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except (OSError, json.JSONDecodeError, ValueError):
+                existing = None
+            if isinstance(existing, dict):
+                for _k in ("bot_token", "bot_token_storage"):
+                    if _k in existing and _k not in to_save:
+                        to_save[_k] = existing[_k]
     try:
         _ensure_dir(path)
         # Scrittura atomica condivisa (tmp + flush/fsync + os.replace, cleanup su errore).
         atomic_io.atomic_write_json(path, to_save, prefix=TMP_PREFIX, suffix=TMP_SUFFIX,
                                     indent=2)
     except OSError as exc:
-        # Persistenza fallita (disco pieno, permessi, path non scrivibile): l'app
-        # continua con la config in memoria, ma l'utente deve poterlo sapere.
-        # exc_info=True: traceback completo per il post-mortem (più save point, stesso path).
+        # Disco fallito → ROLLBACK del keyring allo stato precedente, così keyring e disco
+        # restano coerenti (la credenziale non cambia se la config non è stata salvata).
+        if keyring_changed:
+            try:
+                if prior_keyring is not None:
+                    rolled_back = token_store.save_token(prior_keyring)
+                else:
+                    rolled_back = token_store.delete_token()
+            except Exception:   # noqa: BLE001 — rollback best-effort
+                rolled_back = False
+            # `save_token`/`delete_token` segnalano il fallimento con False (non sollevano):
+            # se il rollback non riesce (keyring diventato indisponibile), keyring e disco
+            # restano incoerenti → log ESPLICITO perché richiede attenzione (Codex P2).
+            if not rolled_back:
+                logger.error("Rollback del keyring NON riuscito dopo config non salvata (%s): la "
+                             "credenziale potrebbe essere incoerente col config su disco. "
+                             "Verifica il Credential Manager di sistema.", path)
         logger.error("Salvataggio config fallito (%s): %s", path, exc, exc_info=True)
-        return to_save, False
-    return to_save, True
+        return in_memory, False
+    # Disco OK → mantieni la config IN MEMORIA coerente col disco per il sentinel (Codex P2):
+    # il chiamante fa `self._config = saved`, quindi un sentinel stantio rifarebbe scrivere uno
+    # stato sbagliato al save successivo. `bot_token` in memoria resta il token reale (runtime).
+    if "bot_token_storage" in to_save:
+        in_memory["bot_token_storage"] = to_save["bot_token_storage"]
+    if token and to_save.get("bot_token_storage") == "keyring":
+        logger.info("Bot token salvato nel keyring di sistema (non in chiaro nel config).")
+    return in_memory, True
 
 
 def _backup_corrupted(path: str) -> None:
