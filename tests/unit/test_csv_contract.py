@@ -49,6 +49,50 @@ def test_build_csv_row_keys_match_header_order():
     assert list(_row().keys()) == CONTRACT_HEADER
 
 
+def test_csv_injection_neutralizzata_ma_numeri_intatti(tmp_path):
+    # audit B1: un nome squadra/selezione attacker-controlled da Telegram che inizia con
+    # =/+/-/@ o un control-char NON deve finire verbatim nel CSV (formula/comando per un
+    # reader formula-aware). Viene prefissato con un apice. I NUMERI (Handicap negativo,
+    # Price) restano intatti, altrimenti il contratto numerico si romperebbe.
+    import csv as _csv
+    row = dict.fromkeys(CONTRACT_HEADER, "")
+    row.update({
+        "EventName": "=cmd|'/c calc'!A1",
+        "SelectionName": "@SUM(1+1)",
+        "MarketName": "-payload",
+        "Provider": "\tTabInjection",
+        "Handicap": "-1",          # numero legittimo: NON va prefissato
+        "Price": "1.85",
+    })
+    path = str(tmp_path / "segnali.csv")
+    csv_writer.write_rows([row], path)
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = list(_csv.reader(f))
+    assert rows[0] == CONTRACT_HEADER
+    out = dict(zip(CONTRACT_HEADER, rows[1]))
+    assert out["EventName"] == "'=cmd|'/c calc'!A1"
+    assert out["SelectionName"] == "'@SUM(1+1)"
+    assert out["MarketName"] == "'-payload"
+    assert out["Provider"] == "'\tTabInjection"
+    assert out["Handicap"] == "-1"      # numero preservato
+    assert out["Price"] == "1.85"
+
+
+def test_csv_nomi_legittimi_non_prefissati(tmp_path):
+    # Un nome reale (non formula) non deve essere alterato: nessun falso positivo.
+    import csv as _csv
+    row = dict.fromkeys(CONTRACT_HEADER, "")
+    row.update({"EventName": "Inter v Milan", "SelectionName": "Over 2,5 goal",
+                "MarketName": "Over/Under 2,5 gol", "Handicap": "+1,5"})
+    path = str(tmp_path / "segnali.csv")
+    csv_writer.write_rows([row], path)
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        out = dict(zip(CONTRACT_HEADER, list(_csv.reader(f))[1]))
+    assert out["EventName"] == "Inter v Milan"
+    assert out["SelectionName"] == "Over 2,5 goal"
+    assert out["Handicap"] == "+1,5"    # numero col segno: intatto
+
+
 def test_bettype_back_maps_to_punta():
     assert _row(bet_type="BACK")["BetType"] == "PUNTA"
 

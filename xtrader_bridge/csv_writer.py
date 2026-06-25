@@ -7,6 +7,7 @@ Vedi docs/xtrader_csv_contract.md.
 
 import csv
 import os
+import re
 import tempfile
 import threading
 import time
@@ -134,6 +135,39 @@ def _replace_with_retry(src: str, dst: str, attempts: int = 3, delay: float = 0.
             time.sleep(delay)
 
 
+# Caratteri che, se in TESTA a una cella, possono far interpretare la cella come
+# formula/comando da un reader formula-aware (Excel/LibreOffice/Google Sheets) o
+# iniettare un controllo di riga: `= + - @` e i control-char TAB/CR/LF. `QUOTE_ALL`
+# mette in sicurezza il PARSING ma non neutralizza questi prefissi (audit B1).
+_CSV_FORMULA_CHARS = ("=", "+", "-", "@")
+_CSV_CTRL_CHARS = ("\t", "\r", "\n")
+# Numero "puro" (segno opzionale + decimale con . o ,): es. Handicap "-1"/"+1,5", Price
+# "1.85". Un numero legittimo NON va prefissato, altrimenti XTrader leggerebbe "'-1" come
+# testo e il contratto numerico si romperebbe.
+_NUMERIC_RE = re.compile(r"[+-]?\d+(?:[.,]\d+)?")
+
+
+def _sanitize_cell(value):
+    """Neutralizza l'iniezione formula/control-char nel CSV (audit B1): se una cella inizia
+    con `= + - @` (e NON è un numero) o con un control-char (TAB/CR/LF), antepone un apice
+    ``'`` (mitigazione standard OWASP). I numeri (Handicap negativo, Price…) restano intatti.
+    Non-stringa/vuoto: invariato."""
+    s = "" if value is None else str(value)
+    if not s:
+        return s
+    first = s[0]
+    if first in _CSV_CTRL_CHARS:
+        return "'" + s
+    if first in _CSV_FORMULA_CHARS and not _NUMERIC_RE.fullmatch(s.strip()):
+        return "'" + s
+    return s
+
+
+def _sanitize_row(row: dict) -> dict:
+    """Copia della riga con ogni cella passata da `_sanitize_cell` (anti CSV-injection)."""
+    return {k: _sanitize_cell(v) for k, v in row.items()}
+
+
 def _atomic_write(path: str, write_rows) -> None:
     """Scrive il CSV in modo atomico: file temporaneo nella stessa cartella,
     flush + fsync, poi rename atomico (`os.replace`) sul file finale.
@@ -212,7 +246,9 @@ def write_rows(rows, path: str):
 
     def _emit(writer):
         for r in rows:
-            writer.writerow(r)
+            # Anti CSV-injection (B1): neutralizza i prefissi formula/control-char nelle celle
+            # (testo attacker-controlled da Telegram) prima di scriverle; i numeri restano intatti.
+            writer.writerow(_sanitize_row(r))
 
     _atomic_write(path, _emit)
 

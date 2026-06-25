@@ -93,6 +93,14 @@ obbligatoria** (casella «Obblig.» spenta). Non esiste più un interruttore glo
 
 - Encoding **UTF-8 con BOM** (`utf-8-sig`), come negli esempi reali.
 - Tutti i valori tra doppi apici (`quoting=csv.QUOTE_ALL`).
+- **Anti CSV-injection (audit B1).** `QUOTE_ALL` mette in sicurezza il *parsing*, ma non
+  impedisce a un reader *formula-aware* (Excel/LibreOffice/Sheets) di interpretare una cella
+  che **inizia** con `=` `+` `-` `@` come formula/comando, né i control-char iniziali
+  (TAB/CR/LF). Poiché i nomi (EventName/MarketName/SelectionName/Provider) arrivano da
+  Telegram (testo non fidato), in scrittura ogni cella che inizia con uno di quei caratteri
+  **e non è un numero** viene prefissata con un apice singolo (`'`) — mitigazione standard.
+  I **numeri** del contratto (es. `Handicap` `-1`/`+1,5`, `Price` `1.85`) **non** vengono
+  toccati, così restano valori numerici validi per XTrader.
 - Header sempre presente, anche su CSV "vuoto" (solo header).
 - Un solo segnale attivo alla volta (riscrittura del file) finché la coda multi-segnale
   (PR-16) non sarà introdotta.
