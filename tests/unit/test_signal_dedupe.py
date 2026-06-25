@@ -188,3 +188,27 @@ def test_load_state_lista_valida_ripristina(tmp_path):
     assert sd.load_state(t2, str(p)) is True
     # il duplicato è riconosciuto dopo il ricarico
     assert t2.register(MSG).status == sd.DUPLICATE
+
+
+# ── resilienza (#109): clock all'indietro + validazione now in register ────────
+
+def test_register_now_non_finito_fail_closed():
+    """#109 item 30: register(now=...) valida il timestamp come DailyLimiter — NaN/inf,
+    bool e non numerici sono rifiutati (un now corrotto renderebbe dedup/limite inaffidabili)."""
+    t = sd.SignalTracker()
+    for bad in (float("nan"), float("inf"), float("-inf"), True, False, "x"):
+        with pytest.raises(ValueError):
+            t.register("m", now=bad)
+
+
+def test_dedupe_robusto_a_clock_all_indietro():
+    """#109 item 9: se il wallclock va INDIETRO (NTP step / VM resume), lo stesso messaggio
+    entro la finestra resta DUPLICATO (non ri-piazzato), mentre un messaggio NUOVO passa."""
+    t = sd.SignalTracker(dedupe_window=300, max_per_minute=100)
+    assert t.register(MSG, now=1000).status == sd.NEW
+    # clock indietro di 100s: lo stesso hash NON deve diventare un nuovo segnale
+    assert t.register(MSG, now=900).status == sd.DUPLICATE
+    # anche un salto indietro grande (oltre la finestra) resta fail-safe: non ri-piazza
+    assert t.register(MSG, now=500).status == sd.DUPLICATE
+    # un messaggio DIVERSO dopo lo step indietro è invece accettato
+    assert t.register("altro segnale", now=900).status == sd.NEW
