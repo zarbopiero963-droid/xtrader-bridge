@@ -51,7 +51,10 @@ Messaggio Telegram (chat/canale segnali)
         │
         ▼
 XTrader Signal Bridge (gira sul tuo PC)
-   • riceve il messaggio via Bot API (solo dalle chat configurate)
+   • riceve il messaggio via Bot API
+   • DECIDE come instradarlo (`telegram_dispatch.decide`): scarta gli arretrati
+     troppo vecchi, ignora se manca un filtro chat, manda gli ESITI della chat
+     notifiche XTrader al percorso di conferma, e processa solo le chat configurate
    • lo analizza: parser hardcoded P.Bet. o Parser Personalizzato
    • estrae i campi e li traduce nei valori XTrader (dizionario)
    • valida (quota, mercato, tipo scommessa)
