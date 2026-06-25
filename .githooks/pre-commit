@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Hook pre-commit OPZIONALE (audit #105 / roadmap #153 — voce H3): blocca il commit se i
+# file in STAGING contengono segreti noti (token Telegram, chiavi private PEM, AWS key id).
+# Difesa-in-profondità locale, oltre al gate CI `forbidden-files`.
+#
+# Abilita una volta sola con:
+#   git config core.hooksPath .githooks
+set -u
+
+root="$(git rev-parse --show-toplevel)"
+
+# Solo i file Aggiunti/Copiati/Modificati in staging (non i deleted/renamed-via).
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACM)
+if [ "${#staged[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+exec "$root/tools/secret_scan.sh" "${staged[@]}"
