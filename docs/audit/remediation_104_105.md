@@ -200,7 +200,7 @@ risolte** da #104. Il resto è in gran parte **raccomandazioni architetturali/UX
 > **#105-P1 / #136 item 1 — concluso.** I 7 slice (#143–#149) hanno estratto da `app.py` tutta
 > la logica pura e safety-critical in moduli testati in CI: `runtime_state` (path stato +
 > `build_guards`), `reconnect_policy.effective_delay`, `signal_outcome` (esiti non-WRITE/WRITE
-> + log conferma), `write_path.commit_signal` (cuore anti-doppia-scommessa: valuta→coda→
+> + log di conferma), `write_path.commit_signal` (cuore anti-doppia-scommessa: valuta→coda→
 > scrittura→rollback, ora testato con collaboratori reali) e `signal_queue.delay_until`. Il
 > residuo di `app.py` (lock `_queue_lock`, threading del listener Telegram, GUI tkinter) è per
 > natura non estraibile in moduli puri testabili e resta in `App` per scelta del proprietario:
