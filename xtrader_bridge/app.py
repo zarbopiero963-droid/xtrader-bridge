@@ -35,6 +35,7 @@ from . import (
     log_privacy,
     log_view,
     message_freshness,
+    real_mode,
     reconnect_policy,
     safety_guard,
     settings_controller,
@@ -111,6 +112,7 @@ class App(ctk.CTk):
 
         self._config = self._load_config()
         self._running = False
+        self._session_real = False   # la sessione attiva è partita in modalità reale? (#136 p4 banner)
         # Esito dell'ultimo salvataggio config su disco (A1): il bottone "Salva Config"
         # conferma "salvato" solo se True. Default True finché non si salva davvero.
         self._save_ok = True
@@ -160,6 +162,7 @@ class App(ctk.CTk):
         self._last_vals = {k: "" for k, _ in _LAST_FIELDS}
 
         self._build_ui()
+        self._update_real_mode_banner(self._config)   # banner REALE all'avvio se persistito (#136 p4)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         # Anti-segnale-stantio (blackout/crash): all'avvio il listener è ancora
         # spento, quindi una riga nel CSV è per forza orfana di una sessione morta
@@ -249,8 +252,23 @@ class App(ctk.CTk):
         cfg, self._adv_errors = settings_controller.apply_advanced(cfg, adv_form)
         for err in self._adv_errors:
             self._log(f"⚠️ Impostazioni avanzate: {err}")
+        # UX modalità reale (#136 punto 4): attivare la modalità REALE (disattivare DRY_RUN)
+        # è la transizione più pericolosa → DOPPIA CONFERMA. Solo sulla transizione sim→reale
+        # si chiede di digitare la frase di conferma; se non confermata si ripristina la
+        # simulazione (sia nella cfg sia nella spunta GUI) e non si attiva nulla per sbaglio.
+        old_cfg = self._config if isinstance(self._config, dict) else {}
+        if real_mode.requires_confirmation(old_cfg, cfg):
+            if self._confirm_real_mode():
+                # Evento di AUDIT nel log persistente (tracciabilità dell'attivazione).
+                self._log("⚠️ " + real_mode.enabled_message())
+            else:
+                cfg["dry_run"] = True
+                if "dry_run" in self._adv:
+                    self._adv["dry_run"].set(True)   # ri-spunta "🧪 Simulazione (DRY_RUN)"
+                self._log("↩️ Attivazione modalità REALE ANNULLATA: il bridge resta in simulazione.")
         saved, ok = save_config(cfg, CONFIG_FILE)
         self._config = saved
+        self._update_real_mode_banner(saved)   # banner rosso persistente se in REALE (#136 p4)
         # Esito reale della persistenza (A1): se il disco ha fallito lo si SEGNALA sempre
         # (a ogni save point), così l'utente non resta con l'illusione di aver salvato.
         # `_save_ok` lascia decidere al bottone se loggare il "salvato" di conferma.
@@ -289,11 +307,21 @@ class App(ctk.CTk):
                                          text_color="#ef5350")
         self._status_lbl.pack(side="right", padx=15)
 
+        # Banner ROSSO persistente quando il bridge è in modalità REALE (#136 punto 4).
+        # Mostrato/nascosto da `_update_real_mode_banner` in base a `real_mode.banner_text`.
+        self._real_banner = ctk.CTkLabel(
+            self, text="", fg_color="#7f1d1d", text_color="white", corner_radius=8,
+            font=ctk.CTkFont(size=12, weight="bold"))
+
         # Config a tab (PR-13): impostazioni base + avanzate. Le avanzate erano prima
         # modificabili solo a mano in config.json; la logica vive nel controller puro
         # `settings_controller` (testato in CI), qui solo i widget.
         tabs = ctk.CTkTabview(self, height=210)
         tabs.pack(fill="x", padx=15, pady=5)
+        # Riferimento per impaccare il banner REALE SOPRA i tab (vicino all'header) anche
+        # quando viene mostrato la prima volta dopo i tab già impaccati (Codex P2: senza
+        # `before` Tk lo metterebbe in fondo, fuori vista).
+        self._tabs = tabs
         tab_gen = tabs.add("⚙️ Generale")
         tab_rec = tabs.add("🎯 Riconoscimento")
         tab_safe = tabs.add("🛡️ Sicurezza")
@@ -436,6 +464,9 @@ class App(ctk.CTk):
         ctk.CTkButton(sig_hdr, text="📂 Apri cartella log", width=160, height=28,
                       fg_color="#37474f", hover_color="#263238",
                       command=self._open_log_folder).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(sig_hdr, text="🧾 Esporta audit reale", width=170, height=28,
+                      fg_color="#37474f", hover_color="#263238",
+                      command=self._export_real_audit).pack(side="right", padx=(6, 0))
         _sty = dict(font=ctk.CTkFont(size=11), text_color="gray",
                     wraplength=_CONTENT_WRAP, anchor="w", justify="left")
         # Una label per campo, creata dalla fonte unica _LAST_FIELDS (niente prefissi
@@ -587,6 +618,80 @@ class App(ctk.CTk):
             self._log(f"📂 Cartella log: {folder}")
         except Exception as ex:                 # noqa: BLE001 — esito a log, no crash
             self._log(f"❌ Impossibile aprire la cartella log: {ex}")
+
+    def _confirm_real_mode(self) -> bool:
+        """Doppia conferma per attivare la modalità REALE (#136 punto 4): oltre alla spunta,
+        l'utente deve DIGITARE la frase di conferma. Ritorna True se confermato.
+
+        GUI (verifica manuale): un input dialog mostra l'avviso e attende la frase; la
+        DECISIONE (`real_mode.confirmation_ok`) è logica pura testata."""
+        try:
+            dlg = ctk.CTkInputDialog(
+                title="Conferma MODALITÀ REALE",
+                text=("ATTENZIONE: stai per attivare la MODALITÀ REALE.\n"
+                      "XTrader potrà piazzare scommesse REALI.\n\n"
+                      f"Per confermare digita:  {real_mode.CONFIRM_PHRASE}"))
+            typed = dlg.get_input()    # None se l'utente annulla/chiude
+        except Exception:              # noqa: BLE001 — su qualsiasi errore dialog → non confermare
+            return False
+        return real_mode.confirmation_ok(typed)
+
+    def _update_real_mode_banner(self, cfg=None) -> None:
+        """Mostra/nasconde il banner rosso persistente in base alla modalità (#136 p4).
+
+        La DECISIONE è `real_mode.banner_active` (logica pura testata): il banner resta
+        visibile non solo se la config viva è in reale, ma anche se una SESSIONE in corso è
+        partita in reale (il betting reale è ancora attivo fino a STOP/START, Codex P1). Il
+        banner è impaccato `before=self._tabs` così resta vicino all'header (Codex P2)."""
+        banner = getattr(self, "_real_banner", None)
+        if banner is None:
+            return
+        live = cfg if isinstance(cfg, dict) else (self._config if isinstance(self._config, dict) else {})
+        active = real_mode.banner_active(
+            live, session_active=self._running, session_real=getattr(self, "_session_real", False))
+        if active:
+            banner.configure(text=real_mode.BANNER_TEXT)
+            tabs = getattr(self, "_tabs", None)
+            if tabs is not None:
+                banner.pack(fill="x", padx=15, pady=(0, 5), before=tabs)
+            else:
+                banner.pack(fill="x", padx=15, pady=(0, 5))
+        else:
+            banner.pack_forget()
+
+    def _export_real_audit(self) -> None:
+        """Esporta in un file scelto dall'utente le righe di AUDIT della modalità reale
+        (`REAL_MODE_ENABLED`) estratte dai log giornalieri (#136 p4). L'estrazione
+        (`real_mode.extract_audit_lines`) è logica pura testata; lettura file + dialog =
+        verifica manuale."""
+        import os
+        from tkinter import filedialog, messagebox
+        try:
+            folder = event_log.log_dir()
+            lines = []
+            for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+                # Solo i log GIORNALIERI canonici `bridge-AAAA-MM-GG.log` (stesso regex di
+                # `event_log`): evita artefatti tipo `bridge-backup.log` (CodeRabbit).
+                if event_log._LOG_FILE_RE.match(name):
+                    with open(os.path.join(folder, name), "r", encoding="utf-8") as f:
+                        # Antepone la data dal nome file: un export multi-giorno resta
+                        # non ambiguo (le righe di log portano solo [HH:MM:SS], Codex P2).
+                        lines.extend(real_mode.audit_lines_with_date(name, f.read()))
+            if not lines:
+                messagebox.showinfo("Audit modalità reale",
+                                    "Nessun evento di attivazione modalità reale nei log.")
+                return
+            dest = filedialog.asksaveasfilename(
+                title="Esporta audit modalità reale", defaultextension=".txt",
+                initialfile="audit_modalita_reale.txt",
+                filetypes=[("Testo", "*.txt"), ("Tutti i file", "*.*")])
+            if not dest:
+                return
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            self._log(f"🧾 Audit modalità reale esportato ({len(lines)} eventi): {dest}")
+        except Exception as ex:        # noqa: BLE001 — esito a log, no crash
+            self._log(f"❌ Esportazione audit reale fallita: {ex}")
 
     def _copy_diagnostics(self):
         """Copia negli appunti un report diagnostico (stato, contatori, ultimi eventi,
@@ -880,10 +985,15 @@ class App(ctk.CTk):
             return
 
         self._running = True
+        # Modalità della SESSIONE (snapshot a START): l'esecuzione resta legata a questa
+        # finché non si fa STOP/START. Il banner REALE deve riflettere ciò che ESEGUE, non
+        # solo la config viva (Codex P1).
+        self._session_real = not safety_guard.is_dry_run(cfg)
         self._stop_event.clear()      # nuova sessione: riarma l'attesa del backoff
         self._status_lbl.configure(text="⬤  ATTIVO", text_color="#66bb6a")
         self._btn_start.configure(state="disabled")
         self._btn_stop.configure(state="normal")
+        self._update_real_mode_banner()   # mostra il banner se la sessione è reale
 
         # Path attivo della sessione: lo STOP pulirà questo (Codex P1).
         self._active_csv_path = cfg["csv_path"]
@@ -923,6 +1033,8 @@ class App(ctk.CTk):
 
     def _stop(self):
         self._running = False
+        self._session_real = False         # sessione finita: il banner torna a seguire la config viva
+        self._update_real_mode_banner()
         self._cancel_pending_autostart()   # uno STOP non deve essere annullato da un auto-start pendente (Codex P2)
         self._stop_event.set()        # sveglia subito un'eventuale attesa del backoff
         if self._loop and self._tg_app:

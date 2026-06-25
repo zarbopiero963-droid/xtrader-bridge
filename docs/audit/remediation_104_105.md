@@ -91,11 +91,18 @@ risolte** da #104. Il resto è in gran parte **raccomandazioni architetturali/UX
 | ID | Finding | Perché manuale |
 |----|---------|----------------|
 | #105-P1 `app.py` monolite | refactor runtime in moduli (`session`/`telegram_listener`/`signal_executor`/…) | refactor ampio multi-sprint, alto rischio di regressioni — richiede scope/approvazione |
-| #105-P2 dry-run real-mode UX | doppia conferma, banner rosso, evento `REAL_MODE_ENABLED`, armed-until-close | feature GUI/UX |
 | #105-P2 multi-signal UX | warning modale, max active signals, indicatore righe attive | feature GUI/UX |
 
 > **Lavorazione issue #136 (chiusura "sul serio" dei NEEDS_MANUAL, una PR alla volta).**
 > I punti sopra vengono affrontati singolarmente. Già fatto:
+> - **#105-P2 UX modalità reale** ✅ — modulo puro `xtrader_bridge/real_mode.py`
+>   (`requires_confirmation`, `CONFIRM_PHRASE`/`confirmation_ok`, `banner_text`,
+>   `enabled_message`, `extract_audit_lines`). In `app.py`: **doppia conferma** (frase
+>   da digitare) alla transizione sim→reale con ripristino della simulazione se annullata,
+>   **banner rosso persistente**, evento di audit **`REAL_MODE_ENABLED`** nel log, e
+>   pulsante **Esporta audit reale**. La persistenza del flag `dry_run` resta invariata
+>   (scelta del proprietario: la modalità reale resta tra i riavvii). Test:
+>   `tests/unit/test_real_mode.py`; wiring GUI = smoke manuale.
 > - **#105-P1 token storage sicuro** ✅ — nuovo modulo `xtrader_bridge/token_store.py`
 >   (wrapper `keyring`: Windows Credential Manager / macOS Keychain / Secret Service).
 >   `config_store.save_config` salva il `bot_token` nel keyring e lascia la chiave **vuota**
