@@ -314,6 +314,24 @@ def test_load_config_lista_e_dict_sbagliati_tornano_al_default(tmp_path):
     assert cfg["parser_by_chat"] == config_store.DEFAULTS["parser_by_chat"]
 
 
+def test_load_config_keyword_stringa_preservata_non_azzerata(tmp_path):
+    # Finding Codex P2: una STRINGA singola è un formato supportato per le keyword
+    # conferma/rifiuto (config a mano). NON va azzerata a [] (perderebbe i custom XTrader
+    # words → segnale chiuso solo a timeout): va normalizzata a lista canonica.
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"confirmation_keywords": "accepted",
+                             "rejection_keywords": "declined"}))
+    cfg = config_store.load_config(str(p))
+    assert cfg["confirmation_keywords"] == ["accepted"]
+    assert cfg["rejection_keywords"] == ["declined"]
+    # Una lista già valida resta tale; un tipo davvero inatteso (numero) → [] (default modulo).
+    p.write_text(json.dumps({"confirmation_keywords": ["ok", "fatto"],
+                             "rejection_keywords": 5}))
+    cfg = config_store.load_config(str(p))
+    assert cfg["confirmation_keywords"] == ["ok", "fatto"]
+    assert cfg["rejection_keywords"] == []
+
+
 def test_load_config_lista_valida_preservata(tmp_path):
     # Una lista già del tipo giusto NON va toccata (no falsi reset).
     p = tmp_path / "config.json"

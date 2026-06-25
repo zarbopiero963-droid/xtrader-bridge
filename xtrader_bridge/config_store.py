@@ -16,7 +16,7 @@ import shutil
 import sys
 import tempfile
 
-from . import autostart, safety_guard
+from . import autostart, confirmation_reader, safety_guard
 
 APP_DIR_NAME = "XTraderBridge"
 CONFIG_VERSION = 1
@@ -155,6 +155,11 @@ def migrate_legacy_config(new_path: str = CONFIG_FILE,
     return False
 
 
+# Chiavi-lista che accettano anche una STRINGA singola come formato valido (keyword
+# conferma/rifiuto XTrader): vanno normalizzate, non azzerate (finding Codex P2).
+_KEYWORD_KEYS = ("confirmation_keywords", "rejection_keywords")
+
+
 def _coerce_int(value, default: int) -> int:
     """int robusto per la migrazione config (audit C5): accetta int/float e stringhe
     numeriche (`"90"`); su un valore non interpretabile torna al `default` SICURO invece
@@ -213,7 +218,16 @@ def _migrate(cfg: dict) -> dict:
             val = cfg.get(key, default)
             cfg[key] = val if isinstance(val, str) else (default if val is None else str(val))
         elif isinstance(default, list):
-            if not isinstance(cfg.get(key), list):
+            if key in _KEYWORD_KEYS:
+                # Una STRINGA singola è un formato SUPPORTATO per le keyword di conferma/
+                # rifiuto (config scritta a mano: `confirmation_reader.normalize_keywords` la
+                # avvolge come singola keyword, e il settings controller gestisce la CSV-string).
+                # Azzerarla a `[]` farebbe ricadere `app._handle_confirmation` sui default del
+                # modulo, ignorando i custom XTrader words → segnale chiuso solo a timeout
+                # (finding Codex P2). La normalizziamo alla lista canonica; vuoto/tipo inatteso
+                # → `[]` (= usa le keyword di default del modulo).
+                cfg[key] = confirmation_reader.normalize_keywords(cfg.get(key)) or []
+            elif not isinstance(cfg.get(key), list):
                 cfg[key] = copy.deepcopy(default)
         elif isinstance(default, dict):
             if not isinstance(cfg.get(key), dict):
