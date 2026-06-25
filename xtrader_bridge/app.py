@@ -17,6 +17,7 @@ from . import __version__
 from .config_store import (
     CONFIG_FILE,
     as_bool,
+    as_bool_optin,
     config_dir,
     load_config,
     migrate_legacy_config,
@@ -1196,7 +1197,7 @@ class App(ctk.CTk):
         # Privacy log (audit #105 P1): di default il TESTO del messaggio NON va in chiaro
         # nei log — solo hash + lunghezza + prima riga troncata (`log_privacy.redact_message`).
         # Il payload completo solo se l'utente attiva `debug_message_payload` (opt-in).
-        payload_full = as_bool(cfg.get("debug_message_payload") or False)
+        payload_full = as_bool_optin(cfg.get("debug_message_payload"))
         # Debug (PR-3): traccia il messaggio in ingresso e la chat di origine. `_dbg`
         # va sul main thread (`_process` gira sul thread del listener Telegram).
         self.after(0, lambda m=log_privacy.redact_message(text, full=payload_full), c=chat_id:

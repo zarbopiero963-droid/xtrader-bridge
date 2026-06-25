@@ -24,6 +24,19 @@ def test_load_config_default_senza_file(tmp_path):
     assert cfg["provider"]                       # default non vuoto
 
 
+def test_as_bool_optin_fail_closed():
+    # Helper unico fail-closed per i flag opt-in (privacy/sicurezza): None/`null`/vuoto
+    # → False (diversamente da as_bool(None) che sarebbe True), solo truthy esplicito → True.
+    assert config_store.as_bool_optin(None) is False
+    assert config_store.as_bool_optin("") is False
+    assert config_store.as_bool_optin(0) is False
+    assert config_store.as_bool_optin(False) is False
+    for falsey in ("0", "false", "no", "off", "FALSE", "  off  "):
+        assert config_store.as_bool_optin(falsey) is False, falsey
+    for truthy in (True, 1, "1", "true", "yes", "garbage-but-not-falsey"):
+        assert config_store.as_bool_optin(truthy) is True, truthy
+
+
 def test_debug_message_payload_default_off_e_migrazione(tmp_path):
     # Privacy log (audit #105 P1): chiave presente nei default e OFF (privacy on)
     # quando il file non la contiene.

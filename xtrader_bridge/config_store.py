@@ -94,6 +94,20 @@ def as_bool(value) -> bool:
     return str(value).strip().lower() not in ("", "0", "false", "no", "off")
 
 
+def as_bool_optin(value) -> bool:
+    """`as_bool` ma **fail-closed** su `None`/`null`/vuoto (→ False), per i flag
+    **opt-in** di sicurezza/privacy con default OFF (es. `debug_message_payload`).
+
+    Senza questo, `as_bool(None)` darebbe ``True`` (la stringa ``"none"`` non è
+    falsey): un valore mancante/ambiguo attiverebbe per sbaglio un comportamento che
+    deve restare spento finché non è abilitato ESPLICITAMENTE. `value or False` mappa
+    i falsy Python (None/""/0/False) a False; il resto passa per `as_bool` (così
+    ``"0"``/``"false"``/``"off"`` → False, un truthy esplicito → True). Fonte UNICA:
+    evita che la regola fail-closed diverga tra `_migrate`, il settings controller e il
+    runtime (finding Sourcery)."""
+    return as_bool(value or False)
+
+
 def config_dir() -> str:
     """Cartella utente per i dati dell'app.
 
@@ -224,10 +238,9 @@ def _migrate(cfg: dict) -> dict:
             elif key == "auto_start_listener":
                 cfg[key] = autostart.is_enabled(cfg)
             elif key == "debug_message_payload":
-                # Privacy fail-closed: solo un truthy ESPLICITO attiva il log completo.
-                # `... or False` mappa None/`null`/vuoto a False (as_bool(None) sarebbe True
-                # perché stringa "none" non è falsey) → di default il payload resta redatto.
-                cfg[key] = as_bool(cfg.get(key) or False)
+                # Privacy fail-closed (helper unico): solo un truthy ESPLICITO attiva il log
+                # completo; None/`null`/vuoto → False (il payload resta redatto di default).
+                cfg[key] = as_bool_optin(cfg.get(key))
             else:
                 cfg[key] = as_bool(cfg.get(key, default))
         elif isinstance(default, int):

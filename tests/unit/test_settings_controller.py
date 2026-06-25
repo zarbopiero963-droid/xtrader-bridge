@@ -29,12 +29,14 @@ def test_current_values_debug_payload_default_off_e_fail_closed():
     assert sc.current_values({})["debug_message_payload"] is False
     assert sc.current_values({"debug_message_payload": True})["debug_message_payload"] is True
     assert sc.current_values({"debug_message_payload": "1"})["debug_message_payload"] is True
-    # Valori non-truthy/malformati → resta OFF (privacy on).
-    for bad in ("", "0", "false", "no", "off", None, "garbage-but-not-falsey"):
+    # Valori falsey/None/malformati → resta OFF (privacy on, fail-closed).
+    for bad in ("", "0", "false", "no", "off", None):
         got = sc.current_values({"debug_message_payload": bad})["debug_message_payload"]
-        # "garbage-but-not-falsey" è truthy per as_bool: l'importante è che vuoto/falsey → False.
-        if bad in ("", "0", "false", "no", "off", None):
-            assert got is False, bad
+        assert got is False, bad
+    # Un valore malformato ma TRUTHY (non falsey) viene trattato come ON: l'opt-in vale
+    # per qualsiasi truthy esplicito; ciò che conta è che falsey/None restino OFF.
+    assert sc.current_values(
+        {"debug_message_payload": "garbage-but-not-falsey"})["debug_message_payload"] is True
 
 
 def test_apply_advanced_debug_payload_opt_in():

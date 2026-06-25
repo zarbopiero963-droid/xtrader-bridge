@@ -88,10 +88,9 @@ def current_values(cfg: dict) -> dict:
         # Coerente col runtime: stessa logica fail-closed di autostart (un valore
         # malformato/None NON deve mostrare il toggle come attivo).
         "auto_start_listener": autostart.is_enabled(cfg),
-        # Privacy log: default OFF (solo truthy esplicito mostra il toggle come attivo),
-        # così un valore malformato/None non finge che il log completo sia attivo
-        # (`... or False`: None/`null`/vuoto → False, fail-closed verso la privacy).
-        "debug_message_payload": _as_bool(cfg.get("debug_message_payload") or False),
+        # Privacy log: default OFF (solo truthy esplicito mostra il toggle come attivo).
+        # Helper fail-closed unico: None/`null`/vuoto → False.
+        "debug_message_payload": _as_bool_optin(cfg.get("debug_message_payload")),
     }
 
 
@@ -150,8 +149,8 @@ def apply_advanced(cfg: dict, form: dict) -> tuple:
     # Avvio automatico del listener: default sicuro False (parte solo con START).
     updates["auto_start_listener"] = _as_bool(form.get("auto_start_listener", False))
     # Privacy log: default sicuro False (payload NON loggato in chiaro; opt-in di debug).
-    # `... or False`: None/vuoto → False (fail-closed verso la privacy).
-    updates["debug_message_payload"] = _as_bool(form.get("debug_message_payload") or False)
+    # Helper fail-closed unico: None/vuoto → False.
+    updates["debug_message_payload"] = _as_bool_optin(form.get("debug_message_payload"))
 
     max_day, err = _parse_positive_int(form.get("max_per_day"), "Limite giornaliero")
     if err:
@@ -185,6 +184,8 @@ def apply_advanced(cfg: dict, form: dict) -> tuple:
 # Coercizione robusta a bool: fonte unica condivisa (config_store), per non avere
 # versioni divergenti dello stesso helper (feedback Sourcery).
 _as_bool = config_store.as_bool
+# Variante fail-closed per i flag opt-in di privacy/sicurezza (None/vuoto → False).
+_as_bool_optin = config_store.as_bool_optin
 
 
 def _parse_positive_int(value, label: str):
