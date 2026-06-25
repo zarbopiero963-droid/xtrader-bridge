@@ -1541,17 +1541,21 @@ class App(ctk.CTk):
                     f"❌ Aggiornamento CSV dopo conferma fallito: {e}. Riprovo a breve."))
                 self._schedule_expiry(path, delay=_WRITE_RETRY_DELAY)
                 return
-            self.after(0, lambda m=signal_outcome.confirmation_removed_log(result.status):
-                       self._log(m))
+            # Guard su None (review Sourcery): se in futuro si aggiungono status
+            # terminali senza messaggio, non si logga `None`.
+            removed_log = signal_outcome.confirmation_removed_log(result.status)
+            if removed_log is not None:
+                self.after(0, lambda m=removed_log: self._log(m))
             self.after(0, lambda p=path, n=len(rows): self._note_csv(p, n))
             self.after(0, lambda n=len(rows): self._update_active_indicator(n))   # #136 p5
             self._schedule_expiry(path)   # riprogramma per i segnali eventualmente rimasti
-        elif result.status == confirmation_reader.UNKNOWN:
-            self.after(0, lambda m=signal_outcome.confirmation_ignored_log(result.status):
-                       self._log(m))
-        else:  # UNMATCHED
-            self.after(0, lambda m=signal_outcome.confirmation_ignored_log(result.status):
-                       self._log(m))
+        else:
+            # UNKNOWN o UNMATCHED: notifica che NON rimuove nulla → solo log informativo.
+            # `confirmation_ignored_log` distingue i due casi; guard su None per status
+            # non enumerati (difesa, review Sourcery).
+            ignored_log = signal_outcome.confirmation_ignored_log(result.status)
+            if ignored_log is not None:
+                self.after(0, lambda m=ignored_log: self._log(m))
 
     def _schedule_expiry(self, path: str, delay=None) -> None:
         """(Ri)programma il tick di scadenza (PR-22). Con `delay=None` lo programma

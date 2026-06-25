@@ -108,7 +108,7 @@ def describe_write(row, source, n_active):
 def confirmation_removed_log(status):
     """Log della rimozione dal CSV dopo una conferma XTrader **terminale**:
     CONFIRMED → «confermato (CONFIRMED)», REJECTED → «rifiutato (REJECTED)».
-    Ritorna `None` se lo status non è terminale (il chiamante non logga)."""
+    Ritorna `None` per qualsiasi altro status (incluso ignoto): il chiamante non logga."""
     if status == confirmation_reader.CONFIRMED:
         esito = "confermato (CONFIRMED)"
     elif status == confirmation_reader.REJECTED:
@@ -122,7 +122,8 @@ def confirmation_ignored_log(status):
     """Log per una notifica XTrader che NON rimuove nulla:
     - UNKNOWN: associata a un segnale ma esito non riconoscibile;
     - UNMATCHED: non associata ad alcun segnale attivo.
-    Ritorna `None` per status terminali/ignoti (il chiamante non logga)."""
+    Ritorna `None` per qualsiasi altro status (terminali CONFIRMED/REJECTED o ignoti):
+    il chiamante non logga."""
     if status == confirmation_reader.UNKNOWN:
         return "ℹ️ Notifica XTrader associata a un segnale ma esito non chiaro: ignorata."
     if status == confirmation_reader.UNMATCHED:
