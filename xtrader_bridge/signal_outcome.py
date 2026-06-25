@@ -65,3 +65,36 @@ def describe_non_write(decision, row):
             log="🚦 Limite giornaliero raggiunto: segnale ignorato.",
         )
     return None
+
+
+class WriteOutcome:
+    """Descrizione di presentazione per una scrittura CSV RIUSCITA.
+
+    - `last_signal`: testo «ultimo segnale» (bianco) da `_set_last`;
+    - `signal_log`: riga di log del segnale scritto (con la sorgente del parser);
+    - `csv_log`: riga di log di conferma aggiornamento CSV (pluralizzazione
+      «attivo»/«attivi» secondo il numero di righe attive).
+    """
+
+    __slots__ = ("last_signal", "signal_log", "csv_log")
+
+    def __init__(self, last_signal, signal_log, csv_log):
+        self.last_signal = last_signal
+        self.signal_log = signal_log
+        self.csv_log = csv_log
+
+
+def describe_write(row, source, n_active):
+    """Presentazione di una scrittura CSV riuscita per `row` (riga parsata),
+    `source` (sorgente del parser) e `n_active` (righe attive nel CSV dopo la
+    scrittura). Pura: legge solo `EventName`/`SelectionName`/`Price` (mancanti →
+    stringa vuota), nessuna mutazione."""
+    ev = row.get("EventName", "")
+    sel = row.get("SelectionName", "")
+    price = row.get("Price", "")
+    plural = "o" if n_active == 1 else "i"
+    return WriteOutcome(
+        last_signal=f"🏆 {ev}  |  {sel}  |  q.{price}",
+        signal_log=f"📱 Segnale ({source}): {ev}  |  {sel}  q.{price}",
+        csv_log=f"✅ CSV aggiornato ({n_active} attiv{plural}) → XTrader può piazzare",
+    )
