@@ -383,8 +383,20 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
                     # `available()` True ma set fallito (raro): fallback al token in chiaro.
                     to_save["bot_token_storage"] = "plaintext"
                     logger.warning("Keyring non scrivibile: il bot token resta in chiaro in %s.", path)
+            elif prior_sentinel == "keyring":
+                # Stato precedente "keyring" + keyring NON disponibile ORA = outage TRANSIENTE
+                # (Codex P2). NON declassare a plaintext: esporrebbe il segreto su disco per un
+                # guasto temporaneo. Preserva "keyring" e NON scrivere il token in chiaro; il
+                # keyring conserva (ancora) il valore. Un eventuale token NUOVO non può essere
+                # salvato ora → save differito, con avviso.
+                to_save["bot_token"] = ""
+                to_save["bot_token_storage"] = "keyring"
+                logger.warning("Keyring non disponibile: il bot token NON è stato aggiornato ora "
+                               "(per non esporlo in chiaro nel config). Riprova quando il keyring "
+                               "è disponibile; il token già memorizzato resta valido.")
             else:
-                # Nessun backend keyring: token in chiaro su disco (comportamento storico).
+                # Nessun backend keyring e nessuno stato keyring precedente (prima installazione):
+                # token in chiaro su disco (comportamento storico).
                 to_save["bot_token_storage"] = "plaintext"
                 logger.warning("Keyring non disponibile: il bot token resta in chiaro in %s. "
                                "Installa un backend keyring per cifrarlo.", path)
@@ -441,14 +453,25 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
         if keyring_changed:
             try:
                 if prior_keyring is not None:
-                    token_store.save_token(prior_keyring)
+                    rolled_back = token_store.save_token(prior_keyring)
                 else:
-                    token_store.delete_token()
-            except Exception:   # noqa: BLE001 — rollback best-effort, l'errore è già grave
-                logger.error("Rollback del keyring dopo config non salvata non riuscito (%s).",
-                             path, exc_info=True)
+                    rolled_back = token_store.delete_token()
+            except Exception:   # noqa: BLE001 — rollback best-effort
+                rolled_back = False
+            # `save_token`/`delete_token` segnalano il fallimento con False (non sollevano):
+            # se il rollback non riesce (keyring diventato indisponibile), keyring e disco
+            # restano incoerenti → log ESPLICITO perché richiede attenzione (Codex P2).
+            if not rolled_back:
+                logger.error("Rollback del keyring NON riuscito dopo config non salvata (%s): la "
+                             "credenziale potrebbe essere incoerente col config su disco. "
+                             "Verifica il Credential Manager di sistema.", path)
         logger.error("Salvataggio config fallito (%s): %s", path, exc, exc_info=True)
         return in_memory, False
+    # Disco OK → mantieni la config IN MEMORIA coerente col disco per il sentinel (Codex P2):
+    # il chiamante fa `self._config = saved`, quindi un sentinel stantio rifarebbe scrivere uno
+    # stato sbagliato al save successivo. `bot_token` in memoria resta il token reale (runtime).
+    if "bot_token_storage" in to_save:
+        in_memory["bot_token_storage"] = to_save["bot_token_storage"]
     if token and to_save.get("bot_token_storage") == "keyring":
         logger.info("Bot token salvato nel keyring di sistema (non in chiaro nel config).")
     return in_memory, True
