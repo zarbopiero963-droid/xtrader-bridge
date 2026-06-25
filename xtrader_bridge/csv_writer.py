@@ -6,6 +6,7 @@ Vedi docs/xtrader_csv_contract.md.
 """
 
 import csv
+import logging
 import os
 import re
 import tempfile
@@ -13,6 +14,10 @@ import threading
 import time
 
 from . import mapping, numbers_re
+
+# Logger di modulo: un file esistente che NON è un CSV del bridge non viene ripulito;
+# prima era un return silenzioso, ora si logga il motivo per la diagnosi (audit #105 P2).
+logger = logging.getLogger(__name__)
 
 # Lock condiviso: serializza scrittura segnale e svuotamento, eliminando la
 # race tra il thread del bot (write_csv) e il timer di auto-clear (init_csv).
@@ -235,6 +240,18 @@ def clear_stale_csv(path: str) -> bool:
     # catturato qui: si propaga al chiamante, che lo segnala come cleanup fallito
     # invece di silenziarlo come se il file fosse assente/non-bridge.
     if first_row != CSV_HEADER:
+        # File esistente e decodificabile ma con header diverso da CSV_HEADER: NON è un CSV
+        # del bridge → non si tocca (anti data-loss). Prima il return era SILENZIOSO: ora si
+        # logga un avviso per la diagnosi, ma **senza il contenuto** dell'header. Se per
+        # errore `csv_path` punta a un file con un segreto (es. un token nella prima riga, più
+        # corto di una troncatura) NON deve finire nei log, e questo sink non passa per la
+        # redazione di `event_log` (Codex P2). Si riportano solo METADATI strutturali (numero
+        # colonne e lunghezza), che bastano a capire che è il file sbagliato.
+        n_cols = len(first_row or [])
+        n_chars = sum(len(str(c)) for c in (first_row or []))
+        logger.warning("CSV non ripulito: %s non è un CSV del bridge (header atteso %d "
+                       "colonne; rilevate %d colonne, %d caratteri — contenuto non loggato). "
+                       "Controlla csv_path.", path, len(CSV_HEADER), n_cols, n_chars)
         return False   # non è un CSV del bridge → non sovrascrivere
     init_csv(path)
     return True
