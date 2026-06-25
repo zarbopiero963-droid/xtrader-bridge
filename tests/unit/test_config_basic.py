@@ -24,6 +24,43 @@ def test_load_config_default_senza_file(tmp_path):
     assert cfg["provider"]                       # default non vuoto
 
 
+def test_as_bool_optin_allowlist_fail_closed():
+    # Helper ALLOWLIST fail-closed per i flag opt-in (privacy/sicurezza): True SOLO per
+    # un "sì" esplicito riconosciuto; QUALSIASI altro valore → False (Codex P1).
+    assert config_store.as_bool_optin(None) is False
+    assert config_store.as_bool_optin("") is False
+    assert config_store.as_bool_optin(0) is False
+    assert config_store.as_bool_optin(False) is False
+    # Falsey espliciti E stringhe non riconosciute / refusi → False (fail-closed).
+    for off in ("0", "false", "no", "off", "FALSE", "  off  ",
+                "flase", "disabled", "null", "none", "garbage"):
+        assert config_store.as_bool_optin(off) is False, off
+    # Solo un truthy ESPLICITO riconosciuto → True.
+    for on in (True, 1, "1", "true", "TRUE", "  yes  ", "on", "y", "t"):
+        assert config_store.as_bool_optin(on) is True, on
+
+
+def test_debug_message_payload_default_off_e_migrazione(tmp_path):
+    # Privacy log (audit #105 P1): chiave presente nei default e OFF (privacy on)
+    # quando il file non la contiene.
+    assert config_store.DEFAULTS["debug_message_payload"] is False
+    cfg = config_store.load_config(str(tmp_path / "assente.json"))
+    assert cfg["debug_message_payload"] is False
+    # Config che NON ha la chiave → resta OFF.
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"provider": "X"}))
+    assert config_store.load_config(str(p))["debug_message_payload"] is False
+    # Solo un valore truthy ESPLICITO attiva il log completo (coerce via as_bool).
+    p.write_text(json.dumps({"debug_message_payload": True}))
+    assert config_store.load_config(str(p))["debug_message_payload"] is True
+    p.write_text(json.dumps({"debug_message_payload": "1"}))
+    assert config_store.load_config(str(p))["debug_message_payload"] is True
+    # Valori falsey, refusi e stringhe non riconosciute → fail-closed a False (privacy on).
+    for bad in ("", "0", "false", "no", "off", "flase", "disabled", "null"):
+        p.write_text(json.dumps({"debug_message_payload": bad}))
+        assert config_store.load_config(str(p))["debug_message_payload"] is False, bad
+
+
 def test_load_config_merge_con_file(tmp_path):
     p = tmp_path / "config.json"
     p.write_text(json.dumps({"provider": "TG_PRE", "chat_id": "-100123"}))

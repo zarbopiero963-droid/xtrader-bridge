@@ -74,6 +74,12 @@ DEFAULTS = {
     # bridge parte solo con START manuale. Se True parte da solo SOLO se token e chat
     # sono configurati; in modalità REALE chiede comunque conferma prima di avviare.
     "auto_start_listener":          False,
+    # Privacy dei log (audit #105 P1): se False (default), il TESTO del messaggio
+    # Telegram NON viene loggato in chiaro — solo hash + lunghezza + prima riga
+    # troncata (vedi `log_privacy`). True logga il payload completo (opt-in di debug
+    # consapevole). Default OFF = privacy on; coerce via `as_bool_optin` (ALLOWLIST
+    # fail-closed: solo un "sì" esplicito riconosciuto attiva, refusi/sconosciuti → OFF).
+    "debug_message_payload":        False,
 }
 
 
@@ -87,6 +93,33 @@ def as_bool(value) -> bool:
     if isinstance(value, (int, float)):
         return value != 0
     return str(value).strip().lower() not in ("", "0", "false", "no", "off")
+
+
+# Token ESPLICITAMENTE "acceso" per i flag opt-in (privacy/sicurezza). È un'ALLOWLIST,
+# non una denylist: per un opt-in tutto ciò che non è un "sì" riconosciuto deve restare
+# SPENTO (fail-closed). Così un valore mancante/ambiguo o un refuso editato a mano
+# (`"flase"`, `"disabled"`, `"null"`) NON attiva per sbaglio il comportamento.
+_OPTIN_TRUE = frozenset({"1", "true", "yes", "on", "y", "t"})
+
+
+def as_bool_optin(value) -> bool:
+    """Coercizione **allowlist, fail-closed** per i flag **opt-in** con default OFF
+    (es. `debug_message_payload`): True SOLO per un valore esplicitamente acceso.
+
+    - `bool` → sé; numero → `!= 0`;
+    - stringa → True solo se (normalizzata) è in ``_OPTIN_TRUE`` (`1/true/yes/on/y/t`);
+    - QUALSIASI altro valore (None/`null`/vuoto, `"0"/"false"/"off"`, ma anche stringhe
+      non riconosciute come `"flase"/"disabled"`) → **False**.
+
+    Differenza voluta da `as_bool` (denylist, fail-OPEN sulle stringhe non riconosciute):
+    un opt-in di privacy NON deve accendersi per un refuso o un valore sconosciuto
+    (finding Codex P1). Fonte UNICA: evita che la regola fail-closed diverga tra
+    `_migrate`, il settings controller e il runtime (finding Sourcery)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in _OPTIN_TRUE
 
 
 def config_dir() -> str:
@@ -218,6 +251,10 @@ def _migrate(cfg: dict) -> dict:
                 cfg[key] = safety_guard.is_dry_run(cfg)
             elif key == "auto_start_listener":
                 cfg[key] = autostart.is_enabled(cfg)
+            elif key == "debug_message_payload":
+                # Privacy fail-closed (helper unico): solo un truthy ESPLICITO attiva il log
+                # completo; None/`null`/vuoto → False (il payload resta redatto di default).
+                cfg[key] = as_bool_optin(cfg.get(key))
             else:
                 cfg[key] = as_bool(cfg.get(key, default))
         elif isinstance(default, int):
