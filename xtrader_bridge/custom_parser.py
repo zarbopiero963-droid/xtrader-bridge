@@ -320,11 +320,23 @@ def default_parsers_dir() -> str:
     return os.path.join(config_store.config_dir(), "parsers")
 
 
+# Nomi device riservati di Windows: un file con questo nome-base (anche con estensione,
+# es. "con.json") non è creabile e l'I/O fallisce/va al device. Vanno "mangled" (audit L2).
+_WIN_RESERVED = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+
+
 def _safe_filename(name: str) -> str:
     """Nome file sicuro dal nome del parser: solo alfanumerici, '-', '_' e spazi
-    (poi spazi → '_'). Evita path traversal e caratteri non validi su Windows."""
+    (poi spazi → '_'). Evita path traversal, caratteri non validi e i NOMI DEVICE
+    RISERVATI di Windows (``con``/``nul``/``com1``… → prefissati con ``_``)."""
     cleaned = "".join(c for c in str(name).strip() if c.isalnum() or c in " -_")
     cleaned = "_".join(cleaned.split())
+    if cleaned.casefold() in _WIN_RESERVED:
+        cleaned = "_" + cleaned
     return cleaned or "parser"
 
 

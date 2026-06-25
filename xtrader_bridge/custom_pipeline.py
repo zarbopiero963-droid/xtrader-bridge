@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from . import (
     market_mapping_store,
     name_mapping_store,
+    numbers_re,
     recognition,
     validator,
     value_maps,
@@ -69,7 +70,7 @@ MAPPING_MISSING = "MAPPING_MISSING"
 MARKET_MAPPING_MISSING = "MARKET_MAPPING_MISSING"
 
 # Handicap: numero con segno opzionale (es. "0", "-1", "0.5", "+1,5").
-_HANDICAP_RE = re.compile(r"^[+-]?\d+(?:[.,]\d+)?$")
+_HANDICAP_RE = re.compile(r"^" + numbers_re.SIGNED_DECIMAL + r"$")   # frammento condiviso (L4)
 
 # Colonne quota: il contratto XTrader usa il punto decimale (es. "1.85").
 _PRICE_COLS = ("Price", "MinPrice", "MaxPrice")

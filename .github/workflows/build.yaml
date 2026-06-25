@@ -94,6 +94,9 @@ jobs:
         retention-days: 30
 
     - name: Crea Release pubblica (solo su tag v*)
+      # SHA pin di softprops/action-gh-release corrispondente al tag major v1 al momento
+      # del pin (immutabile: la SHA non cambia se il tag mobile v1 viene riassegnato).
+      # Aggiornare SHA e commento INSIEME quando si fa il bump. Audit L8.
       uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844  # v1
       if: startsWith(github.ref, 'refs/tags/')
       with:

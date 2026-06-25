@@ -74,6 +74,22 @@ def test_delete_e_rename_profile():
     assert nm.rename_profile(busy, "A", "B") == busy
 
 
+def test_profilo_con_whitespace_trovato_e_cancellabile():
+    # audit L1: un profilo salvato con spazi attorno al nome (config legacy/editata a mano)
+    # NON deve "sparire": lookup/CRUD normalizzano il nome come fa market_mapping_store.
+    cfg = {"name_mappings": {"  Premier  ": [{"betfair": "Liverpool", "provider": "Liverpool FC"}]}}
+    assert nm.profile_names(cfg) == ["Premier"]                  # mostrato ripulito
+    # get_entries lo ritrova sia col nome ripulito sia con spazi.
+    assert nm.get_entries(cfg, "Premier")[0]["betfair"] == "Liverpool"
+    assert nm.get_entries(cfg, " Premier ")[0]["betfair"] == "Liverpool"
+    # delete_profile lo rimuove passando il nome ripulito (prima restava orfano, non cancellabile).
+    assert nm.profile_names(nm.delete_profile(cfg, "Premier")) == []
+    # set_entries su un nome equivalente migra la chiave legacy: niente doppione.
+    updated = nm.set_entries(cfg, "Premier", [{"betfair": "Everton", "provider": "EFC"}])
+    assert nm.profile_names(updated) == ["Premier"]
+    assert nm.get_entries(updated, "Premier")[0]["betfair"] == "Everton"
+
+
 # ── resolve_team ─────────────────────────────────────────────────────────────
 
 def test_resolve_team_alias_e_case_insensitive():

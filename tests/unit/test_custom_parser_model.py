@@ -52,6 +52,17 @@ def test_round_trip_json_preserva_i_dati_e_unicode():
     assert again.to_dict() == d.to_dict()
 
 
+def test_safe_filename_evita_nomi_device_riservati_windows():
+    # audit L2: un parser chiamato "con"/"nul"/"com1"… mapperebbe a "con.json" (device
+    # riservato Windows, non creabile). Va prefissato con "_". Nomi normali invariati.
+    assert cp._safe_filename("con") == "_con"
+    assert cp._safe_filename("AUX") == "_AUX"
+    assert cp._safe_filename("lpt3") == "_lpt3"
+    assert cp._safe_filename("MioParser") == "MioParser"
+    assert cp._safe_filename("contesto") == "contesto"   # solo il match ESATTO è riservato
+    assert cp._safe_filename("") == "parser"             # fallback invariato
+
+
 def test_from_dict_tollera_chiavi_mancanti_ed_extra():
     rule = cp.FieldRule.from_dict({"target": "Price", "sconosciuta": "x"})
     assert rule.target == "Price"

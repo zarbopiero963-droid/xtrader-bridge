@@ -22,7 +22,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: |
+            requirements*.txt
+            requirements*.in
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements-dev.txt
       - run: python -m py_compile main.py

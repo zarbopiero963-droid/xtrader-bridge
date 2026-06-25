@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 
-from . import mapping
+from . import mapping, numbers_re
 
 # Lock condiviso: serializza scrittura segnale e svuotamento, eliminando la
 # race tra il thread del bot (write_csv) e il timer di auto-clear (init_csv).
@@ -146,8 +146,8 @@ _CSV_FORMULA_CHARS = ("=", "+", "-", "@")
 _CSV_CTRL_CHARS = ("\t", "\r", "\n")
 # Numero "puro" (segno opzionale + decimale con . o ,): es. Handicap "-1"/"+1,5", Price
 # "1.85". Un numero legittimo NON va prefissato, altrimenti XTrader leggerebbe "'-1" come
-# testo e il contratto numerico si romperebbe.
-_NUMERIC_RE = re.compile(r"[+-]?\d+(?:[.,]\d+)?")
+# testo e il contratto numerico si romperebbe. Frammento condiviso (anti-drift, audit L4).
+_NUMERIC_RE = re.compile(numbers_re.SIGNED_DECIMAL)
 
 
 def _sanitize_cell(value):

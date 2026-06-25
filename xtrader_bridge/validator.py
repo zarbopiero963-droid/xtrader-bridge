@@ -18,14 +18,15 @@ raggiungere XTrader. Il validatore non modifica la riga: la accetta o la scarta.
 
 import re
 
-from . import recognition
+from . import numbers_re, recognition
 
 VALID = "VALID"
 
 # Quota = decimale "semplice": cifre con al più un separatore (punto o virgola).
 # Esclude esponenti ("1e2"), inf/nan, segni, separatori multipli: il contratto
 # XTrader documenta quote decimali punto-normalizzate, non notazioni arbitrarie.
-_DECIMAL_PRICE = re.compile(r"^\d+(?:[.,]\d+)?$")
+# Frammento decimale condiviso (anti-drift, audit L4).
+_DECIMAL_PRICE = re.compile(r"^" + numbers_re.DECIMAL + r"$")
 INVALID_MISSING_FIELDS = "INVALID_MISSING_FIELDS"   # campi nome/ID per la modalità
 INVALID_MISSING_PRICE = "INVALID_MISSING_PRICE"
 INVALID_PRICE = "INVALID_PRICE"
