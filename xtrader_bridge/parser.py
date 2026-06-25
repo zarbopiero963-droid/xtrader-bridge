@@ -15,6 +15,11 @@ _EMOJI_MARKERS = ('🏆', '🆚', '⚽', '⌚', '📊', '📈')
 # Numero ben formato (no "1.2.3"): intero con al più una parte decimale.
 _NUM = r'\d+(?:[.,]\d+)?'
 
+# "Quota X"/"@X" con marker HT/FT **adiacente** al numero (audit B2): cattura il numero.
+# Pattern UNICO condiviso da `_extract_quota` (presenza → modalità linea) e
+# `_extract_ft_line_quota` (recupero quota a fine tempo), così la logica non diverge.
+_QUOTA_HTFT_ADJ = re.compile(r'(?:quota|@)[:\s]*(' + _NUM + r')\s*(?:ht|ft)\b', re.IGNORECASE)
+
 # Separatori squadre: " v "/" vs " (forti) preferiti a " - " (debole, ambiguo).
 _SEP_VVS = re.compile(r'^(.+?)\s+(?:vs|v)\s+(.+)$', re.IGNORECASE)
 _SEP_DASH = re.compile(r'^(.+?)\s+-\s+(.+)$')
@@ -78,8 +83,7 @@ def _extract_quota(line: str):
     # (audit B2) oppure se c'è un "Prematch:". Prima si cercava `\b(?:ht|ft)\b` sull'INTERA
     # riga: due token di 2 lettere comunissimi vaganti altrove ribaltavano la modalità e
     # facevano perdere/promuovere male la quota.
-    line_marker = (re.search(r'(?:quota|@)[:\s]*' + _NUM + r'\s*(?:ht|ft)\b', line, re.IGNORECASE)
-                   or re.search(r'prematch\s*:', low))
+    line_marker = bool(_QUOTA_HTFT_ADJ.search(line)) or bool(re.search(r'prematch\s*:', low))
     if line_marker:
         m = re.search(r'prematch[:\s]*(' + _NUM + r')(?!\d|[.,]\d)', line, re.IGNORECASE)
     else:
@@ -103,7 +107,7 @@ def _extract_ft_line_quota(line: str):
     # Il marker HT/FT dev'essere ADIACENTE al numero dopo Quota (audit B2), non un token
     # vagante altrove sulla riga: solo così "Quota X HT/FT" identifica davvero una linea/quota
     # a fine tempo. Il numero X è una LINEA se .5 (ignorato), altrimenti è la quota offerta.
-    m = re.search(r'(?:quota|@)[:\s]*(' + _NUM + r')\s*(?:ht|ft)\b', line, re.IGNORECASE)
+    m = _QUOTA_HTFT_ADJ.search(line)
     if m is None or _is_half_line(m.group(1)):
         return None
     val = m.group(1).replace(',', '.')
