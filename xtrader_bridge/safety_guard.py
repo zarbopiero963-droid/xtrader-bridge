@@ -147,15 +147,19 @@ class DailyLimiter:
         """Stato serializzabile (per sopravvivere a un riavvio nello stesso giorno)."""
         return {"day": self._day, "count": self._count}
 
-    def restore_state(self, data) -> None:
-        """Ripristina lo stato da `state()` (tollerante a dati malformati)."""
+    def restore_state(self, data) -> bool:
+        """Ripristina lo stato da `state()` (tollerante a dati malformati). Ritorna ``True``
+        se lo stato è stato effettivamente applicato, ``False`` se i dati erano malformati
+        (limiter lasciato invariato) — così `load_state` distingue un restore reale da un no-op."""
         if not isinstance(data, dict):
-            return
+            return False
         day = data.get("day")
         count = data.get("count")
         if isinstance(day, str) and isinstance(count, int) and count >= 0:
             self._day = day
             self._count = count
+            return True
+        return False
 
 
 def save_state(daily: DailyLimiter, path: str) -> bool:
@@ -191,5 +195,6 @@ def load_state(daily: DailyLimiter, path: str) -> bool:
             data = json.load(f)
     except (OSError, json.JSONDecodeError, ValueError):
         return False
-    daily.restore_state(data)
-    return True
+    # Propaga l'esito reale del restore: un JSON valido ma con struttura inattesa
+    # (ignorato da restore_state) ritorna False, non un falso "caricato" (Sourcery).
+    return daily.restore_state(data)

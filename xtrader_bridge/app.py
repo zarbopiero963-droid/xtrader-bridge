@@ -749,7 +749,8 @@ class App(ctk.CTk):
 
     def _save_guard_state(self) -> None:
         """Persiste lo stato dei guardrail su disco DOPO una decisione/scrittura.
-        Dedupe: atomico, con avviso (una sola volta) se fallisce. Daily: best-effort."""
+        Dedupe E daily: salvataggio ATOMICO+fsync (`signal_dedupe.save_state` /
+        `safety_guard.save_state`), con avviso una-tantum se fallisce (non più silenzioso)."""
         if (not signal_dedupe.save_state(self._tracker, self._dedupe_state_path())
                 and not self._dedupe_save_warned):
             self._dedupe_save_warned = True

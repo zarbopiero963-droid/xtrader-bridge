@@ -84,7 +84,7 @@ risolte** da #104. Il resto è in gran parte **raccomandazioni architetturali/UX
 ### NEEDS_MANUAL — decisione del proprietario (non auto-patchabili in sicurezza)
 | ID | Finding | Perché manuale |
 |----|---------|----------------|
-| #105-P1 `app.py` monolite | refactor runtime in moduli (`session`/`telegram_listener`/`signal_executor`/…) | refactor ampio multi-sprint, alto rischio regressioni — richiede scope/approvazione |
+| #105-P1 `app.py` monolite | refactor runtime in moduli (`session`/`telegram_listener`/`signal_executor`/…) | refactor ampio multi-sprint, alto rischio di regressioni — richiede scope/approvazione |
 | #105-P1 token storage | DPAPI/Windows Credential Manager / keyring | scelta di sicurezza + dipendenze/piattaforma |
 | #105-P1 log payload privacy | privacy mode (hash+troncamento, full solo in debug) | scelta di policy + impatto UX/diagnostica |
 | #105-P2 dry-run real-mode UX | doppia conferma, banner rosso, evento `REAL_MODE_ENABLED`, armed-until-close | feature GUI/UX |

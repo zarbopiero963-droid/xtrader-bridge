@@ -100,9 +100,11 @@ def test_stato_sopravvive_al_riavvio_stesso_giorno():
 def test_restore_state_malformato_ignorato():
     lim = sg.DailyLimiter(max_per_day=5)
     for bad in (None, [], {"day": 1, "count": "x"}, {"count": -1, "day": "2026-01-01"}):
-        lim.restore_state(bad)                  # non deve sollevare
+        assert lim.restore_state(bad) is False  # malformato → False, non solleva
     # stato resta pulito: tetto pieno disponibile
     assert lim.remaining(now=1_000_000.0) == 5
+    # un payload valido viene applicato e ritorna True.
+    assert lim.restore_state({"day": "2026-01-01", "count": 2}) is True
 
 
 # ── audit #105 P2: persistenza daily state atomica + fsync ────────────────────
@@ -149,4 +151,9 @@ def test_load_state_file_assente_o_corrotto_ritorna_false(tmp_path):
     bad = tmp_path / "corrotto.json"
     bad.write_text("{ non json ,,,")
     assert sg.load_state(lim, str(bad)) is False
+    # JSON VALIDO ma struttura inattesa → load_state propaga il no-op di restore_state (False),
+    # non un falso "caricato" (Sourcery).
+    weird = tmp_path / "valido_ma_strano.json"
+    weird.write_text('{"foo": "bar"}')
+    assert sg.load_state(lim, str(weird)) is False
     assert lim.remaining(now=1_000_000.0) == 5              # limiter invariato
