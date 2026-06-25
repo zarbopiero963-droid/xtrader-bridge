@@ -69,6 +69,11 @@ risolte** da #104. Il resto è in gran parte **raccomandazioni architetturali/UX
 (non bug concreti). Triage: ✅ già fatto · 🔧 fix concreto in PR · ⬜ da fare ·
 🧑‍⚖️ NEEDS_MANUAL (decisione del proprietario: refactor ampio / feature UX / scelta security).
 
+> **Stato finale #105.** Tutti i **fix concreti** sono mergiati (#126–#131; la notif-chat era
+> già coperta da #104 C8). I **NEEDS_MANUAL** sotto sono stati **rimandati dal proprietario**
+> (scelta esplicita): restano come roadmap futura, da affrontare singolarmente su richiesta.
+> Suite verde (925 passed / 7 skipped), ruff pulito. Merge sempre manuale.
+
 ### Fix concreti (safe, mirati — una PR per voce)
 | ID | Finding | Esito |
 |----|---------|-------|
