@@ -38,8 +38,8 @@ def _confirm_then_write(text, q, path, *, running=True, writer=None):
         q.confirm(result.signal_id)
         try:
             writer(q.active_rows(), path)   # può sollevare (CSV lockato)
-        except Exception:                   # noqa: BLE001 — come app: errore a log, retry schedulato
-            pass
+        except OSError:                     # come app: errore a log + retry schedulato (qui
+            pass                            # ristretto a OSError per non nascondere altri bug)
     return result
 
 
