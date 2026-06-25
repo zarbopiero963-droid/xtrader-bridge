@@ -105,6 +105,22 @@ obbligatoria** (casella «Obblig.» spenta). Non esiste più un interruttore glo
 - Un solo segnale attivo alla volta (riscrittura del file) finché la coda multi-segnale
   (PR-16) non sarà introdotta.
 
+### Fallimento di scrittura e CSV-lock (audit #105 H2)
+
+La scrittura è **atomica** (tmp + `fsync` + `os.replace`) con retry sui lock Windows. Se la
+sostituzione del file **fallisce** (tipicamente perché XTrader tiene il CSV aperto in
+esclusiva), il bridge:
+
+- **non** scrive una riga parziale e **non** consuma il segnale: coda e guardrail vengono
+  ripristinati (rollback), quindi il segnale resta **ritentabile** (nessuna doppia scommessa);
+- **ripianifica** la scrittura con un retry a breve, così il disco converge allo stato della
+  coda appena il lock si libera;
+- dopo **N fallimenti consecutivi** (soglia di default 3, modulo `csv_lock_escalation`) rende
+  il blocco **visibile** nella GUI come **«🔒 CSV bloccato da XTrader»** con il numero di
+  tentativi, e segnala il **recupero** («✅ CSV sbloccato») appena una scrittura torna a
+  riuscire. È solo un **indicatore** di stato: non altera scrittura, coda, rollback o retry.
+  Il contatore è **per-sessione** (azzerato a START/STOP).
+
 ## Stato implementazione (PR-01)
 
 - `CSV_HEADER` allineato alle **14 colonne reali** con ordine corretto. ✅
