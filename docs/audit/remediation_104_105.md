@@ -14,12 +14,12 @@ Legenda stato: ⬜ da fare · 🔧 in PR aperta · ✅ mergiato.
 | A1 | SelectionName inventata nel fallback legacy (`"Over 0.5 Goals"`/`home`) | `csv_writer.py` | #107 | ✅ |
 | A2 | Boundary del lock: `live_guard.evaluate` fuori da `_queue_lock` | `live_guard.py`, `app.py` | #111 | ✅ |
 | A4 | Freshness fail-OPEN su timestamp mancante | `message_freshness.py` | #113 | ✅ |
-| A3 | Timing scadenza coda su `time.monotonic()` (coda in-memory). `signal_dedupe` resta wallclock (PERSISTITO tra riavvii) e `message_freshness` resta wallclock (epoch assoluto Telegram) — carve-out dell'audit | `signal_queue.py`, `app.py` | `fix/audit-104-a3` | 🔧 |
+| A3 | Timing scadenza coda su `time.monotonic()` (coda in-memory). `signal_dedupe` resta wallclock (PERSISTITO tra riavvii) e `message_freshness` resta wallclock (epoch assoluto Telegram) — carve-out dell'audit | `signal_queue.py`, `app.py` | #114 | ✅ |
 
 ### 🟠 HIGH
 | ID | Finding | File | PR | Stato |
 |----|---------|------|----|-------|
-| B1 | CSV formula/control-char injection (no `'`-prefix) | `csv_writer.py` | — | ⬜ |
+| B1 | CSV formula/control-char injection (no `'`-prefix) | `csv_writer.py` | `fix/audit-104-b1` | 🔧 |
 | B2 | Quota HT/FT/Prematch decisa sull'intera riga | `parser.py` | — | ⬜ |
 | B3 | Alias duplicato: ultimo vince in silenzio | `mapping.py` | — | ⬜ |
 
