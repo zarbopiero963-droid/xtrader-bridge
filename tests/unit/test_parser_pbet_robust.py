@@ -53,6 +53,21 @@ def test_bet_type_solo_da_riga_lato():
     assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nPunta")["bet_type"] == "BACK"
 
 
+def test_bet_type_tokenizza_lettere_unicode():
+    # audit L5: il riconoscimento della riga-lato tokenizza per LETTERE Unicode `[^\W\d_]`
+    # (non più la classe accentata ristretta `[a-zàèéìòù]`). Le parole-lato restano
+    # riconosciute (regressione della modifica) e una parola con accento NON-italiano resta
+    # UN solo token: niente split che con la classe ristretta poteva far saltare la
+    # riga-lato e lasciare per sbaglio il default BACK su un segnale LAY.
+    assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nBanca")["bet_type"] == "LAY"
+    # "Lay" con accento non-italiano accanto (es. una nota "Layür") resta un nome a due+
+    # token → non forza il lato (default BACK), senza spezzare in modo da matchare "lay".
+    assert parse_message("P.Bet. OVER 2.5\nInter v Layür Town\nQuota 1,85")["bet_type"] == "BACK"
+    # Una riga-lato pulita con un solo token Unicode è riconosciuta anche se .lower() di un
+    # accento (Ò→ò) resta una sola parola: "Banca" maiuscolo/accentato non si spezza.
+    assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nBANCA")["bet_type"] == "LAY"
+
+
 def test_quota_malformata_rifiutata():
     assert parse_message("P.Bet. OVER 2.5\nInter v Milan\nQuota 1.2.3")["quota"] == ""
 

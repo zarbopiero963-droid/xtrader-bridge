@@ -166,6 +166,21 @@ def test_migrate_legacy_copia_quando_nuovo_assente(tmp_path):
     assert config_store.load_config(str(new))["provider"] == "VECCHIO"
 
 
+def test_migrate_legacy_e_atomico_non_lascia_temporanei(tmp_path):
+    # audit L3: la migrazione del config legacy ora è ATOMICA (tmp + os.replace, come
+    # save_config). Dopo la copia il contenuto è corretto e NON resta alcun temporaneo
+    # `.config_*` nella cartella di destinazione (scrittura completata o niente).
+    legacy = tmp_path / "legacy" / "config.json"
+    legacy.parent.mkdir()
+    legacy.write_text(json.dumps({"provider": "VECCHIO", "chat_id": "-100"}))
+    new = tmp_path / "appdata" / "config.json"
+    assert config_store.migrate_legacy_config(str(new), str(legacy)) is True
+    assert new.exists()
+    assert config_store.load_config(str(new))["provider"] == "VECCHIO"
+    # Nessun temporaneo residuo nella cartella di destinazione.
+    assert not [f for f in os.listdir(new.parent) if f.startswith(config_store.TMP_PREFIX)]
+
+
 def test_migrate_legacy_skip_se_nuovo_esiste(tmp_path):
     legacy = tmp_path / "legacy.json"
     legacy.write_text(json.dumps({"provider": "VECCHIO"}))

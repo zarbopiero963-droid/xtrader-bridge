@@ -146,7 +146,24 @@ def migrate_legacy_config(new_path: str = CONFIG_FILE,
                 and os.path.abspath(legacy_path) != os.path.abspath(new_path)
                 and os.path.exists(legacy_path)):
             _ensure_dir(new_path)
-            shutil.copyfile(legacy_path, new_path)
+            # Copia ATOMICA (audit L3): file temporaneo nella stessa cartella + flush/fsync +
+            # `os.replace`, come `save_config`. `shutil.copyfile` non è atomico: un'interruzione
+            # a metà (crash/blackout) lascerebbe un `config.json` troncato nella posizione nuova
+            # alla prima esecuzione, costringendo a ripartire dai default.
+            d = os.path.dirname(os.path.abspath(new_path)) or "."
+            fd, tmp = tempfile.mkstemp(dir=d, prefix=TMP_PREFIX, suffix=TMP_SUFFIX)
+            try:
+                with os.fdopen(fd, "wb") as f, open(legacy_path, "rb") as src:
+                    shutil.copyfileobj(src, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, new_path)
+            except BaseException:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
             return True
     except Exception as exc:   # noqa: BLE001 — best-effort, ma ora loggato (non silenzioso)
         # exc_info=True: l'except è ampio, il traceback aiuta a capire la causa.

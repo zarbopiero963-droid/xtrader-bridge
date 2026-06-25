@@ -35,17 +35,17 @@ Legenda stato: ⬜ da fare · 🔧 in PR aperta · ✅ mergiato.
 | C7 | `save_config` ritorna shallow-copy con nested condivisi (ora `deepcopy`) | `config_store.py` | #121 | ✅ |
 | C8 | Keyword conferma/notif-chat lette da snapshot mentre routing è live (ora config viva: `is_notification_chat` + keyword via `route_cfg`; `csv_path` resta di sessione) | `app.py`, `signal_router.py` | `fix/audit-104-c8` | 🔧 |
 
-### 🟢 LOW / NIT
-| ID | Finding | Stato |
-|----|---------|-------|
-| L1 | `name_mapping_store` non normalizza i nomi-profilo con whitespace | ⬜ |
-| L2 | `_safe_filename` accetta nomi device riservati Windows (`con`,`nul`) | ⬜ |
-| L3 | `migrate_legacy_config` usa `copyfile` non atomico | ⬜ |
-| L4 | Regex decimali duplicata in 3 moduli (drift) | ⬜ |
-| L5 | `bet_type` con classe di caratteri accentati ristretta | ⬜ |
-| L6 | `--ignore=tests/{e2e,slow,manual}` su dir inesistenti + marker inutilizzati | ⬜ |
-| L7 | `cache-dependency-path` su `requirements-dev.txt` non invalida su bump | ⬜ |
-| L8 | Commento `# v1` vago su `action-gh-release` | ⬜ |
+### 🟢 LOW / NIT — cluster in un'unica PR `fix/audit-104-low`
+| ID | Finding | Fix | Stato |
+|----|---------|-----|-------|
+| L1 | `name_mapping_store` non normalizza i nomi-profilo con whitespace | `_norm_profile_name`+`_find_store_key` (come `market_mapping_store`) | 🔧 |
+| L2 | `_safe_filename` accetta nomi device riservati Windows (`con`,`nul`) | mangling `_WIN_RESERVED` in `custom_parser` e `profile_store` | 🔧 |
+| L3 | `migrate_legacy_config` usa `copyfile` non atomico | copia atomica tmp+fsync+`os.replace` | 🔧 |
+| L4 | Regex decimali duplicata in 3+ moduli (drift) | frammento unico `numbers_re` (`DECIMAL`/`SIGNED_DECIMAL`) | 🔧 |
+| L5 | `bet_type` con classe di caratteri accentati ristretta | tokenizzazione per lettere Unicode `[^\W\d_]` | 🔧 |
+| L6 | `--ignore=tests/{e2e,slow,manual}` su dir inesistenti + marker inutilizzati | chiarito: marker auto-applicati per cartella (`conftest`); `--ignore` = difensivi forward-looking (documentati) | 🔧 |
+| L7 | `cache-dependency-path` su `requirements-dev.txt` non invalida su bump | glob `requirements*.txt`+`requirements*.in` in tutti i workflow | 🔧 |
+| L8 | Commento `# v1` vago su `action-gh-release` | commento esplicito sul pin SHA↔tag | 🔧 |
 
 ### Raggruppamento PR previsto (rivedibile)
 1. **A1** (selezione non inventata) — *questa PR*

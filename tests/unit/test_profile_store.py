@@ -22,6 +22,17 @@ def test_lista_vuota_se_cartella_inesistente(tmp_path):
     assert ps.list_profiles(str(tmp_path / "nope")) == []
 
 
+def test_safe_filename_evita_nomi_device_riservati_windows():
+    # audit L2: "con"/"nul"/"com1"… sono device riservati su Windows: un file "con.json"
+    # non è creabile. Vanno prefissati con "_". I nomi normali restano invariati.
+    assert ps._safe_filename("con") == "_con"
+    assert ps._safe_filename("NUL") == "_NUL"          # case-insensitive (mantiene il case)
+    assert ps._safe_filename("com1") == "_com1"
+    assert ps._safe_filename("lpt9") == "_lpt9"
+    assert ps._safe_filename("Prematch") == "Prematch"  # nome normale: invariato
+    assert ps._safe_filename("console") == "console"    # solo il match ESATTO è riservato
+
+
 def test_lista_ordinata_case_insensitive(tmp_path):
     for n in ("zeta", "Alfa", "beta"):
         ps.save_profile(n, {"chat_id": n}, dir_path=str(tmp_path))

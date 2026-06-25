@@ -9,11 +9,14 @@ incompleti — incl. quota mancante — è di recognition/validazione, PR-10).
 
 import re
 
+from . import numbers_re
+
 _HAS_ALPHA = re.compile(r'[A-Za-zÀ-ÿ]')
 _EMOJI_MARKERS = ('🏆', '🆚', '⚽', '⌚', '📊', '📈')
 
-# Numero ben formato (no "1.2.3"): intero con al più una parte decimale.
-_NUM = r'\d+(?:[.,]\d+)?'
+# Numero ben formato (no "1.2.3"): intero con al più una parte decimale. Frammento
+# condiviso (anti-drift, audit L4).
+_NUM = numbers_re.DECIMAL
 
 # "Quota X"/"@X" con marker HT/FT **adiacente** al numero (audit B2): cattura il numero.
 # Pattern UNICO condiviso da `_extract_quota` (presenza → modalità linea) e
@@ -188,8 +191,12 @@ def parse_message(text: str) -> dict:
     # "Punta"/"Banca"/"Back"/"Lay" (una sola parola), NON da testo libero: così
     # né "Lay Town" (squadra) né "Lay Cup"/"Banca League" (lega/nota) forzano il
     # lato sbagliato (BANCA). Default: BACK.
+    # Classe LETTERE Unicode `[^\W\d_]` invece di `[a-zàèéìòù]` (audit L5): la classe
+    # ristretta SPEZZAVA una parola-lato con un accento non elencato (es. "Bancä") in più
+    # token → len!=1 → riga saltata → bet_type restava al default BACK anche per un segnale
+    # LAY (lato OPPOSTO, safety-critical). Le lettere Unicode coprono tutti gli accenti.
     for raw in lines:
-        toks = re.findall(r'[a-zàèéìòù]+', raw.lower())
+        toks = re.findall(r'[^\W\d_]+', raw.lower())
         if len(toks) != 1:
             continue
         if toks[0] in ('banca', 'lay'):
