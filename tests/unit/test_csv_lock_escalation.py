@@ -50,6 +50,19 @@ def test_dopo_recovery_serve_di_nuovo_la_soglia():
     assert esc.record_failure() is True    # 2 → riscatta
 
 
+def test_reset_azzera_senza_segnalare_recovery():
+    # reset() (confini di sessione START/STOP): azzera contatore e stato, senza recovery.
+    esc = CsvLockEscalation(threshold=2)
+    esc.record_failure()
+    esc.record_failure()                   # escalato
+    esc.reset()
+    assert esc.count == 0
+    assert esc.escalated is False
+    # dopo reset serve di nuovo l'intera soglia per riscattare (niente leak tra sessioni)
+    assert esc.record_failure() is False
+    assert esc.record_failure() is True
+
+
 def test_messaggi_escalation_e_recovery():
     esc = CsvLockEscalation(threshold=1)
     esc.record_failure()

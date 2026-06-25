@@ -1030,6 +1030,9 @@ class App(ctk.CTk):
             return
 
         self._running = True
+        # Nuova sessione: azzera il contatore CSV-lock così i fallimenti di una sessione
+        # precedente non "colano" in questa e non causano una falsa escalation (Codex #156).
+        self._csv_lock.reset()
         # Modalità della SESSIONE (snapshot a START): l'esecuzione resta legata a questa
         # finché non si fa STOP/START. Il banner REALE deve riflettere ciò che ESEGUE, non
         # solo la config viva (Codex P1).
@@ -1079,6 +1082,7 @@ class App(ctk.CTk):
     def _stop(self):
         self._running = False
         self._session_real = False         # sessione finita: il banner torna a seguire la config viva
+        self._csv_lock.reset()             # #153 H2: lo stato di lock non sopravvive alla sessione (Codex #156)
         self._update_real_mode_banner()
         self._update_active_indicator(0)   # nessuna riga attiva dopo lo STOP (#136 p5)
         self._cancel_pending_autostart()   # uno STOP non deve essere annullato da un auto-start pendente (Codex P2)
@@ -1481,9 +1485,12 @@ class App(ctk.CTk):
 
     def _csv_write_ok(self) -> None:
         """Scrittura CSV riuscita: azzera il contatore di lock; se eravamo in escalation,
-        notifica il recovery una sola volta (#153 H2)."""
+        notifica il recovery una sola volta E aggiorna il pannello stato (#153 H2), così il
+        campo «Ultimo errore» non resta su «CSV bloccato» dopo lo sblocco (review Codex #156)."""
         if self._csv_lock.record_success():
-            self.after(0, lambda m=self._csv_lock.recovery_text(): self._log(m))
+            msg = self._csv_lock.recovery_text()
+            self.after(0, lambda m=msg: self._log(m))
+            self.after(0, lambda m=msg: self._set_last("error", m, "#66bb6a"))
 
     def _process_confirmation(self, text: str, cfg: dict, route_cfg: dict = None) -> None:
         """Interpreta una notifica XTrader (PR-23) rispetto ai segnali in attesa e,

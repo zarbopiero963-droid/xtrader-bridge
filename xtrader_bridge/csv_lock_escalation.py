@@ -80,6 +80,14 @@ class CsvLockEscalation:
             self._escalated = False
             return was
 
+    def reset(self) -> None:
+        """Azzera contatore e stato SENZA segnalare un recovery. Da chiamare ai confini di
+        sessione (START/STOP): i fallimenti di una sessione non devono "colare" nella
+        successiva e far scattare una falsa escalation (review Codex #156)."""
+        with self._lock:
+            self._failures = 0
+            self._escalated = False
+
     def text(self, path=None) -> str:
         """Messaggio di escalation visibile («CSV bloccato»), con il numero di tentativi."""
         msg = (f"🔒 CSV BLOCCATO: {self.count} scritture fallite di fila "
