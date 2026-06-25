@@ -88,9 +88,9 @@ risolte** da #104. Il resto è in gran parte **raccomandazioni architetturali/UX
 | #105-P2 P.Bet hardcoded (doc) | documentare che il parser P.Bet è solo compat/test, non live | 🔧 README: nota "non attivo nel live" + chiarito `active_parser=""` (questa PR) |
 
 ### NEEDS_MANUAL — decisione del proprietario (non auto-patchabili in sicurezza)
-| ID | Finding | Perché manuale |
+| ID | Finding | Esito |
 |----|---------|----------------|
-| #105-P1 `app.py` monolite | refactor runtime in moduli (`session`/`telegram_listener`/`signal_executor`/…) | 🔧 in lavorazione **incrementale** (#136 item 1): estrazione una micro-PR alla volta di sola logica pura, con test reali; `app.py` non è importabile in CI (no tkinter), quindi niente big-bang |
+| #105-P1 `app.py` monolite | refactor runtime in moduli (`session`/`telegram_listener`/`signal_executor`/…) | ✅ **affrontato (#136 item 1)** con estrazione **incrementale** (7 micro-PR, #143–#149): tutta la logica pura/safety-critical è ora in moduli testati in CI (vedi sotto). Il residuo non estraibile è solo lock/threading del listener/GUI tkinter (`app.py` non è importabile in CI), per scelta lasciato in `App` |
 
 > **Lavorazione issue #136 (chiusura "sul serio" dei NEEDS_MANUAL, una PR alla volta).**
 > I punti sopra vengono affrontati singolarmente. Già fatto:
@@ -196,6 +196,15 @@ risolte** da #104. Il resto è in gran parte **raccomandazioni architetturali/UX
 >   Estratto in `signal_queue.delay_until(expires_at, now)` (puro, clock monotòno audit A3),
 >   accanto a `next_expiry()`. Nessun cambio di comportamento osservabile. Test:
 >   `tests/unit/test_signal_queue.py` (futuro/adesso/passato + composizione con `next_expiry`).
+>
+> **#105-P1 / #136 item 1 — concluso.** I 7 slice (#143–#149) hanno estratto da `app.py` tutta
+> la logica pura e safety-critical in moduli testati in CI: `runtime_state` (path stato +
+> `build_guards`), `reconnect_policy.effective_delay`, `signal_outcome` (esiti non-WRITE/WRITE
+> + log conferma), `write_path.commit_signal` (cuore anti-doppia-scommessa: valuta→coda→
+> scrittura→rollback, ora testato con collaboratori reali) e `signal_queue.delay_until`. Il
+> residuo di `app.py` (lock `_queue_lock`, threading del listener Telegram, GUI tkinter) è per
+> natura non estraibile in moduli puri testabili e resta in `App` per scelta del proprietario:
+> con questo, **tutti e 6 i NEEDS_MANUAL tracciati in #136 sono affrontati**.
 
 I P3 restanti sono **giudizi positivi** (validazione prezzi/BetType, recognition mode,
 difesa CSV/chat) — nessuna azione.
