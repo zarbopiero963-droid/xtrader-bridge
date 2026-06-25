@@ -28,6 +28,7 @@ from .csv_writer import clear_stale_csv, init_csv, write_rows
 from . import (
     autostart,
     confirmation_reader,
+    csv_lock_escalation,
     dashboard_stats,
     diagnostics,
     event_log,
@@ -156,6 +157,9 @@ class App(ctk.CTk):
         self._queue = None
         self._queue_lock = threading.Lock()
         self._expire_timer = None
+        # Escalation visibile su CSV-lock persistente (#153 H2): conta i fallimenti di
+        # scrittura consecutivi e, oltre la soglia, segnala «CSV bloccato» (logica pura).
+        self._csv_lock = csv_lock_escalation.CsvLockEscalation()
         # Errori di validazione delle impostazioni avanzate dall'ultimo _save_config:
         # se non vuoto, _start si rifiuta di avviare (PR-13, finding Codex P1).
         self._adv_errors = []
@@ -1406,6 +1410,7 @@ class App(ctk.CTk):
             self.after(0, lambda e=write_error: self._set_last("error", f"scrittura CSV: {e}"))
             self.after(0, lambda e=write_error: self._log(
                 f"❌ Scrittura CSV fallita: {e}. Segnale non registrato (riprovabile)."))
+            self._csv_write_failed(write_error)   # #153 H2: escalation se il lock persiste
             self._schedule_expiry(path)           # i segnali ripristinati devono comunque scadere
             return
         if blocked_by_cap:
@@ -1414,6 +1419,7 @@ class App(ctk.CTk):
             # la scadenza così una riga si libera e il segnale potrà passare.
             if self._tracker is not None:
                 self._save_guard_state()
+            self._csv_write_ok()                  # #153 H2: write_rows è riuscita → recovery
             self.after(0, lambda: self._bump("discarded"))
             self.after(0, lambda m=multi_signal.blocked_message(self._queue.max_active):
                        self._log(m))
@@ -1424,6 +1430,7 @@ class App(ctk.CTk):
         # Scrittura riuscita: ora è sicuro persistere lo stato dei guardrail.
         if self._tracker is not None:
             self._save_guard_state()
+        self._csv_write_ok()                            # #153 H2: lock rientrato → recovery
         self.after(0, lambda: self._bump("written"))   # PR-14: riga scritta nel CSV
         self.after(0, lambda p=path, n=len(rows): self._note_csv(p, n))
         self.after(0, lambda n=len(rows): self._update_active_indicator(n))   # #136 p5 indicatore
@@ -1462,6 +1469,21 @@ class App(ctk.CTk):
             self.after(0, lambda s=outcome.last_signal, col=outcome.last_color:
                        self._set_last("signal", s, col))
         self.after(0, lambda m=outcome.log: self._log(m))
+
+    def _csv_write_failed(self, write_error) -> None:
+        """Registra un fallimento di scrittura CSV (#153 H2). Se i fallimenti consecutivi
+        raggiungono la soglia, ESCALA con uno stato visibile «CSV bloccato». La decisione è
+        pura in `csv_lock_escalation`; qui solo i side-effect GUI. NON tocca scrittura/coda,
+        quindi non altera retry né rollback (nessun rischio di doppia scrittura)."""
+        if self._csv_lock.record_failure():
+            self.after(0, lambda: self._set_last("error", "🔒 CSV bloccato da XTrader"))
+            self.after(0, lambda m=self._csv_lock.text(): self._log(m))
+
+    def _csv_write_ok(self) -> None:
+        """Scrittura CSV riuscita: azzera il contatore di lock; se eravamo in escalation,
+        notifica il recovery una sola volta (#153 H2)."""
+        if self._csv_lock.record_success():
+            self.after(0, lambda m=self._csv_lock.recovery_text(): self._log(m))
 
     def _process_confirmation(self, text: str, cfg: dict, route_cfg: dict = None) -> None:
         """Interpreta una notifica XTrader (PR-23) rispetto ai segnali in attesa e,
@@ -1509,8 +1531,10 @@ class App(ctk.CTk):
                 self.after(0, lambda e=write_error: self._set_last("error", f"CSV dopo conferma: {e}"))
                 self.after(0, lambda e=write_error: self._log(
                     f"❌ Aggiornamento CSV dopo conferma fallito: {e}. Riprovo a breve."))
+                self._csv_write_failed(write_error)   # #153 H2: escalation se il lock persiste
                 self._schedule_expiry(path, delay=_WRITE_RETRY_DELAY)
                 return
+            self._csv_write_ok()                  # #153 H2: scrittura riuscita → recovery
             # Guard su None (review Sourcery): se in futuro si aggiungono status
             # terminali senza messaggio, non si logga `None`.
             removed_log = signal_outcome.confirmation_removed_log(result.status)
@@ -1578,8 +1602,10 @@ class App(ctk.CTk):
             self.after(0, lambda e=write_error: self._set_last("error", f"CSV alla scadenza: {e}"))
             self.after(0, lambda e=write_error: self._log(
                 f"❌ Aggiornamento CSV alla scadenza fallito: {e}. Riprovo a breve."))
+            self._csv_write_failed(write_error)   # #153 H2: escalation se il lock persiste
             self._schedule_expiry(path, delay=_WRITE_RETRY_DELAY)
             return
+        self._csv_write_ok()                      # #153 H2: scrittura riuscita → recovery
         if expired:
             self.after(0, lambda p=path, n=len(rows): self._note_csv(p, n))
             self.after(0, lambda n=len(rows): self._update_active_indicator(n))   # #136 p5

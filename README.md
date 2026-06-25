@@ -313,6 +313,12 @@ Tutte queste protezioni sono **attive a runtime**:
    riga troncata, abbastanza per diagnosticare senza conservare il contenuto di canali
    privati. Per il debug puoi attivare `debug_message_payload` (tab *Sicurezza*) e loggare
    il payload completo — è una scelta consapevole.
+9. **CSV bloccato — escalation visibile (audit #105 H2).** Se XTrader tiene il file CSV
+   **lockato** e le scritture falliscono **più volte di fila**, oltre al retry automatico
+   il bridge lo rende evidente: dopo alcuni tentativi mostra lo stato **«🔒 CSV bloccato da
+   XTrader»** (con il numero di tentativi) e, appena una scrittura torna a riuscire, segnala
+   il **recupero**. Nessuna riga viene scritta due volte: è solo un avviso, il retry e il
+   rollback restano invariati.
 
 > 🔑 **Dove sta il Bot Token (e perché).** Per impostazione predefinita il token viene
 > salvato nel **keyring del sistema operativo** (su Windows il **Credential Manager**
