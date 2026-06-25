@@ -1197,7 +1197,10 @@ class App(ctk.CTk):
         # Privacy log (audit #105 P1): di default il TESTO del messaggio NON va in chiaro
         # nei log — solo hash + lunghezza + prima riga troncata (`log_privacy.redact_message`).
         # Il payload completo solo se l'utente attiva `debug_message_payload` (opt-in).
-        payload_full = as_bool_optin(cfg.get("debug_message_payload"))
+        # Letto dalla config VIVA (`route`), non dallo snapshot di sessione (Codex P2): così
+        # un OPT-OUT (l'utente disattiva il flag e salva a bridge attivo) ferma SUBITO il log
+        # completo, senza dover riavviare. `as_bool_optin` è fail-closed (allowlist).
+        payload_full = as_bool_optin(route.get("debug_message_payload"))
         # Debug (PR-3): traccia il messaggio in ingresso e la chat di origine. `_dbg`
         # va sul main thread (`_process` gira sul thread del listener Telegram).
         self.after(0, lambda m=log_privacy.redact_message(text, full=payload_full), c=chat_id:
