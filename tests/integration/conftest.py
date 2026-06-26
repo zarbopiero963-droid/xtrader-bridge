@@ -21,6 +21,7 @@ reale (Windows) i test usano comunque `object.__new__` + sink shadowati, quindi 
 aprono finestre.
 """
 
+import importlib
 import sys
 import threading
 import types
@@ -39,29 +40,55 @@ def _stub_module(name, **attrs):
     return mod
 
 
-def _install_gui_stubs():
-    if "customtkinter" not in sys.modules:
-        sys.modules["customtkinter"] = _stub_module(
+def _stub_specs():
+    return {
+        "customtkinter": lambda: _stub_module(
             "customtkinter",
             CTk=object,                                   # base class REALE, sottoclassabile
             set_appearance_mode=lambda *a, **k: None,
             set_default_color_theme=lambda *a, **k: None,
-        )
-    if "tkinter" not in sys.modules:
-        sys.modules["tkinter"] = _stub_module("tkinter")
-        sys.modules["tkinter.messagebox"] = _stub_module("tkinter.messagebox")
-    if "telegram" not in sys.modules:
-        sys.modules["telegram"] = _stub_module("telegram", Update=object)
-        sys.modules["telegram.ext"] = _stub_module(
+        ),
+        "tkinter": lambda: _stub_module("tkinter"),
+        "tkinter.messagebox": lambda: _stub_module("tkinter.messagebox"),
+        "telegram": lambda: _stub_module("telegram", Update=object),
+        "telegram.ext": lambda: _stub_module(
             "telegram.ext",
             ApplicationBuilder=MagicMock,
             MessageHandler=lambda *a, **k: ("MessageHandler", a, k),
             ContextTypes=MagicMock(),
-        )
+        ),
+    }
 
 
-_install_gui_stubs()
-import xtrader_bridge.app as _app_mod  # noqa: E402  (deve seguire l'install degli stub)
+def _import_app_with_temp_stubs():
+    """Importa `xtrader_bridge.app` con stub TEMPORANEI per i moduli GUI/Telegram
+    ASSENTI, poi li RIMUOVE da `sys.modules`.
+
+    Importante (review Codex #161): gli stub NON devono restare in `sys.modules`,
+    altrimenti leakano in altri test (es. gli `importorskip("customtkinter")` di
+    `tests/smoke/test_imports.py`, che devono SKIPPARE quando la dipendenza è assente)
+    e mascherano regressioni reali di packaging/import. Si usa il modulo REALE se
+    importabile (ambiente con Tk, es. Windows); si stubba solo ciò che manca e si
+    ripristina subito `sys.modules`. `app` conserva i propri riferimenti ai moduli
+    importati, quindi resta pienamente funzionante anche dopo la rimozione degli stub."""
+    added = []
+    for name, factory in _stub_specs().items():
+        if name in sys.modules:
+            continue                       # già presente (reale o stub di un'altra run)
+        try:
+            importlib.import_module(name)  # preferisci il modulo REALE se c'è
+        except ImportError:
+            sys.modules[name] = factory()  # assente: stub temporaneo
+            added.append(name)
+    try:
+        return importlib.import_module("xtrader_bridge.app")
+    finally:
+        # Rimuove SOLO gli stub aggiunti qui: niente leak verso il resto della suite.
+        for name in added:
+            sys.modules.pop(name, None)
+
+
+_app_mod = _import_app_with_temp_stubs()
 
 
 class _Widget:
