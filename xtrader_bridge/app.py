@@ -1688,6 +1688,8 @@ class App(ctk.CTk):
         from .betfair.sync_tab_gui import BetfairSyncPanel
         from .betfair.session import BetfairSession
         from .betfair.auth_client import BetfairAuthClient, LoginError
+        from .betfair.local_db import BetfairLocalDB
+        from .betfair.sync_engine import SyncEngine, OK as _SYNC_OK
 
         # UNA sola finestra hub: se è già aperta, si cambia scheda e la si porta in primo
         # piano invece di aprirne una seconda identica (CodeRabbit). `winfo_exists` è 0 se
@@ -1796,10 +1798,27 @@ class App(ctk.CTk):
             except LoginError as ex:        # messaggio già safe (nessun segreto)
                 self._log(f"❌ Login Betfair fallito: {ex}")
 
+        # DB locale + motore di sync (UNA istanza per processo: il lock anti-doppia
+        # sync deve persistere tra le aperture della finestra Strumenti).
+        if getattr(self, "_betfair_engine", None) is None:
+            _bf_db = BetfairLocalDB(runtime_state.betfair_db_path(config_dir()))
+            self._betfair_engine = SyncEngine(_bf_db, self._betfair_session)
+
+        def _betfair_sync(sports):
+            """Callback «Sincronizza ora»: esegue il motore e logga il riepilogo safe."""
+            res = self._betfair_engine.run(sports)
+            if res.status == _SYNC_OK:
+                self._log(f"🔄 Sync Betfair OK — sport {res.sports}: "
+                          f"+{res.new_events} eventi, +{res.new_markets} mercati, "
+                          f"+{res.new_selections} selezioni, {res.deactivated} disattivati.")
+            else:
+                self._log("⚠️ Sync Betfair non eseguita: "
+                          + ("; ".join(res.errors) if res.errors else res.status))
+
         def _make_betfair(parent):
             """Crea la tab Betfair Sync (credenziali locali + stato login/sync)."""
             return BetfairSyncPanel(parent, session=self._betfair_session,
-                                    on_login=_betfair_login)
+                                    on_login=_betfair_login, on_sync=_betfair_sync)
 
         panels = [
             ("🧩 Parser", _make_parser),
