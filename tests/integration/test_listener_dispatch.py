@@ -100,6 +100,10 @@ def _drive_run_bot(make_app, app_mod, monkeypatch, config):
         return _B()
 
     monkeypatch.setattr(app_mod, "ApplicationBuilder", _builder_factory)
+    # Forza MessageHandler allo stub-tuple anche quando PTB è installato (es. job CI):
+    # così il dispatch è deterministico e indipendente dalla versione di PTB (niente
+    # dipendenza da attributi interni come `.callback`).
+    monkeypatch.setattr(app_mod, "MessageHandler", lambda *a, **k: ("MessageHandler", a, k))
     # _handle dispatcha a questi: shadowati per CATTURARE l'instradamento (la logica di
     # _process/_process_confirmation è testata in test_app_runtime_glue.py).
     a._process = lambda *args, **kw: a.processed.append((args, kw))
@@ -110,9 +114,15 @@ def _drive_run_bot(make_app, app_mod, monkeypatch, config):
 
 
 def _handle_of(tg):
-    # add_handler ha ricevuto il tuple del MessageHandler finto: ("MessageHandler", (filters.ALL, _handle), {})
     assert tg.handlers, "nessun handler registrato"
-    return tg.handlers[0][1][1]
+    h = tg.handlers[0]
+    # Telegram ASSENTE (CI headless di default): MessageHandler è lo stub finto del
+    # conftest, un tuple ("MessageHandler", (filters.ALL, _handle), {}).
+    if isinstance(h, tuple):
+        return h[1][1]
+    # Telegram INSTALLATO (es. job CI con python-telegram-bot): MessageHandler è quello
+    # vero di PTB, che conserva la callback in `.callback`.
+    return h.callback
 
 
 # ── test ─────────────────────────────────────────────────────────────────────
