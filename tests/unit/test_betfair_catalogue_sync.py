@@ -291,3 +291,49 @@ def test_http_catalogue_solleva_su_errore_api():
 
     with pytest.raises(RuntimeError):
         cc._http_catalogue(["1.1"], "tok", "key", _poster=_poster)
+
+
+# ── fail-closed su selezione sport vuota (Codex) ──────────────────────────────
+
+def test_sync_sport_vuoti_o_ignoti_fallisce(db):
+    with pytest.raises(ValueError):
+        _sync(db).sync([])                      # lista vuota
+    with pytest.raises(ValueError):
+        _sync(db).sync(["Cricket", "Freccette"])  # nomi non riconosciuti
+    # e non deve aver registrato alcuna sync run
+    assert db.fetchall("betfair_sync_runs") == []
+
+
+# ── marker allocato dentro la transazione: serializzazione (Codex) ────────────
+
+def test_marker_allocato_dentro_la_transazione(db):
+    seen = {}
+
+    def _nav():
+        seen["tx_depth"] = db._tx_depth      # la sync gira dentro la transazione
+        return _menu()
+
+    CatalogueSync(db, navigation_transport=_nav,
+                  catalogue_transport=lambda mids: _catalogue()).sync(["Calcio"])
+    assert seen["tx_depth"] >= 1
+
+
+# ── dettagli evento dal catalogue persistiti (Codex) ──────────────────────────
+
+def test_evento_arricchito_dal_catalogue(db):
+    # Il menu ha l'evento SENZA nome; il catalogue porta nome/partecipanti.
+    menu = {"type": "GROUP", "children": [
+        {"type": "EVENT_TYPE", "id": "1", "name": "Soccer", "children": [
+            {"type": "EVENT", "id": "e1", "children": [
+                {"type": "MARKET", "id": "1.101", "name": "Match Odds"}]}]}]}
+    cat = [{"marketId": "1.101", "marketName": "Match Odds",
+            "description": {"marketType": "MATCH_ODDS"},
+            "event": {"id": "e1", "name": "Inter v Milan",
+                      "openDate": "2026-07-01T18:00:00Z"},
+            "runners": [{"selectionId": 1, "runnerName": "Inter", "handicap": 0}]}]
+    CatalogueSync(db, navigation_transport=lambda: menu,
+                  catalogue_transport=lambda mids: cat).sync(["Calcio"])
+    ev = db.get_events()[0]
+    assert ev["name"] == "Inter v Milan"
+    assert ev["participant_1"] == "Inter" and ev["participant_2"] == "Milan"
+    assert ev["event_type_id"] == "1"        # sport preservato dal menu

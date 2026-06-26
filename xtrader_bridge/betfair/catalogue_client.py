@@ -266,10 +266,20 @@ class CatalogueSync:
         safety.assert_read_only(CATALOGUE_OP)
 
         nav_transport, cat_transport = self._resolve_transports()
-        marker = self.db.new_sync_marker()   # fuori dalla tx: il contatore resta monotòno
         etids = event_type_ids_for(sports)
+        # Fail-closed: nessuno sport valido → NON eseguire una sync "vuota" che
+        # registrerebbe OK senza disattivare nulla, lasciando attivi record stantii.
+        if not etids:
+            raise ValueError(
+                "Nessuno sport valido selezionato per la sync Betfair "
+                "(lista vuota o nomi non riconosciuti).")
 
+        # La transazione tiene il lock del DB per TUTTA la sync: allocare il marker
+        # QUI dentro serializza le sync concorrenti sullo stesso DB e garantisce che
+        # l'ordine dei marker coincida con l'ordine di commit (Codex). Su rollback il
+        # marker viene annullato con il resto: i marker committati restano monotòni.
         with self.db.transaction():
+            marker = self.db.new_sync_marker()
             menu = nav_transport()
             records = parse_navigation(menu, etids)
 
@@ -294,19 +304,29 @@ class CatalogueSync:
                     self.db.upsert_market(mk["id"], ev_id, et["id"], mk.get("name"),
                                           mk.get("marketType"), seen_at=marker)
                     market_meta[mk["id"]] = {"event_id": ev_id, "event_type_id": et["id"],
+                                             "competition_id": comp_id,
                                              "name": mk.get("name"),
                                              "marketType": mk.get("marketType")}
 
             market_ids = list(market_meta.keys())
 
-            # Arricchimento con il catalogue: riscrive market_type/market_name reali
-            # (il menu può non averli) e upserta le selezioni. NON tocca event_type_id
-            # con valori vuoti (resta quello del menu, per lo scoping per sport).
+            # Arricchimento con il catalogue: riscrive market_type/market_name reali e
+            # ri-upserta l'EVENTO con nome/openDate/partecipanti autorevoli del catalogue
+            # (preservando event_type_id/competition_id dal menu, per lo scoping). Poi
+            # upserta le selezioni.
             new_selections = 0
             if market_ids:
                 catalogue = parse_market_catalogue(cat_transport(market_ids))
                 for market_id, info in catalogue.items():
                     meta = market_meta.get(market_id, {})
+                    cat_ev = info.get("event") or {}
+                    ev_id = meta.get("event_id") or cat_ev.get("id")
+                    if ev_id and cat_ev.get("name"):
+                        p1, p2 = split_participants(cat_ev.get("name"))
+                        self.db.upsert_event(
+                            ev_id, meta.get("event_type_id", ""),
+                            meta.get("competition_id", ""), cat_ev.get("name"),
+                            cat_ev.get("openDate"), p1, p2, seen_at=marker)
                     self.db.upsert_market(
                         market_id, meta.get("event_id", ""),
                         meta.get("event_type_id", ""),
