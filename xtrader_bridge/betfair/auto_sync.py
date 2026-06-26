@@ -68,7 +68,7 @@ class AutoSyncScheduler:
     - `on_summary(result)`: callback opzionale per il riepilogo safe in GUI/log."""
 
     def __init__(self, *, auth, engine, get_config, is_bridge_open=None,
-                 on_summary=None, load_state=None, save_state=None):
+                 on_summary=None, load_state=None, save_state=None, on_state_error=None):
         self.auth = auth
         self.engine = engine
         self.get_config = get_config
@@ -78,6 +78,9 @@ class AutoSyncScheduler:
         # in RAM e un riavvio nella stessa ora ri-eseguirebbe l'auto-sync (Codex).
         self._load_state = load_state
         self._save_state = save_state
+        # Callback opzionale invocato se il salvataggio dello stato fallisce: la run è
+        # andata bene ma la guardia 'una volta al giorno' NON è durabile (Codex).
+        self._on_state_error = on_state_error
         self._last_run_key = None
         self._loaded = False
         # Gate in-flight: impedisce due cicli sovrapposti nella finestra di login (prima
@@ -131,8 +134,14 @@ class AutoSyncScheduler:
                 if self._save_state:
                     try:
                         self._save_state(self._last_run_key)
-                    except Exception:   # noqa: BLE001 — persistenza best-effort
-                        pass
+                    except Exception as ex:   # noqa: BLE001
+                        # La run è ok ma lo stato NON è durabile: segnalalo (un riavvio
+                        # nella stessa ora potrebbe ri-eseguire) invece di tacere (Codex).
+                        if self._on_state_error:
+                            try:
+                                self._on_state_error(ex)
+                            except Exception:   # noqa: BLE001
+                                pass
             return result
         finally:
             with self._gate:
@@ -141,16 +150,32 @@ class AutoSyncScheduler:
     def _cycle(self, sports, creds):
         """Auto login → sync → auto logout. Il logout è SEMPRE in `finally`.
 
-        Dopo il login aggiorna la App Key del motore con quella delle credenziali
-        appena usate (`set_app_key`), così la sync non invia una App Key vecchia in
-        cache da un login manuale precedente (Codex)."""
+        Prenota il lock del motore PRIMA del login (se il motore lo supporta): se una
+        sync manuale è in corso, NON esegue login/logout sulla sessione condivisa
+        (eviterebbe di sloggare la tab manuale) e ritorna `BUSY` (Codex). Dopo il login
+        aggiorna la App Key del motore con quella delle credenziali appena usate, così
+        la sync non invia una App Key vecchia in cache (Codex)."""
+        reserve = getattr(self.engine, "reserve", None)
+        release = getattr(self.engine, "release", None)
+        reserved = False
+        if reserve is not None and release is not None:
+            if not reserve():     # sync manuale già in corso: non toccare la sessione
+                result = SyncResult(status="BUSY",
+                                    errors=["Sync manuale in corso: auto-sync rimandata."])
+                if self.on_summary:
+                    self.on_summary(result)
+                return result
+            reserved = True
+
         result = None
         try:
             self.auth.login(creds)
             set_app_key = getattr(self.engine, "set_app_key", None)
             if set_app_key:
                 set_app_key(getattr(creds, "app_key", None))
-            result = self.engine.run(sports)
+            # Con lock già prenotato, run NON lo riacquisisce (locked=True).
+            result = (self.engine.run(sports, locked=True) if reserved
+                      else self.engine.run(sports))
         except Exception as ex:   # noqa: BLE001 — fallimento safe, niente crash/segreti
             result = SyncResult(status=FAILED,
                                 errors=[f"Auto-sync fallita ({type(ex).__name__})."])
@@ -159,6 +184,8 @@ class AutoSyncScheduler:
                 self.auth.logout()
             except Exception:     # noqa: BLE001 — il logout best-effort non deve propagare
                 pass
+            if reserved:
+                release()
         if self.on_summary:
             self.on_summary(result)
         return result

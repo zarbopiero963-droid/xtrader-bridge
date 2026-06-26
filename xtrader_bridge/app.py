@@ -184,8 +184,10 @@ class App(ctk.CTk):
         # che la UI è pronta, così log/stato sono visibili. Default OFF.
         self._autostart_after_id = self.after(400, self._maybe_auto_start)
         # Tick auto-sync Betfair (issue #86 PR-P8): parte mentre il bridge è aperto;
-        # internamente scatta solo se l'auto-sync è attiva e all'orario impostato.
-        self._autosync_after_id = self.after(60_000, self._betfair_autosync_tick)
+        # internamente scatta solo se l'auto-sync è attiva e all'orario impostato. Il
+        # PRIMO check è quasi subito (non +60s) così aprire il bridge DENTRO l'ora
+        # configurata non manca la run; poi si ri-arma ogni 60s.
+        self._autosync_after_id = self.after(2_000, self._betfair_autosync_tick)
 
     def _maybe_auto_start(self) -> None:
         """Avvia il listener all'apertura se `auto_start_listener` è attivo e la config
@@ -960,6 +962,13 @@ class App(ctk.CTk):
         def _save_state(key):
             atomic_io.atomic_write_json(_state_path, key)   # scrittura atomica
 
+        def _on_state_error(_ex):
+            # Stato auto-sync non persistito: avvisa (un riavvio nella stessa ora
+            # potrebbe ri-eseguire). Sul main thread, una volta.
+            self.after(0, lambda: self._log(
+                "⚠️ Auto-sync Betfair: impossibile salvare lo stato (la guardia "
+                "'una volta al giorno' potrebbe non valere dopo un riavvio)."))
+
         def _on_summary(res):
             def _report():
                 ok = getattr(res, "ok", False)
@@ -977,7 +986,8 @@ class App(ctk.CTk):
         self._betfair_autosync_obj = auto_sync.AutoSyncScheduler(
             auth=self._betfair_auth_client(), engine=self._betfair_sync_engine(),
             get_config=_get_config, is_bridge_open=lambda: True,
-            on_summary=_on_summary, load_state=_load_state, save_state=_save_state)
+            on_summary=_on_summary, load_state=_load_state, save_state=_save_state,
+            on_state_error=_on_state_error)
         return self._betfair_autosync_obj
 
     def _init_guards(self, cfg: dict) -> None:
@@ -1842,6 +1852,18 @@ class App(ctk.CTk):
                         _panel.refresh()
                     except Exception:       # noqa: BLE001
                         pass
+            # La tab Betfair ha controlli auto-sync (enabled/hour/sport) caricati dalla
+            # config: dopo un profilo va ricaricata, altrimenti un suo Salva riscrive i
+            # valori vecchi sopra il profilo (Codex).
+            _bf_panel = getattr(self, "_betfair_panel", None)
+            if _bf_panel is not None:
+                try:
+                    _bf_panel.refresh_autosync(
+                        config_store.as_bool_optin(saved.get("betfair_auto_sync", False)),
+                        saved.get("betfair_auto_sync_hour", 23),
+                        saved.get("betfair_sync_sports"))
+                except Exception:           # noqa: BLE001
+                    pass
             if ok:
                 self._log("📁 Profilo caricato e applicato (token invariato).")
             else:

@@ -210,6 +210,64 @@ def test_cycle_aggiorna_app_key_engine():
     assert eng.app_key_set == "KeyCorrente"
 
 
+def test_reserve_fallita_non_logga_e_ritorna_busy():
+    # Se il motore è già prenotato (sync manuale in corso), l'auto-sync NON deve
+    # fare login/logout sulla sessione condivisa (Codex): ritorna BUSY.
+    class _EngineReserve(_Engine):
+        def reserve(self, blocking=False):
+            return False     # manuale in corso
+
+        def release(self):
+            pass
+
+    auth, eng = _Auth(), _EngineReserve()
+    sched = AutoSyncScheduler(auth=auth, engine=eng, get_config=_cfg())
+    res = sched.maybe_run(_NOW_23)
+    assert res.status == "BUSY"
+    assert auth.calls == []          # niente login/logout sulla sessione condivisa
+    assert eng.ran is False
+
+
+def test_reserve_ok_login_sync_logout_e_release():
+    class _EngineReserve(_Engine):
+        def __init__(self):
+            super().__init__()
+            self.events = []
+
+        def reserve(self, blocking=False):
+            self.events.append("reserve")
+            return True
+
+        def release(self):
+            self.events.append("release")
+
+        def run(self, sports, *, locked=False):
+            self.events.append(f"run(locked={locked})")
+            return super().run(sports)
+
+    auth, eng = _Auth(), _EngineReserve()
+    sched = AutoSyncScheduler(auth=auth, engine=eng, get_config=_cfg())
+    res = sched.maybe_run(_NOW_23)
+    assert res.status == OK
+    assert auth.calls == ["login", "logout"]
+    assert eng.events == ["reserve", "run(locked=True)", "release"]
+
+
+def test_on_state_error_invocato_se_save_fallisce():
+    errors = []
+
+    def _bad_save(_k):
+        raise OSError("disco pieno")
+
+    auth, eng = _Auth(), _Engine()
+    sched = AutoSyncScheduler(auth=auth, engine=eng, get_config=_cfg(),
+                              save_state=_bad_save,
+                              on_state_error=lambda ex: errors.append(type(ex).__name__))
+    res = sched.maybe_run(_NOW_23)
+    assert res.status == OK                  # la run è ok…
+    assert errors == ["OSError"]             # …ma il fallimento di save è segnalato
+
+
 def test_logout_chiamato_anche_se_login_fallisce():
     class _BadAuth(_Auth):
         def login(self, creds):

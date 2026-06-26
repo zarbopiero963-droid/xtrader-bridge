@@ -192,6 +192,19 @@ class BetfairSyncPanel(ctk.CTkFrame):
                                      normalize_hour(self._autosync_hour.get()),
                                      self._selected_sports())
 
+    def refresh_autosync(self, enabled, hour, sports):
+        """Ricarica i controlli auto-sync da una config aggiornata (es. dopo aver
+        applicato un profilo, così la tab non sovrascrive i valori del profilo con
+        quelli stantii — Codex). Aggiorna anche le credenziali mascherate."""
+        self._autosync_var.set(bool(enabled))
+        self._autosync_hour.delete(0, "end")
+        self._autosync_hour.insert(0, str(normalize_hour(hour)))
+        if sports is not None:
+            for sport, var in self._sport_vars.items():
+                var.set(sport in sports)
+        self._reload()
+        self._refresh_buttons()
+
     def set_autosync_status(self, last=None, next_=None, state=None):
         """Aggiorna le etichette di stato auto-sync (chiamato dall'app dopo un run)."""
         if last is not None:
