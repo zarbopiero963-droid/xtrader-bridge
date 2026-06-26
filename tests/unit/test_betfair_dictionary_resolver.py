@@ -153,3 +153,26 @@ def test_handicap_con_virgola_disambigua(db):
     ids = r.resolve_ids(sport="Calcio", event_name="Inter - Milan",
                         market_type="ASIAN_HANDICAP", selection_name="Inter", handicap="1,5")
     assert ids.get("SelectionId") == "s_15"
+
+
+def test_singola_selezione_richiede_accordo_handicap(db):
+    # UNA sola selezione col nome richiesto, ma a handicap 1.5: una riga con Handicap 0
+    # (default) NON deve essere arricchita con quella SelectionId (punterebbe a una linea
+    # diversa). Serve accordo sull'handicap anche nel caso a runner singolo (Codex P1).
+    m = db.new_sync_marker()
+    db.upsert_event("e", "1", "c", "Inter v Milan",
+                    participant_1="Inter", participant_2="Milan", seen_at=m)
+    db.upsert_market("mk", "e", "1", "Asian Handicap", "ASIAN_HANDICAP", seen_at=m)
+    db.upsert_selection("mk", "s_15", "Inter", handicap=1.5, seen_at=m)   # UNICA "Inter"
+    r = DictionaryResolver(db)
+    # handicap di riga 0 (default contratto) ≠ 1.5 → nessun ID (fallback nomi).
+    assert r.resolve_ids(sport="Calcio", event_name="Inter - Milan",
+                         market_type="ASIAN_HANDICAP", selection_name="Inter",
+                         handicap="0") == {}
+    # handicap assente → trattato come 0 → comunque nessun match con 1.5.
+    assert r.resolve_ids(sport="Calcio", event_name="Inter - Milan",
+                         market_type="ASIAN_HANDICAP", selection_name="Inter") == {}
+    # handicap di riga 1.5 → combacia → ID risolto.
+    assert r.resolve_ids(sport="Calcio", event_name="Inter - Milan",
+                         market_type="ASIAN_HANDICAP", selection_name="Inter",
+                         handicap="1.5")["SelectionId"] == "s_15"

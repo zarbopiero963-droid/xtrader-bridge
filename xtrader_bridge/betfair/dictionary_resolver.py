@@ -148,22 +148,28 @@ class DictionaryResolver:
         return _unique(matches)
 
     def _match_selection(self, market_id, selection_name, handicap):
-        """SelectionId UNICO del mercato il cui `runner_name` combacia (normalizzato);
-        se più selezioni hanno lo stesso nome, prova a disambiguare con l'`handicap`;
-        altrimenti ``None``."""
+        """SelectionId UNICO del mercato il cui `runner_name` combacia (normalizzato) **e**
+        il cui handicap **coincide** con quello della riga; altrimenti ``None``.
+
+        L'handicap deve SEMPRE concordare, anche con una sola selezione omonima (Codex P1):
+        altrimenti una riga con `Handicap=0` verrebbe arricchita con la SelectionId della
+        linea +1.5 — un ID che punta a un mercato/linea diverso da quello del segnale. Il
+        confronto è numerico (virgola→punto→float); handicap assente/non numerico = 0
+        (default di contratto), così i mercati senza handicap (es. Match Odds, selezioni a
+        0) combaciano normalmente."""
         target = normalize(selection_name)
         if not target:
             return None
-        sels = [s for s in _active(self.db.get_selections(market_id))
-                if normalize(s.get("runner_name", "")) == target]
-        if len(sels) == 1:
-            return sels[0].get("selection_id")
-        if len(sels) > 1:
-            hcap = _hcap_value(handicap)
-            if hcap is not None:
-                # Confronto NUMERICO (virgola→punto→float): "1,5" del parser combacia con
-                # il REAL 1.5 del DB; senza, selezioni omonime resterebbero ambigue (Codex).
-                by_h = [s for s in sels if _hcap_value(s.get("handicap")) == hcap]
-                if len(by_h) == 1:
-                    return by_h[0].get("selection_id")
-        return None
+        row_h = _hcap_value(handicap)
+        if row_h is None:
+            row_h = 0.0
+        matches = []
+        for s in _active(self.db.get_selections(market_id)):
+            if normalize(s.get("runner_name", "")) != target:
+                continue
+            sel_h = _hcap_value(s.get("handicap"))
+            if sel_h is None:
+                sel_h = 0.0
+            if sel_h == row_h:
+                matches.append(s.get("selection_id"))
+        return _unique(matches)
