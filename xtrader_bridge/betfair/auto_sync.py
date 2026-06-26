@@ -175,10 +175,12 @@ class AutoSyncScheduler:
         (CodeRabbit). Dopo il login aggiorna la App Key del motore con quella delle
         credenziali appena usate, così la sync non invia una App Key vecchia (Codex).
 
-        Il logout viene eseguito **solo se il login è riuscito** (`logged_in`): se
-        `auth.login` fallisce (cert mancante, credenziali stantie) NON ha sostituito il
-        token di un'eventuale sessione manuale, quindi un logout incondizionato
-        sloggherebbe l'utente nonostante l'auto-login non abbia stabilito nulla (Codex)."""
+        Il logout viene eseguito **solo se è stato questo ciclo a fare login** (`logged_in`):
+        - se `auth.login` fallisce (cert mancante, credenziali stantie) NON ha sostituito il
+          token di un'eventuale sessione manuale;
+        - se la sessione condivisa è **già loggata** (login manuale dalla tab, idle) il ciclo
+          NON fa login/logout e riusa la sessione esistente per la sync, così non slogga
+          l'utente nonostante nessuna sync manuale fosse in corso (Codex)."""
         reserve = getattr(self.engine, "reserve", None)
         release = getattr(self.engine, "release", None)
         reserved = False
@@ -191,14 +193,20 @@ class AutoSyncScheduler:
             reserved = True
 
         creds = self.get_credentials()
+        # Sessione condivisa già attiva (login manuale idle)? Allora NON fare login/logout:
+        # li rifaremmo sulla stessa sessione e alla fine la chiuderemmo, sloggando l'utente
+        # anche senza sync manuale in corso. Riusa la sessione esistente per la sync (Codex).
+        session = getattr(self.auth, "session", None)
+        pre_logged = bool(getattr(session, "is_logged_in", False))
         logged_in = False
         result = None
         try:
-            self.auth.login(creds)
-            logged_in = True
-            set_app_key = getattr(self.engine, "set_app_key", None)
-            if set_app_key:
-                set_app_key(getattr(creds, "app_key", None))
+            if not pre_logged:
+                self.auth.login(creds)
+                logged_in = True
+                set_app_key = getattr(self.engine, "set_app_key", None)
+                if set_app_key:
+                    set_app_key(getattr(creds, "app_key", None))
             # Con lock già prenotato, run NON lo riacquisisce (locked=True).
             result = (self.engine.run(sports, locked=True) if reserved
                       else self.engine.run(sports))

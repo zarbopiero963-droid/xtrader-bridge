@@ -209,7 +209,13 @@ Non verificato in automatico: la chiamata di rete reale a navigation/catalogue.
   che l'utente ha impostato, non valori stantii (CodeRabbit). `is_bridge_open` è legato a
   `not self._closing` (fail-closed: un worker lanciato a ridosso della chiusura non parte).
   `maybe_run` normalizza l'ora una volta e la usa anche per la `run_key` di successo, così
-  un `hour` non numerico non crasha DOPO una sync riuscita (CodeRabbit).
+  un `hour` non numerico non crasha DOPO una sync riuscita (CodeRabbit). Se la sessione
+  condivisa è **già loggata** (login manuale idle), `_cycle` NON fa login/logout e riusa la
+  sessione esistente: non slogga l'utente quando nessuna sync manuale è in corso (Codex).
+  Cambiare/abilitare l'auto-sync fa un **kick immediato** del tick (cancellando quello
+  pendente, chain unica), così abilitarla a cavallo dell'ora non perde la finestra; il
+  callback parte dalla config **live** e sovrappone solo le chiavi auto-sync, senza
+  riscrivere impostazioni in memoria con uno snapshot di disco stantio (Codex).
 
 #### Smoke test manuale PR-P8 (Windows)
 1. Attiva «Auto sincronizza dizionario», imposta l'orario all'ora corrente: entro un

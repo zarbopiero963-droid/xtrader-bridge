@@ -1996,7 +1996,11 @@ class App(ctk.CTk):
             Gli sport selezionati vengono salvati con i flag, così l'auto-sync usa
             esattamente quelli scelti (Codex). Un salvataggio fallito è segnalato come
             tale invece di dichiarare ON (Codex)."""
-            cfg = self._load_config()
+            # Parti dalla config LIVE in memoria (non da una rilettura del disco): se un
+            # save precedente è fallito, il disco è stantio e ne riscriveremmo sopra le
+            # impostazioni attive (source_chats/dry_run/…) sovrascrivendo `self._config`
+            # con uno snapshot vecchio. Sovrapponi SOLO le chiavi auto-sync (Codex).
+            cfg = dict(self._config) if isinstance(self._config, dict) else self._load_config()
             cfg["betfair_auto_sync"] = bool(enabled)
             cfg["betfair_auto_sync_hour"] = int(hour)
             if sports is not None:
@@ -2006,6 +2010,19 @@ class App(ctk.CTk):
             self._save_ok = ok
             if ok:
                 self._log(f"🔵 Auto-sync Betfair {'ON' if enabled else 'OFF'} (orario {hour:02d}).")
+                # Kick immediato: abilitando o portando l'ora a quella corrente subito dopo
+                # un tick a 60s, si perderebbe la finestra a cavallo dell'ora (es. 23:59:30
+                # → prossimo check dopo mezzanotte, ora 00 ≠ 23). Cancella il tick pendente
+                # e rilancia subito; il tick si ri-arma da solo, così la chain resta unica
+                # (niente doppio timer) — Codex.
+                if not self._closing:
+                    _prev = getattr(self, "_autosync_after_id", None)
+                    if _prev is not None:
+                        try:
+                            self.after_cancel(_prev)
+                        except Exception:   # noqa: BLE001 — id già scaduto/invalido
+                            pass
+                    self._autosync_after_id = self.after(0, self._betfair_autosync_tick)
             else:
                 self._log("⚠️ Auto-sync Betfair: salvataggio config FALLITO "
                           "(impostazione NON persistita). Controlla permessi/spazio.")

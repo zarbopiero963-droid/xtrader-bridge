@@ -161,6 +161,26 @@ def test_maybe_run_non_due_volte_stesso_giorno():
     assert auth.calls == []
 
 
+def test_sessione_manuale_idle_non_viene_sloggata():
+    # Se la sessione condivisa è GIÀ loggata (login manuale dalla tab, idle), l'auto-sync
+    # NON deve fare login/logout: riusa la sessione e la lascia intatta (Codex).
+    class _Session:
+        is_logged_in = True
+
+    class _AuthWithSession(_Auth):
+        def __init__(self):
+            super().__init__()
+            self.session = _Session()
+
+    auth, eng = _AuthWithSession(), _Engine(SyncResult(status=OK))
+    sched = AutoSyncScheduler(auth=auth, engine=eng, get_config=_cfg(),
+                              get_credentials=lambda: "CREDS")
+    res = sched.maybe_run(_NOW_23)
+    assert res.status == OK
+    assert eng.ran is True                # la sync gira sulla sessione esistente
+    assert auth.calls == []               # NESSUN login/logout: sessione manuale preservata
+
+
 def test_logout_chiamato_anche_se_sync_fallisce():
     auth, eng = _Auth(), _Engine(raise_on_run=True)
     sched = AutoSyncScheduler(auth=auth, engine=eng, get_config=_cfg())
