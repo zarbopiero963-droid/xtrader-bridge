@@ -84,6 +84,13 @@ DEFAULTS = {
     # consapevole). Default OFF = privacy on; coerce via `as_bool_optin` (ALLOWLIST
     # fail-closed: solo un "sì" esplicito riconosciuto attiva, refusi/sconosciuti → OFF).
     "debug_message_payload":        False,
+    # Auto Sync del dizionario Betfair (issue #86 PR-P8). Default OFF: l'auto-sync
+    # parte solo se l'utente la attiva esplicitamente. `betfair_auto_sync_hour` è
+    # l'ora locale (HH, 0-23) in cui scatta una volta al giorno; default 23.
+    # `betfair_sync_sports` è la lista degli sport da sincronizzare.
+    "betfair_auto_sync":            False,
+    "betfair_auto_sync_hour":       23,
+    "betfair_sync_sports":          ["Calcio", "Tennis", "Basket", "Rugby Union"],
 }
 
 

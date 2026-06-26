@@ -43,8 +43,8 @@ non vengono duplicate.
 | PR-P4  | Betfair Auth Client Italia                  | login/logout cert + Delayed App Key, token in RAM                      | merged (#168) |
 | PR-P5  | Database Locale Betfair Multi-sport         | tabelle locali sport/comp/event/market/selection/sync/mapping         | merged (#169) |
 | PR-P6  | Betfair Navigation + Catalogue Sync         | navigation menu + listMarketCatalogue, upsert read-only               | merged (#170) |
-| PR-P7  | Sync Engine Manuale                         | motore unico sync manuale + riepilogo safe                            | in corso |
-| PR-P8  | Betfair Auto Sync Scheduler locale          | scheduler locale auto login→sync→auto logout                          | TODO  |
+| PR-P7  | Sync Engine Manuale                         | motore unico sync manuale + riepilogo safe                            | merged (#171) |
+| PR-P8  | Betfair Auto Sync Scheduler locale          | scheduler locale auto login→sync→auto logout                          | in corso |
 | PR-P9  | Parser Personalizzato Multi-sport / profilo | sport nel parser, campi core generici                                 | TODO  |
 | PR-P10 | Name Mapping Multi-sport Locale             | tab mapping per sport/profilo, locale                                 | TODO  |
 | PR-P11 | Dictionary Viewer Locale                    | viewer sola-lettura del dizionario Betfair                           | TODO  |
@@ -173,6 +173,28 @@ Non verificato in automatico: la chiamata di rete reale a navigation/catalogue.
    riepilogo (eventi/mercati/selezioni/disattivati); nessuna chiamata betting.
 2. Premi due volte «Sincronizza ora» in rapida successione: la seconda risulta
    «già in corso» (nessuna run sovrapposta). Niente duplicati nel dizionario.
+
+### PR-P8 — Betfair Auto Sync Scheduler locale
+- `auto_sync.py`: `should_run(now, ...)` (decisione **pura**: attiva + ora corrente ==
+  HH + non già eseguita oggi a quell'ora + nessuna sync in corso → niente recupero
+  delle sync perse) e `AutoSyncScheduler.maybe_run(now)` che esegue il ciclo **auto
+  login → sync → auto logout** con dipendenze iniettate; il **logout è sempre in
+  `finally`** (anche se login/sync falliscono); non scatta due volte lo stesso
+  giorno/orario (`last_run_key`); `normalize_hour` (0–23, default 23).
+- `config_store.py`: nuove chiavi `betfair_auto_sync` (default False),
+  `betfair_auto_sync_hour` (default 23), `betfair_sync_sports`.
+- `sync_tab_gui.py`: checkbox «Auto sincronizza dizionario» + orario HH + etichette
+  Ultima/Prossima/Stato auto sync; le modifiche persistono in config.
+- `app.py`: tick periodico (ogni 60s, mentre il bridge è aperto) che costruisce lo
+  scheduler una volta e chiama `maybe_run(now)` su un worker thread (la rete non
+  blocca la GUI); sessione/auth/engine Betfair estratti in metodi condivisi lazy.
+
+#### Smoke test manuale PR-P8 (Windows)
+1. Attiva «Auto sincronizza dizionario», imposta l'orario all'ora corrente: entro un
+   minuto parte auto login → sync → auto logout; il log mostra l'esito.
+2. Disattiva la checkbox: non parte. Riapri il bridge dopo l'orario: non recupera.
+3. Con una sync manuale in corso, l'auto-sync non parte (BUSY).
+Non verificato in automatico: il tempo reale del tick e la rete Betfair.
 
 ## Definition of Done (blocco personale)
 
