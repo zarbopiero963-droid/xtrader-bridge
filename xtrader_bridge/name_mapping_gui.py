@@ -26,7 +26,19 @@ from . import (
     gui_utils,
     market_mapping_store,
     name_mapping_store,
+    sports,
 )
+
+# Etichetta della tendina Sport per la riga agnostica ("" = vale per tutti gli sport).
+_SPORT_ALL = "(tutti gli sport)"
+
+
+def _sport_to_label(sport: str) -> str:
+    return _SPORT_ALL if not sport else sport
+
+
+def _label_to_sport(label: str) -> str:
+    return "" if label == _SPORT_ALL else label
 
 
 class NameMappingPanel(ctk.CTkFrame):
@@ -83,7 +95,8 @@ class NameMappingPanel(ctk.CTkFrame):
         # Intestazione tabella.
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.pack(fill="x", padx=12, pady=(4, 0))
-        for text, w in (("Country (opz.)", 180), ("Betfair / XTrader", 240), ("Provider", 240)):
+        for text, w in (("Country (opz.)", 180), ("Betfair / XTrader", 240), ("Provider", 240),
+                        ("Sport", 150)):
             ctk.CTkLabel(head, text=text, width=w, anchor="w",
                          font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=3)
 
@@ -139,12 +152,13 @@ class NameMappingPanel(ctk.CTkFrame):
         cfg = self._load_cfg()
         entries = name_mapping_store.get_entries(cfg, self._current) if cfg is not None else []
         for e in entries:
-            self._append_row_widget(e.get("country", ""), e.get("betfair", ""), e.get("provider", ""))
+            self._append_row_widget(e.get("country", ""), e.get("betfair", ""),
+                                    e.get("provider", ""), e.get("sport", ""))
         if not entries:
-            self._append_row_widget("", "", "")     # una riga vuota pronta da compilare
+            self._append_row_widget("", "", "", "")     # una riga vuota pronta da compilare
 
-    def _append_row_widget(self, country="", betfair="", provider=""):
-        """Aggiunge una riga di widget (3 Entry + elimina) alla tabella."""
+    def _append_row_widget(self, country="", betfair="", provider="", sport=""):
+        """Aggiunge una riga di widget (3 Entry + tendina Sport + elimina) alla tabella."""
         row = ctk.CTkFrame(self._rows_frame, fg_color="transparent")
         row.pack(fill="x", pady=2)
         e_country = ctk.CTkEntry(row, width=180)
@@ -156,17 +170,23 @@ class NameMappingPanel(ctk.CTkFrame):
         e_provider = ctk.CTkEntry(row, width=240)
         e_provider.insert(0, provider)
         e_provider.pack(side="left", padx=3)
-        refs = {"frame": row, "country": e_country, "betfair": e_betfair, "provider": e_provider}
+        # Sport (PR-P10): «(tutti gli sport)» = riga agnostica; altrimenti restringe la
+        # riga a uno sport. La tendina offre solo valori validi.
+        sport_var = ctk.StringVar(value=_sport_to_label(sport))
+        ctk.CTkOptionMenu(row, variable=sport_var, width=150,
+                          values=[_SPORT_ALL, *sports.SPORTS]).pack(side="left", padx=3)
+        refs = {"frame": row, "country": e_country, "betfair": e_betfair,
+                "provider": e_provider, "sport": sport_var}
         ctk.CTkButton(row, text="🗑", width=36, fg_color="#c62828", hover_color="#7f0000",
                       command=lambda r=refs: self._delete_row(r)).pack(side="left", padx=3)
         self._row_widgets.append(refs)
 
     def _collect_rows(self) -> list:
-        """Righe correnti dai widget come dict {country, betfair, provider} (la pulizia
-        delle righe vuote la fa `name_mapping_store.set_entries`)."""
+        """Righe correnti dai widget come dict {country, betfair, provider, sport} (la
+        pulizia delle righe vuote la fa `name_mapping_store.set_entries`)."""
         return [
             {"country": r["country"].get(), "betfair": r["betfair"].get(),
-             "provider": r["provider"].get()}
+             "provider": r["provider"].get(), "sport": _label_to_sport(r["sport"].get())}
             for r in self._row_widgets
         ]
 
@@ -741,7 +761,10 @@ class NameMappingWindow(ctk.CTkToplevel):
     def __init__(self, master=None, on_saved=None):
         super().__init__(master)
         self.title("Dizionario nomi squadra")
-        gui_utils.fit_to_screen(self, 760, 620, 680, 460)
+        # Larghezza aumentata per la colonna Sport (PR-P10): la riga è
+        # Country(180)+Betfair(240)+Provider(240)+Sport(150)+elimina(36) ≈ 846 px più
+        # padding; a 760 px Sport/elimina venivano tagliati (no scroll orizzontale) — Codex.
+        gui_utils.fit_to_screen(self, 940, 620, 860, 460)
         NameMappingPanel(self, on_saved=on_saved).pack(fill="both", expand=True)
 
 

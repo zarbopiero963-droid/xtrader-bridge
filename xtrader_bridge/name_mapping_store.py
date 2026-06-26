@@ -34,6 +34,7 @@ Regole di sicurezza (safety-critical: un evento sbagliato = scommessa sbagliata)
 
 import re
 
+from . import sports
 from .dizionario import compose_event_name, normalize
 
 # Chiave di config che ospita i profili di mappatura.
@@ -68,9 +69,14 @@ def _find_store_key(store: dict, name: str):
 
 
 def _clean_entry(entry) -> dict:
-    """Normalizza una riga di mappatura in ``{country, betfair, provider}`` (stringhe
-    ripulite), oppure ``None`` se la riga è vuota/non valida. Una riga senza né
-    ``betfair`` né ``provider`` è inutile (non mappa nulla) e viene scartata."""
+    """Normalizza una riga di mappatura in ``{country, betfair, provider, sport}``
+    (stringhe ripulite), oppure ``None`` se la riga è vuota/non valida. Una riga senza
+    né ``betfair`` né ``provider`` è inutile (non mappa nulla) e viene scartata.
+
+    ``sport`` (PR-P10) restringe la riga a uno sport (``sports.SPORTS``); vuoto/ignoto →
+    ``""`` = **agnostico** (vale per tutti gli sport, retro-compatibile con le righe
+    salvate prima di P10). Lo scoping per sport è solo un filtro AGGIUNTIVO in
+    `resolve_team`: non cambia il comportamento delle righe agnostiche."""
     if not isinstance(entry, dict):
         return None
     country = str(entry.get("country", "") or "").strip()
@@ -78,7 +84,8 @@ def _clean_entry(entry) -> dict:
     provider = str(entry.get("provider", "") or "").strip()
     if not betfair and not provider:
         return None
-    return {"country": country, "betfair": betfair, "provider": provider}
+    sport = sports.normalize_sport(entry.get("sport")) or ""
+    return {"country": country, "betfair": betfair, "provider": provider, "sport": sport}
 
 
 def profile_names(cfg: dict) -> list:
@@ -165,7 +172,30 @@ def rename_profile(cfg: dict, old: str, new: str) -> dict:
     return out
 
 
-def resolve_team(team: str, profiles) -> str:
+def _iter_entries_for_sport(entries, want):
+    """Itera le righe eleggibili per lo sport richiesto, **dando priorità allo sport
+    esatto** sulle righe agnostiche (PR-P10, CodeRabbit).
+
+    - ``want`` falsy (nessun filtro) → tutte le righe nell'ordine salvato (legacy);
+    - ``want`` valorizzato → PRIMA le righe con ``sport == want`` (override per-sport),
+      POI le righe agnostiche (``sport`` vuoto) come fallback; le righe taggate per un
+      ALTRO sport sono escluse.
+
+    Così una riga agnostica salvata PRIMA non scavalca un override per-sport salvato dopo
+    (la GUI fa solo append): l'override per-sport ha sempre la precedenza, e l'agnostica
+    resta un fallback se non c'è un match esatto per quello sport."""
+    if not want:
+        yield from entries
+        return
+    for e in entries:
+        if str(e.get("sport", "") or "") == want:
+            yield e
+    for e in entries:
+        if not str(e.get("sport", "") or ""):
+            yield e
+
+
+def resolve_team(team: str, profiles, sport=None) -> str:
     """Traduce un nome squadra grezzo nel nome Betfair/XTrader, o ``None`` se ignoto.
 
     ``profiles`` è una lista di liste-di-righe (vedi `entries_for_profiles`), nell'
@@ -179,18 +209,25 @@ def resolve_team(team: str, profiles) -> str:
        provider ha già mandato il nome canonico, o la riga non ha alias);
     3. nessun match in TUTTI i profili → ``None`` (non si indovina mai un nome squadra).
 
+    ``sport`` (PR-P10): se valorizzato (uno fra ``sports.SPORTS``), si considerano SOLO
+    le righe di quello sport o **agnostiche** (sport vuoto), con **priorità allo sport
+    esatto** sulle agnostiche (vedi `_iter_entries_for_sport`): un override per-sport non
+    viene mai scavalcato da una riga agnostica salvata prima. Le righe taggate per un altro
+    sport sono saltate. Sport assente/ignoto → nessun filtro (comportamento legacy).
+
     L'esaurire alias+canonico di un profilo prima del successivo evita che l'alias di
     un profilo più in basso scavalchi il canonico di uno più in alto (Codex)."""
     nt = normalize(team)
     if not nt:
         return None
+    want = sports.normalize_sport(sport)
     for entries in profiles:
-        for e in entries:
+        for e in _iter_entries_for_sport(entries, want):
             alias = e.get("provider", "")
             betfair = e.get("betfair", "")
             if alias and betfair and normalize(alias) == nt:
                 return betfair
-        for e in entries:
+        for e in _iter_entries_for_sport(entries, want):
             betfair = e.get("betfair", "")
             if betfair and normalize(betfair) == nt:
                 return betfair
@@ -226,19 +263,22 @@ def split_event(event_name: str, separator: str):
     return home, away
 
 
-def resolve_event_name(event_name: str, separator: str, profiles) -> str:
+def resolve_event_name(event_name: str, separator: str, profiles, sport=None) -> str:
     """Traduce un ``EventName`` provider in ``EventName`` Betfair/XTrader, o ``None``.
 
     Divide su ``separator``, mappa casa e trasferta coi ``profiles`` e ricompone nel
     formato XTrader "Casa - Trasferta" (`dizionario.compose_event_name`). Ritorna
     ``None`` (fail-closed: niente riga CSV) se non si riesce a dividere **o** se una
-    delle due squadre non è mappabile."""
+    delle due squadre non è mappabile.
+
+    ``sport`` (PR-P10) è inoltrato a `resolve_team` per restringere la mappatura alle
+    righe di quello sport o agnostiche (vedi `resolve_team`)."""
     split = split_event(event_name, separator)
     if split is None:
         return None
     home, away = split
-    h = resolve_team(home, profiles)
-    a = resolve_team(away, profiles)
+    h = resolve_team(home, profiles, sport=sport)
+    a = resolve_team(away, profiles, sport=sport)
     if not h or not a:
         return None
     return compose_event_name(h, a)
