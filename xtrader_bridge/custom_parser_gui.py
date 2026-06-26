@@ -19,6 +19,7 @@ from . import (
     name_mapping_store,
     parser_diagnostics,
     provider_store,
+    sports,
 )
 from .parser_builder import ParserBuilder
 
@@ -553,8 +554,14 @@ class CustomParserPanel(ctk.CTkFrame):
         così aprire/salvare un parser legacy non lo converte a NAME_ONLY (Codex)."""
         self.builder.name = self._name_var.get().strip()
         self.builder.mode = self._label_to_mode(self._mode_var.get())
-        # Sport (PR-P9): canonicalizzato in set_sport (vuoto/ignoto → "" agnostico).
-        self.builder.set_sport(self._label_to_sport(self._sport_var.get()))
+        # Sport (PR-P9): canonicalizza un valore NOTO (case-insensitive) ma **preserva**
+        # un valore ignoto (es. parser caricato con sport corrotto a mano) invece di
+        # azzerarlo a "" qui: così `validate_parser_def` può emettere "Sport non valido"
+        # (fail-closed) e il salvataggio è bloccato, invece di convertirlo in silenzio in
+        # agnostico perdendo lo scope sport (Codex). La tendina offre solo valori validi,
+        # quindi un valore ignoto può arrivare SOLO da un file manomesso.
+        _sport_raw = self._label_to_sport(self._sport_var.get())
+        self.builder.sport = sports.normalize_sport(_sport_raw) or _sport_raw
         # Mappatura nomi: separatore (testo libero) + profili spuntati.
         self.builder.team_separator = self._separator_var.get().strip()
         self.builder.name_mapping_profiles = self._selected_profiles()

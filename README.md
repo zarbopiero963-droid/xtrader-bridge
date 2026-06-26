@@ -241,6 +241,14 @@ In breve, ogni colonna ha una **regola** con:
   `BACK`/`LAY` in `PUNTA`/`BANCA`);
 - **obbligatorio**: se vuoto, il parser è **"Non pronto"** → **nessuna** riga CSV.
 
+Ogni parser può anche dichiarare uno **Sport** (tendina accanto a «Modalità»):
+**Calcio / Tennis / Basket / Rugby Union** oppure **«(non specificato)»** = agnostico.
+Lo Sport non cambia le colonne del CSV: indica a quale sport appartiene il segnale e
+servirà a restringere la risoluzione degli ID Betfair allo sport giusto. È salvato nel
+file del parser (campo `sport`); i parser creati prima di questa funzione restano
+agnostici. Poiché il parser attivo è **per profilo**, cambiando profilo cambia anche lo
+Sport del parser usato.
+
 Quando un Parser Personalizzato è attivo per una chat è **autoritativo** (niente
 fallback all'hardcoded). I parser si salvano/condividono come file in
 `data/parsers/<nome>.json`. Guida completa: **[`docs/custom_parser.md`](docs/custom_parser.md)**.

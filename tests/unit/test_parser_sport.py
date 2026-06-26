@@ -92,6 +92,19 @@ def test_builder_nuovo_sport_agnostico():
     assert ParserBuilder().sport == ""
 
 
+def test_builder_preserva_sport_ignoto_per_validazione():
+    # Un parser caricato con sport corrotto a mano NON deve diventare agnostico in
+    # silenzio: il builder preserva il valore grezzo e to_def()+validazione lo bloccano
+    # (fail-closed), invece di perdere lo scope sport (Codex). È l'invariante su cui si
+    # appoggia la GUI (_sync_to_builder preserva i valori ignoti).
+    d = CustomParserDef.from_dict(
+        {"name": "P", "sport": "Xyz", "rules": [{"target": "Provider", "fixed_value": "X"}]})
+    b = ParserBuilder(d)
+    assert b.sport == "Xyz"                 # preservato, non azzerato
+    assert b.to_def().sport == "Xyz"
+    assert not cp.is_valid(b.to_def())      # validazione lo blocca
+
+
 def test_builder_set_sport_canonicalizza():
     b = ParserBuilder()
     b.set_sport("calcio")
