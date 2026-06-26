@@ -19,6 +19,7 @@ from . import (
     name_mapping_store,
     parser_diagnostics,
     provider_store,
+    sports,
 )
 from .parser_builder import ParserBuilder
 
@@ -33,12 +34,25 @@ class CustomParserPanel(ctk.CTkFrame):
     # Voce della tendina Modalità per il sentinella "" (parser legacy = eredita la
     # modalità globale). Mostrarla evita di convertire "" in NAME_ONLY salvando (Codex).
     _MODE_INHERIT = "(eredita globale)"
+    # Voce della tendina Sport per il sentinella "" (parser agnostico, PR-P9).
+    _SPORT_UNSPECIFIED = "(non specificato)"
 
     def _mode_to_label(self, mode: str) -> str:
         return self._MODE_INHERIT if not mode else mode
 
     def _label_to_mode(self, label: str) -> str:
         return "" if label == self._MODE_INHERIT else label
+
+    def _sport_to_label(self, sport: str) -> str:
+        return self._SPORT_UNSPECIFIED if not sport else sport
+
+    def _label_to_sport(self, label: str) -> str:
+        return "" if label == self._SPORT_UNSPECIFIED else label
+
+    def _on_sport_change(self, _value=None):
+        """Sport cambiato dal menu: aggiorna il builder (canonicalizzazione/fail-safe in
+        `set_sport`). Non tocca le regole né l'obbligatorietà (lo sport non cambia le colonne)."""
+        self.builder.set_sport(self._label_to_sport(self._sport_var.get()))
 
     # ── anagrafica Provider (PR-5) ─────────────────────────────────────────
     @staticmethod
@@ -351,6 +365,14 @@ class CustomParserPanel(ctk.CTkFrame):
         ctk.CTkOptionMenu(top, variable=self._mode_var,
                           values=[self._MODE_INHERIT, *self._modes], width=160,
                           command=self._on_mode_change).pack(side="left", padx=6)
+        # Sport DEL PARSER (PR-P9): Calcio/Tennis/Basket/Rugby Union o "(non specificato)"
+        # (= agnostico). Non cambia le colonne CSV; nelle PR successive restringe la
+        # risoluzione degli ID Betfair all'event_type_id corretto.
+        ctk.CTkLabel(top, text="Sport:").pack(side="left", padx=6)
+        self._sport_var = ctk.StringVar(value=self._sport_to_label(self.builder.sport))
+        ctk.CTkOptionMenu(top, variable=self._sport_var,
+                          values=[self._sport_to_label(s) for s in self.builder.sport_options()],
+                          width=150, command=self._on_sport_change).pack(side="left", padx=6)
         # Anagrafica Provider (PR-5): aggiungi un nome riusabile nella tendina della
         # colonna Provider (sotto). I provider salvati valgono per tutti i parser.
         ctk.CTkButton(top, text="➕ Provider", width=110,
@@ -504,6 +526,8 @@ class CustomParserPanel(ctk.CTkFrame):
         # correnti, preservando i required salvati a mano di un parser caricato (Codex).
         # L'auto-Obblig. si applica su azione esplicita (_on_mode_change) o su parser nuovo.
         self._mode_var.set(self._mode_to_label(self.builder.mode))
+        # Sport (PR-P9): ripristina la tendina dal builder (incl. "" agnostico).
+        self._sport_var.set(self._sport_to_label(self.builder.sport))
         # Mappatura nomi: ripristina separatore + checkbox profili dal builder.
         self._separator_var.set(self.builder.team_separator)
         self._reload_profile_checks(use_builder=True)
@@ -530,6 +554,14 @@ class CustomParserPanel(ctk.CTkFrame):
         così aprire/salvare un parser legacy non lo converte a NAME_ONLY (Codex)."""
         self.builder.name = self._name_var.get().strip()
         self.builder.mode = self._label_to_mode(self._mode_var.get())
+        # Sport (PR-P9): canonicalizza un valore NOTO (case-insensitive) ma **preserva**
+        # un valore ignoto (es. parser caricato con sport corrotto a mano) invece di
+        # azzerarlo a "" qui: così `validate_parser_def` può emettere "Sport non valido"
+        # (fail-closed) e il salvataggio è bloccato, invece di convertirlo in silenzio in
+        # agnostico perdendo lo scope sport (Codex). La tendina offre solo valori validi,
+        # quindi un valore ignoto può arrivare SOLO da un file manomesso.
+        _sport_raw = self._label_to_sport(self._sport_var.get())
+        self.builder.sport = sports.normalize_sport(_sport_raw) or _sport_raw
         # Mappatura nomi: separatore (testo libero) + profili spuntati.
         self.builder.team_separator = self._separator_var.get().strip()
         self.builder.name_mapping_profiles = self._selected_profiles()
