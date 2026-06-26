@@ -1,0 +1,298 @@
+"""Test hard della GLUE runtime di `App` (issue #108 P1) — eseguono i METODI REALI.
+
+Copre i punti che l'audit #108 segnalava come «runtime app.py glue: da rafforzare»
+e prioritari (P1), prima testabili solo a mano su Windows:
+
+- `_process`: scrittura riuscita (accoda + scrive), fallimento con ROLLBACK completo
+  (segnale ritentabile), gate `_running` (STOP in corso → non scrive), duplicato che
+  non riscrive ma persiste lo stato;
+- `_process_confirmation`: conferma rimuove il segnale e riscrive il CSV; fallimento
+  scrittura → segnale già rimosso + retry BREVE programmato; gate `_running` (no-op);
+- `_expire_tick`: rimuove gli scaduti e svuota il CSV; fallimento → retry programmato;
+  gate `_running` (non riscrive dopo lo STOP);
+- `_manual_clear`: in esecuzione svuota il CSV ATTIVO della sessione, NON il path del
+  campo GUI (anti riga orfana); fallimento I/O non azzera la coda;
+- `_stop`: svuota coda + CSV ATTIVO della sessione (non il path GUI cambiato).
+
+L'harness (`tests/integration/conftest.py`) istanzia `App` headless con collaboratori
+REALI; qui si iniettano solo i guasti (`write_rows`/`init_csv` che sollevano) e, per
+isolare la glue di scrittura dal parser (coperto altrove), un `resolve_row` che ritorna
+un `RouteResult` reale.
+"""
+
+import csv
+
+import pytest
+
+from xtrader_bridge import safety_guard, signal_dedupe, signal_queue
+
+
+# ── helper ────────────────────────────────────────────────────────────────────
+
+def _row(name, selection=None, price="1,90"):
+    # SelectionName realistica (squadra di casa) così il lettore conferme può associare
+    # l'esito XTrader al segnale (EventName + Selection), come nei messaggi reali.
+    sel = selection if selection is not None else name.split(" v ")[0]
+    return {"EventName": name, "MarketName": "Esito finale",
+            "SelectionName": sel, "Price": price, "BetType": "PUNTA"}
+
+
+def _events_in_csv(path):
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        return [r["EventName"] for r in csv.DictReader(f)]
+
+
+def _patch_resolve(monkeypatch, app_mod, row):
+    """Forza `signal_router.resolve_row` a un esito REALE (RouteResult): isola la glue
+    di scrittura dal parser, già coperto da test dedicati."""
+    rr = app_mod.signal_router.RouteResult(row=row)
+    monkeypatch.setattr(app_mod.signal_router, "resolve_row", lambda *a, **k: rr)
+
+
+def _spy_writer(monkeypatch, app_mod, *, fail=False):
+    """Avvolge `app.write_rows` per CONTARE le scritture; con `fail=True` solleva sempre
+    (CSV lockato), così la write atomica non tocca il file precedente."""
+    from xtrader_bridge import csv_writer
+    calls = {"n": 0}
+
+    def _w(rows, path):
+        calls["n"] += 1
+        if fail:
+            raise OSError("CSV lockato (simulato)")
+        csv_writer.write_rows(rows, path)
+
+    monkeypatch.setattr(app_mod, "write_rows", _w)
+    return calls
+
+
+# ── _process ───────────────────────────────────────────────────────────────────
+
+def test_process_write_success_accoda_e_scrive(make_app, app_mod, monkeypatch, tmp_path):
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    a = make_app(csv_path=path, queue=q,
+                 tracker=signal_dedupe.SignalTracker(),
+                 daily=safety_guard.DailyLimiter(max_per_day=10))
+    _patch_resolve(monkeypatch, app_mod, _row("Inter v Milan"))
+
+    app_mod.App._process(a, "msg", {"csv_path": path, "dry_run": False}, chat_id="1")
+
+    assert _events_in_csv(path) == ["Inter v Milan"]          # CSV scritto (1 riga)
+    assert [r["EventName"] for r in q.active_rows()] == ["Inter v Milan"]
+    assert a.guard_saves                                      # stato guardrail persistito
+    assert (path, None) in a.expiry_calls                     # scadenza programmata
+
+
+def test_process_write_failure_rollback_e_ritentabile(make_app, app_mod, monkeypatch, tmp_path):
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    tracker = signal_dedupe.SignalTracker()
+    a = make_app(csv_path=path, queue=q, tracker=tracker,
+                 daily=safety_guard.DailyLimiter(max_per_day=10))
+    _patch_resolve(monkeypatch, app_mod, _row("Inter v Milan"))
+    _spy_writer(monkeypatch, app_mod, fail=True)
+
+    app_mod.App._process(a, "msg-x", {"csv_path": path, "dry_run": False}, chat_id="1")
+
+    # Coda ripristinata: nessuna riga stantia attiva dopo una write fallita.
+    assert q.active_rows() == []
+    # Dedupe ripristinato: lo STESSO messaggio è ritentabile (non DUPLICATE).
+    assert tracker.register("msg-x").status != signal_dedupe.DUPLICATE
+    # La glue programma comunque la scadenza (i segnali ripristinati devono scadere).
+    assert (path, None) in a.expiry_calls
+    assert any("Scrittura CSV fallita" in m for m in a.logs)
+
+
+def test_process_gate_running_false_non_scrive(make_app, app_mod, monkeypatch, tmp_path):
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    a = make_app(csv_path=path, queue=q, running=False,
+                 tracker=signal_dedupe.SignalTracker(),
+                 daily=safety_guard.DailyLimiter(max_per_day=10))
+    spy = _spy_writer(monkeypatch, app_mod, fail=False)
+    _patch_resolve(monkeypatch, app_mod, _row("Inter v Milan"))
+
+    app_mod.App._process(a, "msg", {"csv_path": path, "dry_run": False}, chat_id="1")
+
+    assert spy["n"] == 0                      # STOP in corso: nessuna scrittura
+    assert q.active_rows() == []
+
+
+def test_process_duplicato_non_riscrive_ma_persiste(make_app, app_mod, monkeypatch, tmp_path):
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    a = make_app(csv_path=path, queue=q,
+                 tracker=signal_dedupe.SignalTracker(),
+                 daily=safety_guard.DailyLimiter(max_per_day=10))
+    _patch_resolve(monkeypatch, app_mod, _row("Inter v Milan"))
+    spy = _spy_writer(monkeypatch, app_mod, fail=False)
+
+    cfg = {"csv_path": path, "dry_run": False}
+    app_mod.App._process(a, "stesso", cfg, chat_id="1")
+    app_mod.App._process(a, "stesso", cfg, chat_id="1")   # duplicato
+
+    assert spy["n"] == 1                       # la seconda volta NON riscrive
+    assert _events_in_csv(path) == ["Inter v Milan"]
+    assert len(a.guard_saves) >= 2             # stato persistito anche sull'esito non-WRITE
+
+
+# ── _process_confirmation ───────────────────────────────────────────────────────
+
+def _queue_with(*rows):
+    q = signal_queue.SignalQueue(mode=signal_queue.QUEUE_UNTIL_CONFIRMED, default_timeout=120)
+    for i, r in enumerate(rows):
+        q.add(r, now=1000 + i)
+    return q
+
+
+def test_confirmation_conferma_rimuove_e_riscrive(make_app, app_mod, tmp_path):
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = _queue_with(_row("Inter v Milan"), _row("Roma v Lazio"))
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q)
+
+    app_mod.App._process_confirmation(a, "Inter v Milan Esito finale Inter piazzata",
+                                      {"csv_path": path})
+
+    assert [r["EventName"] for r in q.active_rows()] == ["Roma v Lazio"]
+    assert _events_in_csv(path) == ["Roma v Lazio"]
+    assert a.expiry_calls and a.expiry_calls[-1][0] == path
+
+
+def test_confirmation_write_failure_segnale_rimosso_e_retry_breve(make_app, app_mod, monkeypatch, tmp_path):
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = _queue_with(_row("Inter v Milan"), _row("Roma v Lazio"))
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q)
+    _spy_writer(monkeypatch, app_mod, fail=True)
+
+    app_mod.App._process_confirmation(a, "Inter v Milan Esito finale Inter piazzata",
+                                      {"csv_path": path})
+
+    # Il segnale è già fuori dalla coda; il CSV (write fallita) resta indietro → retry BREVE.
+    assert [r["EventName"] for r in q.active_rows()] == ["Roma v Lazio"]
+    assert (path, app_mod._WRITE_RETRY_DELAY) in a.expiry_calls
+    assert any("dopo conferma" in m for m in a.logs)
+
+
+def test_confirmation_gate_running_false_e_no_op(make_app, app_mod, tmp_path):
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = _queue_with(_row("Roma v Lazio"))
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q, running=False)
+
+    app_mod.App._process_confirmation(a, "Roma v Lazio Esito finale Roma piazzata",
+                                      {"csv_path": path})
+
+    assert len(q.active_rows()) == 1               # callback tardivo: coda non mutata
+    assert _events_in_csv(path) == ["Roma v Lazio"]
+    assert a.expiry_calls == []
+
+
+# ── _expire_tick ────────────────────────────────────────────────────────────────
+
+def test_expire_tick_rimuove_scaduti_e_svuota_csv(make_app, app_mod, monkeypatch, tmp_path):
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.QUEUE_UNTIL_CONFIRMED, default_timeout=10)
+    q.add(_row("Inter v Milan"), now=0)            # scade a now=10
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q)
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: 1000.0)   # ben oltre la scadenza
+
+    app_mod.App._expire_tick(a, path)
+
+    assert q.is_empty()
+    assert _events_in_csv(path) == []              # CSV riportato a solo header
+    # coda vuota → nessuna riprogrammazione
+    assert a.expiry_calls == []
+
+
+def test_expire_tick_write_failure_schedula_retry(make_app, app_mod, monkeypatch, tmp_path):
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.QUEUE_UNTIL_CONFIRMED, default_timeout=10)
+    q.add(_row("Inter v Milan"), now=0)
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q)
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: 1000.0)
+    _spy_writer(monkeypatch, app_mod, fail=True)
+
+    app_mod.App._expire_tick(a, path)
+
+    assert (path, app_mod._WRITE_RETRY_DELAY) in a.expiry_calls
+    assert any("scadenza" in m.lower() for m in a.logs)
+
+
+def test_expire_tick_gate_running_false_non_riscrive(make_app, app_mod, monkeypatch, tmp_path):
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.QUEUE_UNTIL_CONFIRMED, default_timeout=10)
+    q.add(_row("Inter v Milan"), now=0)
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q, running=False)
+    spy = _spy_writer(monkeypatch, app_mod, fail=False)
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: 1000.0)
+
+    app_mod.App._expire_tick(a, path)
+
+    assert spy["n"] == 0                            # STOP in corso: nessuna riscrittura
+    assert _events_in_csv(path) == ["Inter v Milan"]   # CSV intatto
+
+
+# ── _manual_clear ───────────────────────────────────────────────────────────────
+
+def test_manual_clear_running_usa_active_path_non_gui(make_app, app_mod, tmp_path):
+    from xtrader_bridge import csv_writer
+    active = str(tmp_path / "attivo.csv")
+    gui = str(tmp_path / "gui.csv")
+    q = _queue_with(_row("Inter v Milan"))
+    csv_writer.write_rows(q.active_rows(), active)
+    csv_writer.write_rows([_row("Roma v Lazio")], gui)
+    a = make_app(csv_path=active, queue=q, gui_csv=gui)   # GUI punta a un path DIVERSO
+
+    app_mod.App._manual_clear(a)
+
+    assert _events_in_csv(active) == []                  # svuotato il CSV ATTIVO
+    assert _events_in_csv(gui) == ["Roma v Lazio"]       # il path GUI NON è toccato
+    assert q.is_empty()
+
+
+def test_manual_clear_write_failure_non_svuota_coda(make_app, app_mod, monkeypatch, tmp_path):
+    from xtrader_bridge import csv_writer
+    active = str(tmp_path / "attivo.csv")
+    q = _queue_with(_row("Inter v Milan"))
+    csv_writer.write_rows(q.active_rows(), active)
+    a = make_app(csv_path=active, queue=q)
+    monkeypatch.setattr(app_mod, "init_csv",
+                        lambda p: (_ for _ in ()).throw(OSError("lockato")))
+
+    app_mod.App._manual_clear(a)
+
+    assert len(q.active_rows()) == 1                      # I/O fallito: coda NON azzerata
+    assert a.expiry_calls and a.expiry_calls[-1][0] == active   # riprogramma la pulizia
+    assert any("Svuotamento CSV fallito" in m for m in a.logs)
+
+
+# ── _stop ───────────────────────────────────────────────────────────────────────
+
+def test_stop_svuota_coda_e_csv_attivo_non_gui(make_app, app_mod, tmp_path):
+    from xtrader_bridge import csv_writer
+    active = str(tmp_path / "attivo.csv")
+    gui = str(tmp_path / "gui.csv")
+    q = _queue_with(_row("Inter v Milan"))
+    csv_writer.write_rows(q.active_rows(), active)
+    csv_writer.write_rows([_row("Roma v Lazio")], gui)
+    a = make_app(csv_path=active, queue=q, gui_csv=gui, capture_schedule=False)
+    a._expire_timer = None
+
+    app_mod.App._stop(a)
+
+    assert q.is_empty()                                  # coda in memoria svuotata
+    assert _events_in_csv(active) == []                  # CSV ATTIVO svuotato (solo header)
+    assert _events_in_csv(gui) == ["Roma v Lazio"]       # path GUI cambiato NON toccato
+    assert a._active_csv_path is None
+    assert a._running is False
