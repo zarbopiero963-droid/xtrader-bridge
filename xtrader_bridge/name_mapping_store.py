@@ -172,17 +172,27 @@ def rename_profile(cfg: dict, old: str, new: str) -> dict:
     return out
 
 
-def _entry_in_sport(entry, want) -> bool:
-    """``True`` se la riga è eleggibile per lo sport richiesto (PR-P10).
+def _iter_entries_for_sport(entries, want):
+    """Itera le righe eleggibili per lo sport richiesto, **dando priorità allo sport
+    esatto** sulle righe agnostiche (PR-P10, CodeRabbit).
 
-    ``want`` è lo sport canonico richiesto (o ``None`` = nessun filtro). Una riga è
-    eleggibile se: non c'è filtro (``want`` falsy), **oppure** la riga è agnostica
-    (``sport`` vuoto, vale per tutti), **oppure** il suo sport coincide con quello
-    richiesto. Una riga taggata per un ALTRO sport viene saltata (no cross-sport)."""
+    - ``want`` falsy (nessun filtro) → tutte le righe nell'ordine salvato (legacy);
+    - ``want`` valorizzato → PRIMA le righe con ``sport == want`` (override per-sport),
+      POI le righe agnostiche (``sport`` vuoto) come fallback; le righe taggate per un
+      ALTRO sport sono escluse.
+
+    Così una riga agnostica salvata PRIMA non scavalca un override per-sport salvato dopo
+    (la GUI fa solo append): l'override per-sport ha sempre la precedenza, e l'agnostica
+    resta un fallback se non c'è un match esatto per quello sport."""
     if not want:
-        return True
-    e_sport = str(entry.get("sport", "") or "")
-    return not e_sport or e_sport == want
+        yield from entries
+        return
+    for e in entries:
+        if str(e.get("sport", "") or "") == want:
+            yield e
+    for e in entries:
+        if not str(e.get("sport", "") or ""):
+            yield e
 
 
 def resolve_team(team: str, profiles, sport=None) -> str:
@@ -200,9 +210,10 @@ def resolve_team(team: str, profiles, sport=None) -> str:
     3. nessun match in TUTTI i profili → ``None`` (non si indovina mai un nome squadra).
 
     ``sport`` (PR-P10): se valorizzato (uno fra ``sports.SPORTS``), si considerano SOLO
-    le righe di quello sport o **agnostiche** (sport vuoto); le righe taggate per un altro
-    sport sono saltate (evita di mappare un nome con una voce di uno sport diverso). Sport
-    assente/ignoto → nessun filtro (comportamento legacy, tutte le righe).
+    le righe di quello sport o **agnostiche** (sport vuoto), con **priorità allo sport
+    esatto** sulle agnostiche (vedi `_iter_entries_for_sport`): un override per-sport non
+    viene mai scavalcato da una riga agnostica salvata prima. Le righe taggate per un altro
+    sport sono saltate. Sport assente/ignoto → nessun filtro (comportamento legacy).
 
     L'esaurire alias+canonico di un profilo prima del successivo evita che l'alias di
     un profilo più in basso scavalchi il canonico di uno più in alto (Codex)."""
@@ -211,16 +222,12 @@ def resolve_team(team: str, profiles, sport=None) -> str:
         return None
     want = sports.normalize_sport(sport)
     for entries in profiles:
-        for e in entries:
-            if not _entry_in_sport(e, want):
-                continue
+        for e in _iter_entries_for_sport(entries, want):
             alias = e.get("provider", "")
             betfair = e.get("betfair", "")
             if alias and betfair and normalize(alias) == nt:
                 return betfair
-        for e in entries:
-            if not _entry_in_sport(e, want):
-                continue
+        for e in _iter_entries_for_sport(entries, want):
             betfair = e.get("betfair", "")
             if betfair and normalize(betfair) == nt:
                 return betfair

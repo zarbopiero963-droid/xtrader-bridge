@@ -116,7 +116,9 @@ provider nei nomi Betfair/XTrader **prima** della scrittura:
 - **multi-sport (PR-P10)**: ogni riga di mappatura ha una colonna **Sport** opzionale
   (`Calcio`/`Tennis`/`Basket`/`Rugby Union` o **«(tutti gli sport)»** = agnostica). Se il
   parser ha uno **Sport** impostato, la mappatura considera SOLO le righe di quello sport o
-  agnostiche, **saltando** le righe taggate per un altro sport: così un nome non viene
+  agnostiche — con **priorità allo sport esatto** sulle agnostiche (un override per-sport
+  non viene scavalcato da una riga agnostica salvata prima) — e **salta** le righe taggate
+  per un altro sport: così un nome non viene
   tradotto con una voce pensata per uno sport diverso (es. un "Milan" del basket non mappa
   un evento di calcio). Parser senza sport / righe agnostiche → comportamento legacy
   (nessun filtro), retro-compatibile.

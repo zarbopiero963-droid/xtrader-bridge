@@ -263,9 +263,11 @@ reale (i punti 5–6 sono coperti da smoke manuale; la logica pura è in unit te
   (uno fra `sports.SPORTS` o `""` = agnostica). `_clean_entry` lo normalizza
   (case-insensitive; vuoto/ignoto → `""` agnostico, retro-compatibile). `resolve_team`
   e `resolve_event_name` accettano un parametro **`sport`**: con sport valorizzato
-  considerano SOLO le righe di quello sport o agnostiche (helper `_entry_in_sport`),
-  saltando le righe taggate per un altro sport; sport assente/None/"" → nessun filtro
-  (comportamento legacy). Fonte sport unica: `xtrader_bridge/sports.py` (PR-P9).
+  considerano SOLO le righe di quello sport o agnostiche, con **priorità allo sport esatto**
+  sulle agnostiche (helper `_iter_entries_for_sport`: prima le righe `sport==want`, poi le
+  agnostiche come fallback), saltando le righe di un altro sport; sport assente/None/"" →
+  nessun filtro (legacy). Così un override per-sport non viene scavalcato da una riga
+  agnostica salvata prima (la GUI fa append). Fonte sport unica: `xtrader_bridge/sports.py`.
 - `custom_pipeline.build_validated_row`: passa `defn.sport` a `resolve_event_name`, così
   la mappatura nomi runtime è ristretta allo sport del parser (un nome non viene tradotto
   con la voce di uno sport diverso → CSV corretto, fail-closed se non mappabile).

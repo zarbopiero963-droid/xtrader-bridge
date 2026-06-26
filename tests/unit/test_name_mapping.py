@@ -408,3 +408,26 @@ def test_pipeline_usa_lo_sport_del_parser_per_la_mappatura():
     # Parser sport=Basket → nessuna voce Basket/agnostica per queste squadre → MAPPING_MISSING.
     res2 = pipe.build_validated_row(_sport_mapping_parser("Basket"), _MSG, name_mapping_profiles=profs)
     assert res2.status == pipe.MAPPING_MISSING
+
+
+def test_resolve_team_sport_esatto_vince_su_agnostico_precedente():
+    # Una riga AGNOSTICA salvata PRIMA non deve scavalcare un override PER-SPORT salvato
+    # dopo, con lo stesso alias (la GUI fa solo append) — CodeRabbit. Lo sport esatto vince.
+    cfg = {"name_mappings": {"P": [
+        {"betfair": "Inter generico", "provider": "Inter"},                  # agnostica (prima)
+        {"betfair": "Inter Calcio", "provider": "Inter", "sport": "Calcio"}, # override Calcio (dopo)
+    ]}}
+    profs = nm.entries_for_profiles(cfg, ["P"])
+    assert nm.resolve_team("Inter", profs, sport="Calcio") == "Inter Calcio"   # esatto vince
+    assert nm.resolve_team("Inter", profs, sport="Tennis") == "Inter generico" # fallback agnostico
+    assert nm.resolve_team("Inter", profs) == "Inter generico"                 # senza sport: ordine (legacy)
+
+
+def test_resolve_team_fallback_agnostico_se_nessun_match_esatto():
+    # Se non c'è una riga per lo sport richiesto, l'agnostica resta valida (fallback).
+    cfg = {"name_mappings": {"P": [
+        {"betfair": "Milan", "provider": "ACM"},                              # agnostica
+        {"betfair": "Sinner", "provider": "Sinner T", "sport": "Tennis"},
+    ]}}
+    profs = nm.entries_for_profiles(cfg, ["P"])
+    assert nm.resolve_team("ACM", profs, sport="Calcio") == "Milan"           # agnostica usata
