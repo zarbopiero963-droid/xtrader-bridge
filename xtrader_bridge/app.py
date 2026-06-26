@@ -27,6 +27,7 @@ from .config_store import (
 from .csv_writer import clear_stale_csv, init_csv, write_rows
 from . import (
     autostart,
+    config_store,
     confirmation_reader,
     csv_lock_escalation,
     dashboard_stats,
@@ -903,13 +904,17 @@ class App(ctk.CTk):
         `maybe_run` su un worker thread (la rete non deve bloccare la GUI). Best-effort:
         un errore non interrompe il loop dei tick. Si ri-arma ogni 60s."""
         try:
-            cfg = self._load_config()
-            if config_store.as_bool(cfg.get("betfair_auto_sync", False)):
-                sched = self._betfair_autosync_scheduler()
-                import datetime
-                now = datetime.datetime.now()
-                threading.Thread(target=lambda: sched.maybe_run(now),
-                                 daemon=True, name="betfair-autosync").start()
+            # winfo_exists() qui gira sul MAIN thread (il tick è schedulato con after);
+            # il worker NON deve toccare Tk (Codex). Lo scheduler usa is_bridge_open=True
+            # perché il gate "bridge aperto" è proprio questo tick.
+            if self.winfo_exists():
+                cfg = self._load_config()
+                if config_store.as_bool_optin(cfg.get("betfair_auto_sync", False)):
+                    sched = self._betfair_autosync_scheduler()
+                    import datetime
+                    now = datetime.datetime.now()
+                    threading.Thread(target=lambda: sched.maybe_run(now),
+                                     daemon=True, name="betfair-autosync").start()
         except Exception:               # noqa: BLE001 — il tick non deve mai crashare
             pass
         finally:
@@ -919,17 +924,31 @@ class App(ctk.CTk):
         """Scheduler auto-sync condiviso (lazy). `get_config` legge enabled/hour/sports
         dalla config e le credenziali locali per l'auto login; `on_summary` logga
         l'esito safe sul main thread e aggiorna le etichette della tab se aperta."""
+        from . import atomic_io
         from .betfair import auto_sync, credential_store
         if getattr(self, "_betfair_autosync_obj", None) is not None:
             return self._betfair_autosync_obj
 
         def _get_config():
             cfg = self._load_config()
-            enabled = config_store.as_bool(cfg.get("betfair_auto_sync", False))
+            enabled = config_store.as_bool_optin(cfg.get("betfair_auto_sync", False))
             hour = auto_sync.normalize_hour(cfg.get("betfair_auto_sync_hour", 23))
             sports = cfg.get("betfair_sync_sports") or []
             creds = credential_store.load_credentials()
             return enabled, hour, sports, creds
+
+        _state_path = runtime_state.betfair_autosync_state_path(config_dir())
+
+        def _load_state():
+            try:
+                import json
+                with open(_state_path, "r", encoding="utf-8") as fh:
+                    return json.load(fh)
+            except Exception:   # noqa: BLE001 — assente/corrotto → nessuna run nota
+                return None
+
+        def _save_state(key):
+            atomic_io.atomic_write_json(_state_path, key)   # scrittura atomica
 
         def _on_summary(res):
             def _report():
@@ -947,8 +966,8 @@ class App(ctk.CTk):
 
         self._betfair_autosync_obj = auto_sync.AutoSyncScheduler(
             auth=self._betfair_auth_client(), engine=self._betfair_sync_engine(),
-            get_config=_get_config, is_bridge_open=self.winfo_exists,
-            on_summary=_on_summary)
+            get_config=_get_config, is_bridge_open=lambda: True,
+            on_summary=_on_summary, load_state=_load_state, save_state=_save_state)
         return self._betfair_autosync_obj
 
     def _init_guards(self, cfg: dict) -> None:
@@ -1898,15 +1917,24 @@ class App(ctk.CTk):
 
             threading.Thread(target=_worker, daemon=True, name="betfair-sync").start()
 
-        def _betfair_autosync_change(enabled, hour):
-            """Checkbox/orario auto-sync cambiati nel pannello: persiste in config."""
+        def _betfair_autosync_change(enabled, hour, sports):
+            """Checkbox/orario/sport auto-sync cambiati nel pannello: persiste in config.
+            Gli sport selezionati vengono salvati con i flag, così l'auto-sync usa
+            esattamente quelli scelti (Codex). Un salvataggio fallito è segnalato come
+            tale invece di dichiarare ON (Codex)."""
             cfg = self._load_config()
             cfg["betfair_auto_sync"] = bool(enabled)
             cfg["betfair_auto_sync_hour"] = int(hour)
+            if sports is not None:
+                cfg["betfair_sync_sports"] = list(sports)
             saved, ok = save_config(cfg, CONFIG_FILE)
             self._config = saved
             self._save_ok = ok
-            self._log(f"🔵 Auto-sync Betfair {'ON' if enabled else 'OFF'} (orario {hour:02d}).")
+            if ok:
+                self._log(f"🔵 Auto-sync Betfair {'ON' if enabled else 'OFF'} (orario {hour:02d}).")
+            else:
+                self._log("⚠️ Auto-sync Betfair: salvataggio config FALLITO "
+                          "(impostazione NON persistita). Controlla permessi/spazio.")
 
         def _make_betfair(parent):
             """Crea la tab Betfair Sync (credenziali locali + stato login/sync + auto).
@@ -1916,7 +1944,7 @@ class App(ctk.CTk):
             self._betfair_panel = BetfairSyncPanel(
                 parent, session=self._betfair_session_obj(),
                 on_login=_betfair_login, on_sync=_betfair_sync,
-                autosync={"enabled": config_store.as_bool(_cfg_bf.get("betfair_auto_sync", False)),
+                autosync={"enabled": config_store.as_bool_optin(_cfg_bf.get("betfair_auto_sync", False)),
                           "hour": _cfg_bf.get("betfair_auto_sync_hour", 23)},
                 on_autosync_change=_betfair_autosync_change)
             return self._betfair_panel

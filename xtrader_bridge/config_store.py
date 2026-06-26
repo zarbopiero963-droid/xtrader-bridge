@@ -266,6 +266,11 @@ def _migrate(cfg: dict) -> dict:
                 # Privacy fail-closed (helper unico): solo un truthy ESPLICITO attiva il log
                 # completo; None/`null`/vuoto → False (il payload resta redatto di default).
                 cfg[key] = as_bool_optin(cfg.get(key))
+            elif key == "betfair_auto_sync":
+                # Auto-sync Betfair = opt-in fail-closed (issue #86 PR-P8): un valore
+                # sporco/typo (`"flase"`, `"disabled"`) NON deve attivare il ciclo
+                # automatico login→sync→logout. Solo un truthy esplicito accende.
+                cfg[key] = as_bool_optin(cfg.get(key))
             else:
                 cfg[key] = as_bool(cfg.get(key, default))
         elif isinstance(default, int):

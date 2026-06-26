@@ -151,6 +151,25 @@ def test_logout_chiamato_anche_se_sync_fallisce():
     assert auth.calls == ["login", "logout"]
 
 
+def test_last_run_persistito_evita_doppio_dopo_riavvio():
+    # Stato condiviso che simula il file su disco.
+    store = {"key": None}
+    auth, eng = _Auth(), _Engine()
+    s1 = AutoSyncScheduler(auth=auth, engine=eng, get_config=_cfg(),
+                           load_state=lambda: store["key"],
+                           save_state=lambda k: store.__setitem__("key", k))
+    assert s1.maybe_run(_NOW_23) is not None        # prima volta: parte e persiste
+    assert store["key"] == run_key(_NOW_23, 23)
+
+    # "riavvio": nuovo scheduler che ricarica lo stato persistito
+    auth2, eng2 = _Auth(), _Engine()
+    s2 = AutoSyncScheduler(auth=auth2, engine=eng2, get_config=_cfg(),
+                           load_state=lambda: store["key"],
+                           save_state=lambda k: store.__setitem__("key", k))
+    assert s2.maybe_run(datetime(2026, 7, 1, 23, 50, 0)) is None   # stessa ora/giorno → non riparte
+    assert auth2.calls == []
+
+
 def test_logout_chiamato_anche_se_login_fallisce():
     class _BadAuth(_Auth):
         def login(self, creds):

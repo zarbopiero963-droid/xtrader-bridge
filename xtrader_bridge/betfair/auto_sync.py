@@ -32,9 +32,11 @@ def normalize_hour(value, default: int = 23) -> int:
     return h if 0 <= h <= 23 else default
 
 
-def run_key(now, hour) -> tuple:
-    """Chiave «giorno + ora» di una run, per non rieseguire lo stesso giorno/orario."""
-    return (now.year, now.month, now.day, int(hour))
+def run_key(now, hour) -> list:
+    """Chiave «giorno + ora» di una run, per non rieseguire lo stesso giorno/orario.
+    È una **lista** (non tupla) così è serializzabile/round-trippabile in JSON quando
+    viene persistita su disco (vedi `AutoSyncScheduler` load/save state)."""
+    return [now.year, now.month, now.day, int(hour)]
 
 
 def should_run(now, *, enabled, hour, last_run_key, sync_in_progress) -> bool:
@@ -63,17 +65,35 @@ class AutoSyncScheduler:
     - `is_bridge_open()`: `True` se la finestra è aperta (default: sempre);
     - `on_summary(result)`: callback opzionale per il riepilogo safe in GUI/log."""
 
-    def __init__(self, *, auth, engine, get_config, is_bridge_open=None, on_summary=None):
+    def __init__(self, *, auth, engine, get_config, is_bridge_open=None,
+                 on_summary=None, load_state=None, save_state=None):
         self.auth = auth
         self.engine = engine
         self.get_config = get_config
         self.is_bridge_open = is_bridge_open or (lambda: True)
         self.on_summary = on_summary
+        # Persistenza opzionale dell'ultima run (giorno+ora): senza, lo stato vive solo
+        # in RAM e un riavvio nella stessa ora ri-eseguirebbe l'auto-sync (Codex).
+        self._load_state = load_state
+        self._save_state = save_state
         self._last_run_key = None
+        self._loaded = False
 
     @property
     def last_run_key(self):
         return self._last_run_key
+
+    def _ensure_loaded(self):
+        """Carica una volta l'ultima run persistita (se presente), così la guardia
+        'una volta al giorno/orario' sopravvive ai riavvii del bridge."""
+        if self._loaded:
+            return
+        self._loaded = True
+        if self._load_state:
+            try:
+                self._last_run_key = self._load_state()
+            except Exception:   # noqa: BLE001 — stato corrotto/assente → riparte da zero
+                self._last_run_key = None
 
     def maybe_run(self, now):
         """Valuta la decisione e, se è ora, esegue il ciclo auto login→sync→logout.
@@ -82,13 +102,20 @@ class AutoSyncScheduler:
         auto-sync spenta, fuori orario, già eseguita, o sync già in corso)."""
         if not self.is_bridge_open():
             return None
+        self._ensure_loaded()
         enabled, hour, sports, creds = self.get_config()
         if not should_run(now, enabled=enabled, hour=hour,
                           last_run_key=self._last_run_key,
                           sync_in_progress=self.engine.is_syncing):
             return None
-        # Segna PRIMA di partire: un tick successivo nello stesso orario non ri-scatta.
+        # Segna PRIMA di partire: un tick successivo nello stesso orario non ri-scatta;
+        # e persiste, così un riavvio nella stessa ora non rilancia l'auto-sync.
         self._last_run_key = run_key(now, hour)
+        if self._save_state:
+            try:
+                self._save_state(self._last_run_key)
+            except Exception:   # noqa: BLE001 — persistenza best-effort, non blocca la sync
+                pass
         return self._cycle(sports, creds)
 
     def _cycle(self, sports, creds):

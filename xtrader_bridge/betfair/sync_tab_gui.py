@@ -178,10 +178,13 @@ class BetfairSyncPanel(ctk.CTkFrame):
         self._refresh_buttons()
 
     def _autosync_changed(self):
-        """Checkbox/orario auto-sync cambiati: notifica l'app per persistere in config."""
+        """Checkbox/orario/sport auto-sync cambiati: notifica l'app per persistere in
+        config. Passa anche gli sport selezionati, così l'auto-sync usa quelli scelti
+        (non la lista di default) — Codex."""
         if self._on_autosync_change:
             self._on_autosync_change(bool(self._autosync_var.get()),
-                                     normalize_hour(self._autosync_hour.get()))
+                                     normalize_hour(self._autosync_hour.get()),
+                                     self._selected_sports())
 
     def set_autosync_status(self, last=None, next_=None, state=None):
         """Aggiorna le etichette di stato auto-sync (chiamato dall'app dopo un run)."""
