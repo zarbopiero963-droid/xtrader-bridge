@@ -130,3 +130,38 @@ def test_end_to_end_signal_router_fallback_nomi_se_dizionario_vuoto(tmp_path):
         assert result.status == validator.VALID
     finally:
         db.close()
+
+
+def _parser_with_fixed_marketid(market_id="PARSER_MK"):
+    """Parser BOTH che fornisce ESPLICITAMENTE un MarketId (modalità ID/BOTH)."""
+    return cp.CustomParserDef(
+        name="Pid", mode="BOTH", sport="Calcio",
+        rules=[
+            cp.FieldRule(target="Provider", fixed_value="TG_CUSTOM"),
+            cp.FieldRule(target="EventName", start_after="Match:", end_before="\n", required=True),
+            cp.FieldRule(target="MarketType", start_after="Merc:", end_before="\n", required=True),
+            cp.FieldRule(target="SelectionName", start_after="Sel:", end_before="\n", required=True),
+            cp.FieldRule(target="MarketId", fixed_value=market_id),
+            cp.FieldRule(target="Price", start_after="Quota:", end_before="\n", required=True),
+            cp.FieldRule(target="BetType", start_after="Lato:", value_map="bettype", required=True),
+        ])
+
+
+def test_id_parser_in_conflitto_non_sovrascritto():
+    # Il dizionario propone un MarketId DIVERSO da quello del parser: l'arricchimento si
+    # annulla del tutto, il MarketId esplicito del parser resta, e gli altri ID NON sono
+    # riempiti con una tripla incoerente (Codex P1).
+    res = _FakeResolver({"EventId": "evX", "MarketId": "DICT_MK", "SelectionId": "sX"})
+    out = pipe.build_validated_row(_parser_with_fixed_marketid("PARSER_MK"), _MSG, id_resolver=res)
+    assert out.placeable is True
+    assert out.row["MarketId"] == "PARSER_MK"        # NON sovrascritto
+    assert out.row["EventId"] == "" and out.row["SelectionId"] == ""   # tripla incoerente scartata
+
+
+def test_id_parser_coerente_riempie_solo_i_vuoti():
+    # Nessun conflitto (il MarketId del parser coincide con quello del dizionario): si
+    # riempiono SOLO i campi ID vuoti (EventId/SelectionId), il MarketId del parser resta.
+    res = _FakeResolver({"EventId": "ev1", "MarketId": "PARSER_MK", "SelectionId": "s1"})
+    out = pipe.build_validated_row(_parser_with_fixed_marketid("PARSER_MK"), _MSG, id_resolver=res)
+    assert out.row["MarketId"] == "PARSER_MK"
+    assert out.row["EventId"] == "ev1" and out.row["SelectionId"] == "s1"

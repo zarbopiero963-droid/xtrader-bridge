@@ -263,11 +263,23 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
         except Exception:   # noqa: BLE001 — risoluzione best-effort: niente blocco del flusso
             ids = None
         if ids:
-            row = dict(row)
-            for _k in ("EventId", "MarketId", "SelectionId"):
-                _v = ids.get(_k)
-                if _v:
-                    row[_k] = str(_v)
+            # Additivo e NON distruttivo (Codex P1): se il parser ha già fornito un ID
+            # esplicito (ID/BOTH) NON lo si sovrascrive con quello del dizionario — un
+            # dizionario stantio/diverso scriverebbe un mercato/selezione sbagliato. Se un
+            # ID del parser è in CONFLITTO con la tripla risolta, si scarta del tutto
+            # l'arricchimento (resta la riga del parser); altrimenti si riempiono SOLO i
+            # campi ID vuoti con la tripla coerente del dizionario.
+            _keys = ("EventId", "MarketId", "SelectionId")
+            _conflict = any(
+                str(row.get(_k, "")).strip()
+                and ids.get(_k) and str(row.get(_k, "")).strip() != str(ids[_k])
+                for _k in _keys)
+            if not _conflict:
+                row = dict(row)
+                for _k in _keys:
+                    _v = ids.get(_k)
+                    if _v and not str(row.get(_k, "")).strip():
+                        row[_k] = str(_v)
 
     status, detail = validator.validate(row, mode, require_price)
     return PipelineResult(status, row, list(res.missing_required), detail)

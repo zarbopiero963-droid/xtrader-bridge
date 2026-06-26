@@ -14,6 +14,20 @@ in modo **univoco**; qualunque assenza o ambiguità → nessun ID (la riga resta
 così non si scrive mai un identificatore sbagliato (un evento sbagliato = scommessa
 sbagliata). Sola lettura: solo `SELECT` via i metodi di lettura del DB; nessuna rete,
 nessuna scrittura, nessuna operazione di scommessa.
+
+Limiti noti (by-design, sempre **fail-open** ai nomi):
+
+- la selezione è confrontata per `runner_name` (nome Betfair grezzo, es. "The Draw",
+  "Yes", "Over 2.5 Goals"). Per le selezioni-squadra (Match Odds) coincide con il nome
+  canonicalizzato dalla mappatura nomi; per selezioni generiche il cui nome XTrader
+  differisce dal runner Betfair ("Pareggio"/"Sì"/"Over 2,5 gol") la corrispondenza può
+  non avvenire: in tal caso si ritorna `{}` e la riga resta a nomi (nessun ID errato, mai
+  bloccato). Una traduzione XTrader↔runner Betfair completa è fuori dallo scope di P12;
+- per ottenere "ID se trovato, altrimenti nomi" la modalità del parser deve essere
+  **name-capable** (`NAME_ONLY` o `BOTH`): con `BOTH` la riga è valida sia con la tripla ID
+  (dizionario trovato) sia coi soli nomi (dizionario mancante). Un parser `ID_ONLY` che si
+  affida al dizionario per gli ID resta, per scelta, **fail-closed** su un miss (non si
+  declassa in silenzio la modalità scelta dall'utente).
 """
 
 from .. import sports
@@ -42,6 +56,20 @@ def _split_event_name(event_name: str):
     if not home or not away:
         return None
     return normalize(home), normalize(away)
+
+
+def _hcap_value(v):
+    """Handicap come float per il confronto numerico, o ``None`` se non numerico.
+    Accetta la **virgola** decimale ("1,5") oltre al punto, perché il parser può fornire
+    l'handicap con la virgola mentre SQLite lo memorizza come REAL ("1.5") — un confronto
+    testuale fallirebbe (Codex)."""
+    s = str(v if v is not None else "").strip().replace(",", ".")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
 
 
 def _unique(values):
@@ -131,9 +159,11 @@ class DictionaryResolver:
         if len(sels) == 1:
             return sels[0].get("selection_id")
         if len(sels) > 1:
-            hcap = normalize(handicap)
-            if hcap:
-                by_h = [s for s in sels if normalize(s.get("handicap", "")) == hcap]
+            hcap = _hcap_value(handicap)
+            if hcap is not None:
+                # Confronto NUMERICO (virgola→punto→float): "1,5" del parser combacia con
+                # il REAL 1.5 del DB; senza, selezioni omonime resterebbero ambigue (Codex).
+                by_h = [s for s in sels if _hcap_value(s.get("handicap")) == hcap]
                 if len(by_h) == 1:
                     return by_h[0].get("selection_id")
         return None

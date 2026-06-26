@@ -139,3 +139,17 @@ def test_match_mercato_per_nome_se_manca_il_tipo(db):
     ids = r.resolve_ids(sport="Calcio", event_name="Inter - Milan",
                         market_type="", market_name="Match Odds", selection_name="Inter")
     assert ids.get("MarketId") == "mk_im"
+
+
+def test_handicap_con_virgola_disambigua(db):
+    m = db.new_sync_marker()
+    db.upsert_event("e", "1", "c", "Inter v Milan",
+                    participant_1="Inter", participant_2="Milan", seen_at=m)
+    db.upsert_market("mk", "e", "1", "Asian Handicap", "ASIAN_HANDICAP", seen_at=m)
+    db.upsert_selection("mk", "s_05", "Inter", handicap=0.5, seen_at=m)
+    db.upsert_selection("mk", "s_15", "Inter", handicap=1.5, seen_at=m)
+    r = DictionaryResolver(db)
+    # handicap del parser con la VIRGOLA ("1,5") deve combaciare col REAL 1.5 del DB (Codex).
+    ids = r.resolve_ids(sport="Calcio", event_name="Inter - Milan",
+                        market_type="ASIAN_HANDICAP", selection_name="Inter", handicap="1,5")
+    assert ids.get("SelectionId") == "s_15"

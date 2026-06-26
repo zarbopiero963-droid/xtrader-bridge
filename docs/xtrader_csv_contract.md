@@ -79,6 +79,17 @@ assenza/ambiguità (o se il dizionario non è disponibile) la riga resta a **nom
 (*fallback nomi*) e il segnale **non viene bloccato**. Così, se il dizionario conosce
 l'evento, il CSV porta l'identificazione precisa; altrimenti XTrader usa i nomi.
 
+Note operative:
+- gli **ID forniti dal parser** (modalità ID/BOTH) NON vengono mai sovrascritti: se sono in
+  conflitto con la tripla del dizionario, l'arricchimento si annulla del tutto (vince il
+  parser); altrimenti si riempiono solo i campi ID vuoti con la tripla coerente del dizionario;
+- per il comportamento "ID se trovato, **altrimenti nomi**" la modalità del parser deve essere
+  **`NAME_ONLY` o `BOTH`** (con `BOTH` la riga è valida sia con la tripla ID sia coi soli nomi);
+  un parser `ID_ONLY` che si affida al dizionario per gli ID resta fail-closed su un miss;
+- le **selezioni** si risolvono per `runner_name` Betfair: per le selezioni-squadra coincide
+  coi nomi mappati, mentre selezioni generiche con nome XTrader diverso dal runner Betfair
+  possono non risolvere gli ID e restare a nomi (mai un ID errato).
+
 ## Campi sempre opzionali e gate del prezzo
 
 `Price`, `MinPrice`, `MaxPrice`, `Points` sono **sempre facoltativi** per XTrader e
