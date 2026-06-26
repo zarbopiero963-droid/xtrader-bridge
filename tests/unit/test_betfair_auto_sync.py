@@ -296,6 +296,23 @@ def test_reserve_ok_login_sync_logout_e_release():
     assert eng.events == ["reserve", "run(locked=True)", "release"]
 
 
+def test_maybe_run_hour_non_numerico_persiste_chiave_normalizzata():
+    # Con hour non numerico ("x" → 23), una sync riuscita NON deve crashare al momento
+    # di marcare la run: maybe_run deve persistere la run_key NORMALIZZATA (CodeRabbit).
+    store = {"key": None}
+    auth, eng = _Auth(), _Engine(SyncResult(status=OK))
+    sched = AutoSyncScheduler(auth=auth, engine=eng,
+                              get_config=lambda: (True, "x", ["Calcio"]),
+                              load_state=lambda: store["key"],
+                              save_state=lambda k: store.__setitem__("key", k))
+    res = sched.maybe_run(_NOW_23)                       # ora 23 == normalize_hour("x")
+    assert res is not None and res.status == OK          # nessun crash int("x")
+    assert sched.last_run_key == run_key(_NOW_23, 23)    # chiave normalizzata
+    assert store["key"] == run_key(_NOW_23, 23)          # persistita
+    # Secondo tick stessa ora con lo stesso hour invalido: non riparte.
+    assert sched.maybe_run(datetime(2026, 7, 1, 23, 45, 0)) is None
+
+
 def test_on_summary_che_solleva_non_perde_la_run_riuscita():
     # Se on_summary solleva (es. Tk `after` su finestra in chiusura) dopo una sync OK,
     # la run DEVE comunque essere registrata/persistita: altrimenti la stessa ora

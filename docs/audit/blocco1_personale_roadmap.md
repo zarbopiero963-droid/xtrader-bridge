@@ -204,7 +204,12 @@ Non verificato in automatico: la chiamata di rete reale a navigation/catalogue.
   condivisi lazy. I callback `on_summary`/`on_state_error` rientrano nella UI **solo se
   il bridge non si sta chiudendo** (flag `_closing`, `winfo_exists` sul main thread) e
   `_on_close` **cancella il tick pendente** (`after_cancel`), così nessun callback gira
-  su una root distrutta.
+  su una root distrutta. Il tick e `_get_config` leggono la **config LIVE in memoria**
+  (`self._config`), non una rilettura da disco: dopo un save fallito lo scheduler usa ciò
+  che l'utente ha impostato, non valori stantii (CodeRabbit). `is_bridge_open` è legato a
+  `not self._closing` (fail-closed: un worker lanciato a ridosso della chiusura non parte).
+  `maybe_run` normalizza l'ora una volta e la usa anche per la `run_key` di successo, così
+  un `hour` non numerico non crasha DOPO una sync riuscita (CodeRabbit).
 
 #### Smoke test manuale PR-P8 (Windows)
 1. Attiva «Auto sincronizza dizionario», imposta l'orario all'ora corrente: entro un

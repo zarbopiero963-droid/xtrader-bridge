@@ -130,11 +130,16 @@ class AutoSyncScheduler:
         # gate _running, altrimenti un keyring lento accatasta worker thread (CodeRabbit).
         # Le credenziali si caricano dentro `_cycle`, solo quando la run è davvero dovuta.
         enabled, hour, sports = self.get_config()
+        # Normalizza l'ora UNA volta e usala sia per la decisione sia per la run_key di
+        # successo: altrimenti un `hour` non numerico ("x") supererebbe `should_run`
+        # (che già normalizza) ma poi crasherebbe in `run_key(now, hour)` → int("x")
+        # DOPO una sync riuscita, lasciando la run non marcata e rieseguibile (CodeRabbit).
+        normalized_hour = normalize_hour(hour)
         # Check-and-set atomico: niente cicli sovrapposti (gate) + decisione pura.
         with self._gate:
             if self._running:
                 return None
-            if not should_run(now, enabled=enabled, hour=hour,
+            if not should_run(now, enabled=enabled, hour=normalized_hour,
                               last_run_key=self._last_run_key,
                               sync_in_progress=self.engine.is_syncing):
                 return None
@@ -143,7 +148,7 @@ class AutoSyncScheduler:
             result = self._cycle(sports)
             if getattr(result, "ok", False):
                 # Solo su successo: marca e persiste, così non ri-scatta oggi/ora.
-                self._last_run_key = run_key(now, hour)
+                self._last_run_key = run_key(now, normalized_hour)
                 if self._save_state:
                     try:
                         self._save_state(self._last_run_key)

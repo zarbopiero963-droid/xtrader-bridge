@@ -907,10 +907,13 @@ class App(ctk.CTk):
         un errore non interrompe il loop dei tick. Si ri-arma ogni 60s."""
         try:
             # winfo_exists() qui gira sul MAIN thread (il tick è schedulato con after);
-            # il worker NON deve toccare Tk (Codex). Lo scheduler usa is_bridge_open=True
-            # perché il gate "bridge aperto" è proprio questo tick.
+            # il worker NON deve toccare Tk (Codex). Lo scheduler usa is_bridge_open legato
+            # a `_closing`, così un worker lanciato a ridosso della chiusura fallisce chiuso.
             if self.winfo_exists():
-                cfg = self._load_config()
+                # Config LIVE in memoria (non rilettura da disco): dopo un save fallito
+                # `self._config` riflette ciò che l'utente ha impostato, mentre il disco
+                # avrebbe valori stantii (CodeRabbit). Stessa semantica del resto di App.
+                cfg = dict(self._config) if isinstance(self._config, dict) else self._load_config()
                 if config_store.as_bool_optin(cfg.get("betfair_auto_sync", False)):
                     try:
                         sched = self._betfair_autosync_scheduler()
@@ -948,7 +951,9 @@ class App(ctk.CTk):
             # Config LEGGERA (no keyring): lo scheduler la legge a ogni tick (anche fuori
             # orario o a run già fatta), quindi NON deve leggere le credenziali qui — il
             # keyring si tocca solo quando la run è dovuta, in `_get_credentials` (CodeRabbit).
-            cfg = self._load_config()
+            # Config LIVE in memoria, non rilettura da disco: dopo un save fallito riflette
+            # ciò che l'utente ha impostato, non valori stantii su disco (CodeRabbit).
+            cfg = dict(self._config) if isinstance(self._config, dict) else self._load_config()
             enabled = config_store.as_bool_optin(cfg.get("betfair_auto_sync", False))
             hour = auto_sync.normalize_hour(cfg.get("betfair_auto_sync_hour", 23))
             sports = cfg.get("betfair_sync_sports") or []
@@ -1011,7 +1016,9 @@ class App(ctk.CTk):
         self._betfair_autosync_obj = auto_sync.AutoSyncScheduler(
             auth=self._betfair_auth_client(), engine=self._betfair_sync_engine(),
             get_config=_get_config, get_credentials=_get_credentials,
-            is_bridge_open=lambda: True,
+            # Fail-closed in chiusura: se `_on_close` setta `_closing` dopo lo spawn del
+            # worker ma prima che entri in maybe_run, il ciclo non parte (CodeRabbit).
+            is_bridge_open=lambda: not self._closing,
             on_summary=_on_summary, load_state=_load_state, save_state=_save_state,
             on_state_error=_on_state_error)
         return self._betfair_autosync_obj
