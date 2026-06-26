@@ -747,3 +747,42 @@ finestra hub `tools_gui.ToolsWindow`. La hub è disaccoppiata: riceve `(titolo, 
 
 Obiettivo: il Parser Personalizzato può "richiamare" sia il mapping squadre sia il mapping
 mercati → riconoscimento più automatico, restando prevedibile e fail-safe.
+
+## #108 — copertura test della GLUE runtime di `app.py` ✅ (test-only)
+**Contesto:** l'audit #108 (read-only) segnalava che la logica pura safety-critical è
+ben coperta, ma mancavano test automatici della **glue runtime** dentro `app.py`
+(START/STOP, `_process`, `_process_confirmation`, `_expire_tick`, `_manual_clear`,
+dispatch del listener): quella glue era dichiarata «non testabile in CI» perché
+`app.py` importa `customtkinter`/`tkinter`/`telegram`, assenti nell'ambiente headless,
+e veniva verificata solo a mano su Windows.
+
+**Tecnico (test-only, nessuna modifica al codice di produzione):** harness headless in
+`tests/integration/conftest.py` che installa STUB minimi di `customtkinter`/`tkinter`/
+`telegram` in `sys.modules` (`ctk.CTk = object`) PRIMA di importare `app`, così `App` è
+istanziabile via `object.__new__` senza avviare Tk; i sink GUI sono shadowati
+(no-op/cattura) e i **metodi reali** di `App` vengono eseguiti. Si iniettano solo i
+guasti (`write_rows`/`init_csv` che sollevano) e, per isolare la glue di scrittura dal
+parser già coperto, `resolve_row`/`should_process`.
+
+**Test hard:**
+- `tests/integration/test_app_runtime_glue.py` — `_process` (scrittura ok / write-failure
+  con rollback completo e segnale ritentabile / gate `_running` / duplicato che non
+  riscrive ma persiste), `_process_confirmation` (conferma rimuove+riscrive / write-failure
+  con retry breve `_WRITE_RETRY_DELAY` / gate `_running`), `_expire_tick` (rimuove scaduti e
+  svuota / write-failure→retry / gate `_running`), `_manual_clear` (usa `_active_csv_path`
+  non il campo GUI / I/O fallito non azzera la coda), `_stop` (svuota coda + CSV ATTIVO,
+  non il path GUI cambiato);
+- `tests/integration/test_listener_dispatch.py` — `_run_bot`/`_handle` con `ApplicationBuilder`
+  finto: `start_polling(allowed_updates=["message","channel_post"], drop_pending_updates=True)`,
+  chat ammessa → `_process`, chat notifiche → `_process_confirmation`, chat non ammessa →
+  nulla, `channel_post` come `message`, messaggio vecchio → ignorato.
+
+**Resta `MANUAL_ONLY`** (richiede ambiente reale, non automatizzabile in CI; checklist su
+Windows): widget GUI reali (click START/STOP, salvataggio form, banner reale, tab, clear
+manuale), build/avvio EXE PyInstaller, path `%APPDATA%`, file CSV lockato da XTrader reale,
+Telegram live (token invalido, drop di rete, `retry_after`), import CSV in XTrader reale.
+Vedi `docs/audit/release_checklist.md` e `docs/audit/xtrader_simulation_test.md`.
+
+**Micro-audit:** nessun file di produzione modificato; nessun token/chat reale; CSV/contratto
+invariati; gli stub si installano solo se i moduli reali sono assenti (su Windows i test
+usano comunque `object.__new__` + sink shadowati, non aprono finestre). `pytest`: 1104 passed.

@@ -1,0 +1,183 @@
+"""Test hard del listener Telegram (issue #108 P1 «Telegram listener mocked»).
+
+L'audit #108 segnalava che NON c'era test automatico del listener reale/mocked dentro
+`App._run_bot`: la closure `_handle` non era esercitata in CI, quindi non si verificava
+che gli update Telegram fossero instradati con la stessa semantica della logica pura.
+
+Qui si guida `App._run_bot` con un `ApplicationBuilder` FINTO (PTB non è installato in
+CI): si cattura sia il MessageHandler registrato sia i kwargs di `start_polling`, poi si
+invoca il VERO `_handle` con update finti e si verifica l'instradamento:
+
+- `start_polling(allowed_updates=["message","channel_post"], drop_pending_updates=True)`
+  — niente segnali vecchi a (ri)connessione, e i channel post sono ammessi;
+- chat ammessa → `_process` (e NON `_process_confirmation`);
+- chat notifiche XTrader → `_process_confirmation` (e NON `_process`);
+- chat non ammessa → nessuna delle due;
+- `channel_post` trattato come `message`;
+- messaggio troppo vecchio (arretrato post-outage) → ignorato.
+
+La SEMANTICA di `decide()` è coperta a parte (`test_telegram_dispatch.py`): qui si testa
+che la GLUE del listener la usi e dispatci correttamente. `should_process` (che richiede
+un parser su disco) è forzato a True solo per pilotare il ramo PROCESS.
+"""
+
+import asyncio
+import time
+import types
+
+import pytest
+
+
+# ── fake PTB minimale ────────────────────────────────────────────────────────
+
+class _FakeUpdater:
+    def __init__(self, on_poll):
+        self.calls = {}
+        self._on_poll = on_poll
+
+    async def start_polling(self, **kwargs):
+        self.calls["start_polling"] = kwargs
+        self._on_poll()          # fa uscire SUBITO il while _is_current() (no sleep, no hang)
+
+    async def stop(self):
+        self.calls["stop"] = True
+
+
+class _FakeTgApp:
+    def __init__(self, on_poll):
+        self.updater = _FakeUpdater(on_poll)
+        self.handlers = []
+
+    def add_handler(self, h):
+        self.handlers.append(h)
+
+    async def initialize(self):
+        pass
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def shutdown(self):
+        pass
+
+
+def _msg(chat_id, text, ts):
+    return types.SimpleNamespace(
+        chat_id=chat_id, text=text, caption=None,
+        date=types.SimpleNamespace(timestamp=lambda: ts))
+
+
+def _update(msg, *, channel=False):
+    if channel:
+        return types.SimpleNamespace(message=None, channel_post=msg)
+    return types.SimpleNamespace(message=msg, channel_post=None)
+
+
+def _drive_run_bot(make_app, app_mod, monkeypatch, config):
+    """Esegue il VERO `_run_bot` con un builder finto; ritorna (app, fake_tg_app)."""
+    a = make_app(config=config)
+    a._running = True
+    a._listener_epoch = 1
+
+    captured = {}
+
+    def _on_poll():
+        a._running = False       # subito dopo start_polling: _is_current() diventa False
+
+    def _builder_factory():
+        tg = _FakeTgApp(_on_poll)
+        captured["tg"] = tg
+
+        class _B:
+            def token(self, _t):
+                return self
+
+            def build(self):
+                return tg
+        return _B()
+
+    monkeypatch.setattr(app_mod, "ApplicationBuilder", _builder_factory)
+    # _handle dispatcha a questi: shadowati per CATTURARE l'instradamento (la logica di
+    # _process/_process_confirmation è testata in test_app_runtime_glue.py).
+    a._process = lambda *args, **kw: a.processed.append((args, kw))
+    a._process_confirmation = lambda *args, **kw: a.confirmations.append((args, kw))
+
+    app_mod.App._run_bot(a, {"bot_token": "x"}, 1)
+    return a, captured["tg"]
+
+
+def _handle_of(tg):
+    # add_handler ha ricevuto il tuple del MessageHandler finto: ("MessageHandler", (filters.ALL, _handle), {})
+    assert tg.handlers, "nessun handler registrato"
+    return tg.handlers[0][1][1]
+
+
+# ── test ─────────────────────────────────────────────────────────────────────
+
+CFG = {"chat_id": "111", "xtrader_notification_chat_id": "999"}
+
+
+def test_start_polling_scarta_arretrati_e_ammette_channel_post(make_app, app_mod, monkeypatch):
+    _a, tg = _drive_run_bot(make_app, app_mod, monkeypatch, CFG)
+    kwargs = tg.updater.calls["start_polling"]
+    assert kwargs["drop_pending_updates"] is True
+    assert kwargs["allowed_updates"] == ["message", "channel_post"]
+
+
+def test_chat_ammessa_instrada_a_process(make_app, app_mod, monkeypatch):
+    # Forza should_process=True per pilotare il ramo PROCESS senza un parser su disco.
+    monkeypatch.setattr(app_mod.signal_router, "should_process", lambda *a, **k: True)
+    a, tg = _drive_run_bot(make_app, app_mod, monkeypatch, CFG)
+    handle = _handle_of(tg)
+
+    asyncio.run(handle(_update(_msg("111", "P.Bet. segnale", time.time())), None))
+
+    assert len(a.processed) == 1
+    assert a.confirmations == []
+    assert a.processed[0][1].get("chat_id") == "111"   # chat di origine inoltrata
+
+
+def test_chat_notifiche_instrada_a_conferma(make_app, app_mod, monkeypatch):
+    a, tg = _drive_run_bot(make_app, app_mod, monkeypatch, CFG)
+    handle = _handle_of(tg)
+
+    asyncio.run(handle(_update(_msg("999", "Inter v Milan Inter piazzata", time.time())), None))
+
+    assert len(a.confirmations) == 1
+    assert a.processed == []
+
+
+def test_chat_non_ammessa_non_instrada_nulla(make_app, app_mod, monkeypatch):
+    # should_process REALE: una chat non configurata non è ammessa → niente PROCESS.
+    a, tg = _drive_run_bot(make_app, app_mod, monkeypatch, CFG)
+    handle = _handle_of(tg)
+
+    asyncio.run(handle(_update(_msg("222", "qualcosa", time.time())), None))
+
+    assert a.processed == []
+    assert a.confirmations == []
+
+
+def test_channel_post_trattato_come_message(make_app, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod.signal_router, "should_process", lambda *a, **k: True)
+    a, tg = _drive_run_bot(make_app, app_mod, monkeypatch, CFG)
+    handle = _handle_of(tg)
+
+    asyncio.run(handle(_update(_msg("111", "segnale via canale", time.time()), channel=True), None))
+
+    assert len(a.processed) == 1                       # channel_post instradato come message
+
+
+def test_messaggio_vecchio_ignorato(make_app, app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod.signal_router, "should_process", lambda *a, **k: True)
+    a, tg = _drive_run_bot(make_app, app_mod, monkeypatch, CFG)
+    handle = _handle_of(tg)
+
+    # ts molto nel passato → oltre max_signal_age → IGNORE_STALE.
+    asyncio.run(handle(_update(_msg("111", "arretrato", time.time() - 10_000_000)), None))
+
+    assert a.processed == []
+    assert a.confirmations == []
