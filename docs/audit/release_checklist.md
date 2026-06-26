@@ -68,12 +68,18 @@
 ## I. Disaster recovery / resilienza (#109 · #110) — manuale Windows
 
 Passi **manuali** non automatizzabili in CI, riferiti dalla matrice
-`resilience_110_matrix.md` (voci 16-19). **Attenzione alla modalità**: in **DRY_RUN**
+`resilience_110_matrix.md` (voci 1, 15-19). **Attenzione alla modalità**: in **DRY_RUN**
 il CSV operativo NON viene scritto (`live_guard` → `DRY_RUN`), quindi gli scenari che
 devono produrre una riga attiva (power-cut, XTrader) vanno eseguiti in **modalità REALE
 con XTrader in *Modalità Simulazione*** e stake basso/limiti chiari; gli scenari di sola
 rete/auto-start possono restare in DRY_RUN.
 
+- [ ] **#110/1 — Cleanup CSV stantio all'avvio PRIMA dell'auto-start.** Con
+      `auto_start_listener=true` e una riga ATTIVA lasciata nel CSV (es. da una sessione
+      precedente: scrivila in modalità REALE+Simulazione, oppure incollala a mano), chiudi
+      e RIAPRI l'app. Atteso: all'avvio il CSV è riportato a **solo header** PRIMA che
+      l'auto-start del listener parta — il log mostra il cleanup all'avvio e nessuna riga
+      orfana viene presentata a XTrader, anche con auto-start attivo.
 - [ ] **#110/17 — Power-cut con CSV attivo.** *(modalità REALE + XTrader in Simulazione,
       stake basso — in DRY_RUN il CSV non verrebbe scritto e lo scenario non sarebbe
       esercitato.)* Fai scrivere un segnale nel CSV, poi spegni brutalmente VM/PC (o
@@ -99,7 +105,9 @@ rete/auto-start possono restare in DRY_RUN.
       quindi **l'intero backlog accumulato offline viene SCARTATO** (non filtrato per età):
       i messaggi inviati mentre la rete era giù **non** vengono processati. Solo i
       messaggi inviati **dopo** la riconnessione (e comunque entro `max_signal_age`)
-      passano.
+      passano. **Verifica di ripresa**: dopo che lo stato torna **CONNESSO**, invia UN
+      segnale valido NUOVO e conferma che viene **processato** entro `max_signal_age`
+      (così il test non passa anche se il listener non riprendesse a processare).
 - [ ] **#110/16 — Windows reboot + auto-start.** Configura l'app in Startup
       folder / Task Scheduler con `auto_start_listener=true`. Caso **DRY_RUN**:
       riavvia il PC → l'app parte, il listener parte da solo, il CSV è pulito.

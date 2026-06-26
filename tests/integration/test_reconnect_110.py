@@ -185,25 +185,30 @@ def test_stop_durante_backoff_vivo_interrompe_subito(make_app, app_mod, monkeypa
 
     # NB: NON si stubba `_reconnect_wait` → si usa il VERO, che chiama
     # `self._stop_event.wait(delay)` (cioè `_SignalingEvent.wait`).
-    stop_at = {}
+    # Il supervisor gira in un THREAD daemon con join LIMITATO (review Codex): se
+    # `_reconnect_wait` regredisce e non entra/onora `_stop_event`, il test FALLISCE
+    # entro pochi secondi invece di appendere la CI in un retry infinito.
+    result = {}
 
-    def _stopper():
-        if a._stop_event.entered.wait(5.0):   # attende che la wait REALE stia bloccando
-            a._running = False
-            stop_at["t"] = time.monotonic()
-            a._stop_event.set()
+    def _run():
+        app_mod.App._run_bot(a, {"bot_token": "x"}, 4)
+        result["returned_at"] = time.monotonic()
 
-    th = threading.Thread(target=_stopper)
-    th.start()
-    app_mod.App._run_bot(a, {"bot_token": "x"}, 4)
-    returned_at = time.monotonic()
-    th.join()
+    bot = threading.Thread(target=_run, daemon=True)
+    bot.start()
 
-    assert a._stop_event.entered.is_set()   # la wait REALE ha cominciato a bloccare
-    assert "t" in stop_at                   # lo STOP è scattato mentre era DENTRO il wait
-    # latenza di sblocco misurata DALLO STOP: deve essere quasi immediata (≪ 30s di
-    # backoff). Soglia stretta: un'attesa ininterrompibile farebbe fallire il test.
-    assert returned_at - stop_at["t"] < 1.0
+    entered_ok = a._stop_event.entered.wait(5.0)   # la wait reale ha cominciato a bloccare?
+    # In OGNI caso sblocca il supervisor (no thread/CI appesi), poi misura/verifica.
+    a._running = False
+    stop_at = time.monotonic()
+    a._stop_event.set()
+    bot.join(5.0)
+
+    assert entered_ok, "regressione: il supervisor non è entrato nel `_reconnect_wait` reale"
+    assert not bot.is_alive(), "regressione: `_run_bot` non è terminato dopo lo STOP (backoff non interrompibile)"
+    assert "returned_at" in result
+    # latenza di sblocco misurata DALLO STOP: quasi immediata (≪ 30s di backoff).
+    assert result["returned_at"] - stop_at < 1.0
 
 
 def test_stop_reale_sveglia_il_backoff(make_app, app_mod):
