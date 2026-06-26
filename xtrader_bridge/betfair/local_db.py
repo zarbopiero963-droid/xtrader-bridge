@@ -34,7 +34,7 @@ _SCOPED = {
     "betfair_sports": "event_type_id",
     "betfair_competitions": "event_type_id",
     "betfair_events": "event_type_id",
-    "betfair_markets": "event_id",
+    "betfair_markets": "event_type_id",
     "betfair_selections": "market_id",
 }
 
@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS betfair_events (
     competition_id TEXT,
     name           TEXT,
     open_date      TEXT,
+    participant_1  TEXT,
+    participant_2  TEXT,
     active         INTEGER NOT NULL DEFAULT 1,
     last_seen_at   INTEGER NOT NULL DEFAULT 0
 );
@@ -133,7 +135,20 @@ class BetfairLocalDB:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Migrazioni idempotenti per DB creati da versioni precedenti dello schema.
+
+        `CREATE TABLE IF NOT EXISTS` non aggiunge colonne nuove a una tabella già
+        esistente: qui aggiungiamo le colonne mancanti con `ALTER TABLE ADD COLUMN`
+        (no-op se già presenti). PR-P6: `participant_1`/`participant_2` su eventi."""
+        cols = {r["name"] for r in
+                self._conn.execute("PRAGMA table_info(betfair_events)").fetchall()}
+        for col in ("participant_1", "participant_2"):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE betfair_events ADD COLUMN {col} TEXT")
 
     def close(self) -> None:
         with self._lock:
@@ -166,19 +181,22 @@ class BetfairLocalDB:
             (str(competition_id), str(event_type_id), name, int(seen_at)))
 
     def upsert_event(self, event_id, event_type_id, competition_id, name,
-                     open_date=None, *, seen_at=0):
+                     open_date=None, participant_1=None, participant_2=None, *,
+                     seen_at=0):
         self._exec(
             """INSERT INTO betfair_events
                  (event_id, event_type_id, competition_id, name, open_date,
-                  active, last_seen_at)
-               VALUES (?, ?, ?, ?, ?, 1, ?)
+                  participant_1, participant_2, active, last_seen_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
                ON CONFLICT(event_id) DO UPDATE SET
                  event_type_id=excluded.event_type_id,
                  competition_id=excluded.competition_id, name=excluded.name,
-                 open_date=excluded.open_date, active=1,
+                 open_date=excluded.open_date,
+                 participant_1=excluded.participant_1,
+                 participant_2=excluded.participant_2, active=1,
                  last_seen_at=excluded.last_seen_at""",
             (str(event_id), str(event_type_id), str(competition_id), name,
-             open_date, int(seen_at)))
+             open_date, participant_1, participant_2, int(seen_at)))
 
     def upsert_market(self, market_id, event_id, event_type_id, market_name,
                       market_type=None, *, seen_at=0):
