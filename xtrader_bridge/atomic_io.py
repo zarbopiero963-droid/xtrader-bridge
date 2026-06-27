@@ -48,7 +48,11 @@ def _fsync_dir(d):
     except OSError:
         pass                                # fs che non supporta l'fsync di una dir → no-op
     finally:
-        os.close(dir_fd)
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass                            # anche il close è best-effort: mai propagare
+                                            # un errore DOPO un replace già riuscito (CodeRabbit)
 
 
 def atomic_write(path, write_fn, *, prefix="tmp_", suffix=".tmp", mode="w",

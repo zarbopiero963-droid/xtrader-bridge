@@ -191,18 +191,19 @@ def test_fsync_dir_errore_di_fsync_non_propaga(tmp_path, monkeypatch):
 
 
 def test_dir_fsync_fallito_non_perde_il_file(tmp_path, monkeypatch):
-    # Il fsync della dir è chiamato DOPO un replace già riuscito: anche se _fsync_dir
-    # avesse un problema interno, il file resta scritto (l'API non deve perderlo).
-    calls = {"n": 0}
-    real = atomic_io._fsync_dir
+    # Esercita il path di FALLIMENTO del fsync della dir attraverso il codice reale: si
+    # forza `os.close(dir_fd)` (nel finally di `_fsync_dir`) a sollevare, DOPO un replace
+    # già riuscito. Il contratto best-effort/non-raising deve reggere: il file resta
+    # scritto e non c'è temporaneo residuo (CodeRabbit). In atomic_write l'unico `os.close`
+    # è quello di `_fsync_dir` (il temporaneo è chiuso dal `with os.fdopen`).
+    real_close = os.close
 
-    def flaky(d):
-        calls["n"] += 1
-        return real(d)                                     # qui ok; il punto è l'ordine/robustezza
+    def boom_close(fd):
+        real_close(fd)                                     # chiudi davvero il fd (no leak)…
+        raise OSError("EIO: close della directory fallita")  # …poi simula l'errore
 
-    monkeypatch.setattr(atomic_io, "_fsync_dir", flaky)
+    monkeypatch.setattr(atomic_io.os, "close", boom_close)
     p = tmp_path / "out.txt"
     atomic_io.atomic_write_text(str(p), "NUOVO", prefix=".t_", suffix=".tmp")
-    assert p.read_text(encoding="utf-8") == "NUOVO"
-    assert calls["n"] == 1                                 # chiamato una volta, dopo il replace
+    assert p.read_text(encoding="utf-8") == "NUOVO"        # file integro nonostante il close fallito
     assert _leftovers(tmp_path, ".t_") == []               # nessun temporaneo residuo
