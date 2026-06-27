@@ -104,6 +104,13 @@ def _retention_label(days: int) -> str:
 
 
 class App(ctk.CTk):
+    # Default di CLASSE (non di istanza): garantiscono che questi attributi esistano SEMPRE
+    # nel class dict, così un accesso non trova mai "attributo mancante" che — su una vera
+    # `customtkinter.CTk` senza `self.tk` inizializzato (es. istanza headless nei test) —
+    # cadrebbe nel `__getattr__` di tkinter e ricorrerebbe all'infinito (RecursionError, #184 H1).
+    _betfair_login_busy = False     # True mentre un login Betfair è in corso (anti-rientro)
+    _betfair_panel = None           # pannello tab Betfair, valorizzato in `_open_tools`
+
     def __init__(self):
         super().__init__()
         self.title(f"XTrader Signal Bridge v{__version__}")
