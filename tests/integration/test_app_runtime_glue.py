@@ -296,3 +296,39 @@ def test_stop_svuota_coda_e_csv_attivo_non_gui(make_app, app_mod, tmp_path):
     assert _events_in_csv(gui) == ["Roma v Lazio"]       # path GUI cambiato NON toccato
     assert a._active_csv_path is None
     assert a._running is False
+
+
+def test_stop_non_sottomette_coroutine_fire_and_forget_al_loop(
+        make_app, app_mod, monkeypatch, tmp_path):
+    """#184 H5: con una sessione viva (`_loop` + `_tg_app` presenti) `_stop` NON deve
+    fare fire-and-forget di `updater.stop()`/`stop()` sul loop con
+    `run_coroutine_threadsafe`. Quelle coroutine non vengono mai attese e `loop.close()`
+    nel supervisor le scarta ("Event loop is closed", eccezioni silenziate, doppio stop
+    dell'updater). Lo shutdown autorevole è IN-loop (`_async_run`, dopo che
+    `_is_current()` diventa False). `_stop` deve solo segnalare lo stop
+    (`_running=False`, `_stop_event`) e gestire coda/CSV.
+
+    Fail-first: sul vecchio codice `submitted` conterrebbe 2 coroutine."""
+    from unittest.mock import MagicMock
+    from xtrader_bridge import csv_writer
+
+    active = str(tmp_path / "attivo.csv")
+    q = _queue_with(_row("Inter v Milan"))
+    csv_writer.write_rows(q.active_rows(), active)
+    a = make_app(csv_path=active, queue=q, capture_schedule=False)
+    a._expire_timer = None
+    # Sessione viva: loop non-None e app Telegram con updater.stop()/stop(). Sul VECCHIO
+    # codice `_stop` qui sottometterebbe due coroutine fire-and-forget al loop.
+    a._loop = object()
+    a._tg_app = MagicMock()
+    submitted = []
+    monkeypatch.setattr(app_mod.asyncio, "run_coroutine_threadsafe",
+                        lambda coro, loop: submitted.append(coro))
+
+    app_mod.App._stop(a)
+
+    assert submitted == []            # nessuna coroutine fire-and-forget (regressione H5)
+    assert a._stop_event.is_set()     # ma lo stop È segnalato: il supervisor esce e chiude in-loop
+    assert a._running is False
+    assert q.is_empty()               # coda/CSV gestiti come sempre
+    assert _events_in_csv(active) == []

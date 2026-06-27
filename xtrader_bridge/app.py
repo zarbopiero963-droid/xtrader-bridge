@@ -1372,20 +1372,18 @@ class App(ctk.CTk):
         self._update_real_mode_banner()
         self._update_active_indicator(0)   # nessuna riga attiva dopo lo STOP (#136 p5)
         self._cancel_pending_autostart()   # uno STOP non deve essere annullato da un auto-start pendente (Codex P2)
+        # Arresto del listener: un SOLO percorso autorevole, IN-loop. Impostare
+        # `_running=False` (sopra) e svegliare il backoff con `_stop_event` fa uscire il
+        # supervisor dal suo `while _is_current()` e gli fa eseguire, NELLO STESSO event
+        # loop, `await updater.stop(); app.stop(); app.shutdown()` prima di `loop.close()`
+        # (#184 H5). NON si sottomettono qui coroutine fire-and-forget con
+        # `run_coroutine_threadsafe`: non venendo mai attese, sarebbero scartate da
+        # `loop.close()` ("Event loop is closed", eccezioni silenziate, doppio stop
+        # dell'updater) e darebbero la falsa impressione di un arresto gestito. `_running`
+        # già False impedisce ogni scrittura CSV nella finestra di ≤1s prima dello stop
+        # in-loop (_process scrive solo se `_running`); `_is_current()`/epoch invalidano
+        # comunque la vecchia sessione, quindi un AVVIA successivo non trova due poller.
         self._stop_event.set()        # sveglia subito un'eventuale attesa del backoff
-        if self._loop and self._tg_app:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self._tg_app.updater.stop(), self._loop)
-                asyncio.run_coroutine_threadsafe(
-                    self._tg_app.stop(), self._loop)
-            except Exception as ex:   # noqa: BLE001 — NON silenziare (audit C2): un arresto
-                # fallito può lasciare vivo un poller vecchio; lo si segnala (il log handler
-                # redige i token) e ci si affida a `_is_current()`/epoch per invalidare la
-                # sessione, così un AVVIA successivo non si ritrova due poller attivi.
-                self._log(f"⚠️ Arresto listener non pulito ({type(ex).__name__}): "
-                          "la sessione è invalidata, ma controlla i log se l'AVVIA successivo "
-                          "segnala anomalie.")
         if self._expire_timer:
             self._expire_timer.cancel()
         # Anti-segnale-stantio: una chiusura/STOP normale non deve lasciare una riga

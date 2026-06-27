@@ -17,8 +17,8 @@ branch dedicato off `main` aggiornato, **test hard di resilienza** (fail-first),
 | H1 | h1-login-thread | `app.py`, `betfair/sync_tab_gui.py` | merged (#187) |
 | H2 | h2-fsync-dir | `atomic_io.py` | merged (#188) |
 | H3 | h3-clear-toctou | `csv_writer.py` | merged (#189) |
-| H4 | h4-dedupe-finite | `signal_dedupe.py` | in PR |
-| H5 | h5-stop-futures | `app.py` | da fare |
+| H4 | h4-dedupe-finite | `signal_dedupe.py` | merged (#190) |
+| H5 | h5-stop-futures | `app.py` | in PR |
 | M1 | m1-migrate-strip | `config_store.py` | da fare |
 | M2 | m2-chat-strip | `signal_router.py` | da fare |
 | M3 | m3-partial-save | `config_store.py` | da fare |
@@ -68,3 +68,19 @@ dopo un power-loss subito dopo il replace, il file non torni al contenuto preced
 stantio, stato dedupe/daily/config vecchio). È **best-effort e non solleva mai**: su Windows
 (dir non apribile come fd) o su filesystem che rifiutano l'fsync di una directory è un no-op,
 e — essendo chiamato DOPO un replace già riuscito — un suo errore non perde il file scritto.
+
+## H5 — arresto listener con un solo percorso autorevole (no fire-and-forget)
+
+`_stop` non sottomette più `updater.stop()`/`app.stop()` al loop con
+`run_coroutine_threadsafe`. Quelle coroutine non venivano mai attese: il supervisor
+(`_run_bot`), uscendo dal `while _is_current()` quando `_running` diventa False, chiude
+l'event loop con `loop.close()`, che **scarta** le coroutine pendenti → rumore
+"Event loop is closed", eccezioni mai recuperate e doppio stop dell'updater (l'arresto
+vero avviene già IN-loop in `_async_run`: `await updater.stop(); app.stop(); app.shutdown()`).
+Ora `_stop` segnala soltanto lo stop (`_running=False` + `_stop_event.set()`) e lascia
+che lo **stesso** event loop esegua lo shutdown ordinato prima di `loop.close()`. Niente
+finestra di doppia scommessa: `_running` già False impedisce ogni scrittura CSV nei ≤1s
+prima dello stop in-loop (`_process` scrive solo se `_running`), e `_is_current()`/epoch
+invalidano comunque la vecchia sessione (nessun doppio poller a un AVVIA successivo).
+Questo rende anche `_on_close` più deterministico: il join del thread del bot non corre
+più con coroutine fire-and-forget scartate da `loop.close()`.
