@@ -114,6 +114,22 @@ def test_betfair_login_async_non_rientra_in_tk_a_chiusura(make_app):
     assert a._betfair_login_busy is False
 
 
+def test_betfair_login_async_schedule_fallito_non_crasha(make_app):
+    # Race teardown (Codex): se la root viene distrutta TRA il check `_closing` e `after`,
+    # lo schedule solleva (Tcl/RuntimeError): va catturato, niente eccezione sul daemon thread.
+    a = make_app(running=True)
+    a._closing = False
+
+    def _boom_after(*x, **k):
+        raise RuntimeError("Tcl_Eval: application has been destroyed")
+
+    a.after = _boom_after
+    a._betfair_login_work = lambda creds: "x"
+    a._betfair_login_async(types.SimpleNamespace(app_key="K"))
+    a._betfair_login_thread.join(timeout=5)                   # il thread NON deve propagare
+    assert a._betfair_login_busy is False
+
+
 def test_betfair_login_async_completamento_stantio_scartato(make_app):
     # Stale completion (Codex): logout/«Cancella credenziali» durante un login lento →
     # il login in volo è stantio: scarta il token appena settato e NON riporta a «connesso».
@@ -184,20 +200,23 @@ def test_betfair_discard_stale_login_pulisce_sessione(make_app):
 
 # ── panel: logout/delete invalidano un login in volo ─────────────────────────
 
-def test_panel_logout_e_delete_invalidano_login():
+def test_panel_logout_e_delete_invalidano_login_PRIMA_dell_azione():
     import pytest
     pytest.importorskip("customtkinter")   # il widget richiede la GUI (assente in locale)
     from xtrader_bridge.betfair.sync_tab_gui import BetfairSyncPanel
 
     p = object.__new__(BetfairSyncPanel)
-    invalidated = []
-    p._on_invalidate = lambda: invalidated.append(True)
-    p.controller = types.SimpleNamespace(logout=lambda: None,
-                                         delete_saved_credentials=lambda: True)
+    order = []
+    p._on_invalidate = lambda: order.append("invalidate")
+    p.controller = types.SimpleNamespace(
+        logout=lambda: order.append("logout"),
+        delete_saved_credentials=lambda: order.append("delete") or True)
     p._action_status = types.SimpleNamespace(configure=lambda **k: None)
     p._refresh_buttons = lambda: None
     p._reload = lambda: None
 
     p._logout()
+    assert order == ["invalidate", "logout"]     # invalida PRIMA del logout (Codex)
+    order.clear()
     p._delete()
-    assert invalidated == [True, True]      # entrambi invalidano il login in volo
+    assert order == ["invalidate", "delete"]      # invalida PRIMA della cancellazione

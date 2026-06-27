@@ -236,16 +236,21 @@ class BetfairSyncPanel(ctk.CTkFrame):
         self._refresh_buttons()
 
     def _logout(self):
-        self.controller.logout()
-        if self._on_invalidate:             # invalida un login in volo (no sessione stantia)
+        # Invalida PRIMA dell'azione distruttiva: così un login in volo che finisce durante
+        # il logout (o il keyring) non può ri-settare il token DOPO — l'epoch è già bumpato
+        # e il completamento stantio viene scartato (Codex).
+        if self._on_invalidate:
             self._on_invalidate()
+        self.controller.logout()
         self._action_status.configure(text="")
         self._refresh_buttons()
 
     def _delete(self):
+        # Invalida PRIMA del path distruttivo (anche se il keyring blocca/fallisce): l'intento
+        # dell'utente è cancellare, quindi nessun login in volo deve lasciare la sessione attiva.
+        if self._on_invalidate:
+            self._on_invalidate()
         if self.controller.delete_saved_credentials():
-            if self._on_invalidate:         # invalida un login in volo (no sessione stantia)
-                self._on_invalidate()
             self._action_status.configure(text="🗑️ Credenziali cancellate.")
             self._reload()                  # solo dopo una cancellazione riuscita
         else:

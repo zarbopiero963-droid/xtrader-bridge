@@ -985,7 +985,12 @@ class App(ctk.CTk):
             if self._closing:           # app in chiusura: niente chiamate Tk dal worker
                 self._betfair_login_busy = False
                 return
-            self.after(0, lambda: self._betfair_login_done(msg, gen))
+            try:
+                self.after(0, lambda: self._betfair_login_done(msg, gen))
+            except Exception:           # noqa: BLE001 — race: root distrutta TRA il check
+                # `_closing` e lo schedule (`destroy()` invalida l'interprete Tcl). Niente
+                # eccezione non gestita sul daemon thread a teardown (Codex).
+                self._betfair_login_busy = False
 
         t = threading.Thread(target=_worker, daemon=True, name="betfair-login")
         self._betfair_login_thread = t      # esposto per join nei test (deterministico)
