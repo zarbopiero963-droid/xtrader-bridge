@@ -1535,7 +1535,7 @@ class App(ctk.CTk):
                     return
                 if decision == telegram_dispatch.CONFIRM:
                     # PR-23 + audit C8: la chat notifiche XTrader porta ESITI → percorso conferma.
-                    self._process_confirmation(text, cfg, route_cfg=route)
+                    self._process_confirmation(text, cfg, route_cfg=route, epoch=epoch)
                     return
                 if decision == telegram_dispatch.IGNORE_NOT_RELEVANT:
                     # Chat non ammessa o messaggio non pertinente: non scrive.
@@ -1552,7 +1552,7 @@ class App(ctk.CTk):
                 clean = (text or "").strip()
                 first_line = clean.splitlines()[0] if clean else ""
                 self.after(0, lambda m=first_line[:120]: self._set_last("message", m))
-                self._process(text, cfg, chat_id=runtime_chat, route_cfg=route)
+                self._process(text, cfg, chat_id=runtime_chat, route_cfg=route, epoch=epoch)
 
             app.add_handler(MessageHandler(filters.ALL, _handle))
             await app.initialize()
@@ -1674,16 +1674,30 @@ class App(ctk.CTk):
             self._log("✅ Connesso a Telegram.")
 
     # ── PROCESS SIGNAL ────────────────────────
-    def _process(self, text: str, cfg: dict, chat_id: str = None, route_cfg: dict = None):
+    def _epoch_current(self, epoch=None) -> bool:
+        """Sessione listener ancora attiva: `_running` E (se `epoch` è fornito) stesso
+        `_listener_epoch`. Da ricontrollare al PUNTO di scrittura/consumo, sotto `_queue_lock`
+        (Codex #191): tra l'ingresso di un callback del vecchio updater e la scrittura, un
+        STOP→START può rimettere `_running=True` con un epoch NUOVO; un gate solo su `_running`
+        lascerebbe scrivere quel callback con la cfg della VECCHIA sessione (CSV/DRY_RUN/limiti)
+        → segnale doppio/stantio. `epoch=None` (chiamanti legacy/test) → solo `_running`."""
+        if epoch is None:
+            return self._running
+        return self._running and self._listener_epoch == epoch
+
+    def _process(self, text: str, cfg: dict, chat_id: str = None, route_cfg: dict = None,
+                 epoch=None):
         # `cfg` è la config di SESSIONE (snapshot a START): governa l'ESECUZIONE
         # (guardrail `live_guard`: DRY_RUN/limiti, e il path CSV), che NON deve cambiare a
         # metà sessione. `route_cfg` è la config VIVA per il ROUTING/PARSING (issue #82):
         # parser/provider/mappature nomi aggiornati applicati subito. Default a `cfg` per
-        # retro-compatibilità (chiamanti senza routing live).
+        # retro-compatibilità (chiamanti senza routing live). `epoch` lega la scrittura alla
+        # SESSIONE listener: un callback del vecchio updater non scrive dopo uno STOP→START.
         route = route_cfg if route_cfg is not None else cfg
-        # Stop in corso: non processare/consumare stato né scrivere (Codex P2). Il
-        # check definitivo anti-race con il clear è dentro il queue_lock, sotto.
-        if not self._running:
+        # Stop/sessione superata: non processare/consumare stato né scrivere (Codex P2/#191).
+        # Il check DEFINITIVO anti-race (con il clear allo stop E con un nuovo START) è dentro
+        # il queue_lock, sotto, al punto di scrittura.
+        if not self._epoch_current(epoch):
             return
         # CP-09: instrada al Parser Personalizzato attivo (autoritativo) o, in
         # assenza, al parser hardcoded. Non scrive righe non piazzabili: meglio
@@ -1728,9 +1742,11 @@ class App(ctk.CTk):
         # fail-safe) è in `write_path.commit_signal`, esercitabile in CI; qui resta solo il
         # LOCK e l'anti-race con il clear allo stop.
         with self._queue_lock:
-            # Anti-race con il clear allo stop (Codex P2): se nel frattempo è stato premuto
-            # STOP, non valutare né scrivere — il clear ha (o sta per) svuotare il CSV.
-            if not self._running:
+            # Anti-race DEFINITIVO al punto di scrittura (Codex P2/#191): se nel frattempo è
+            # stato premuto STOP (clear in corso) O è intervenuto un nuovo START (epoch diverso,
+            # `_running` rimesso True), NON valutare né scrivere — sarebbe la cfg di una sessione
+            # superata. Ricontrollo sotto LO STESSO lock della scrittura, non solo all'ingresso.
+            if not self._epoch_current(epoch):
                 return
             commit = write_path.commit_signal(
                 self._tracker, self._daily, self._queue,
@@ -1839,7 +1855,8 @@ class App(ctk.CTk):
             self.after(0, lambda m=msg: self._log(m))
             self.after(0, lambda m=msg: self._set_last("error", m, "#66bb6a"))
 
-    def _process_confirmation(self, text: str, cfg: dict, route_cfg: dict = None) -> None:
+    def _process_confirmation(self, text: str, cfg: dict, route_cfg: dict = None,
+                              epoch=None) -> None:
         """Interpreta una notifica XTrader (PR-23) rispetto ai segnali in attesa e,
         se associata, marca l'esito rimuovendo il segnale dalla coda + CSV.
 
@@ -1855,8 +1872,9 @@ class App(ctk.CTk):
         snapshot di sessione (`cfg`), come gli altri parametri di ESECUZIONE
         (DRY_RUN/limiti/token), che non cambiano a metà sessione.
         """
-        # Stop in corso: non riscrivere il CSV dopo che lo STOP l'ha svuotato (Codex P2).
-        if not self._running:
+        # Stop/sessione superata: non riscrivere il CSV dopo che lo STOP l'ha svuotato
+        # (Codex P2) né con la cfg di una sessione precedente dopo un nuovo START (#191).
+        if not self._epoch_current(epoch):
             return
         live = route_cfg if isinstance(route_cfg, dict) else cfg
         confirm_kw = confirmation_reader.normalize_keywords(live.get("confirmation_keywords"))
@@ -1871,6 +1889,11 @@ class App(ctk.CTk):
             path = cfg["csv_path"]
             write_error = None
             with self._queue_lock:
+                # Ricontrollo DEFINITIVO sotto il lock di scrittura (Codex #191): uno STOP→START
+                # tra l'ingresso e qui non deve far riscrivere il CSV con la cfg della vecchia
+                # sessione. Il segnale NON è ancora stato rimosso, quindi resta ritentabile.
+                if not self._epoch_current(epoch):
+                    return
                 self._queue.confirm(result.signal_id)   # rimuove il segnale dalla coda
                 rows = self._queue.active_rows()
                 try:

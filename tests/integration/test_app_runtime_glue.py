@@ -118,6 +118,64 @@ def test_process_gate_running_false_non_scrive(make_app, app_mod, monkeypatch, t
     assert q.active_rows() == []
 
 
+def test_process_gate_epoch_superato_non_scrive(make_app, app_mod, monkeypatch, tmp_path):
+    """#191 P1 (round 3): un callback del VECCHIO updater non deve scrivere se la sessione
+    listener è cambiata (STOP→START → epoch avanzato) anche con `_running=True`. Con
+    `epoch=1` ma `_listener_epoch=2`, `_process` NON scrive (gate d'ingresso `_epoch_current`).
+
+    Fail-first: sul vecchio codice `_process` ignorava l'epoch → scriveva (running True)."""
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    a = make_app(csv_path=path, queue=q,
+                 tracker=signal_dedupe.SignalTracker(),
+                 daily=safety_guard.DailyLimiter(max_per_day=10))
+    a._listener_epoch = 2                      # un nuovo START è già intervenuto
+    spy = _spy_writer(monkeypatch, app_mod, fail=False)
+    _patch_resolve(monkeypatch, app_mod, _row("Inter v Milan"))
+
+    app_mod.App._process(a, "msg", {"csv_path": path, "dry_run": False}, chat_id="1", epoch=1)
+
+    assert spy["n"] == 0                       # sessione superata: nessuna scrittura
+    assert q.active_rows() == []
+
+
+def test_process_epoch_cambia_durante_il_processo_non_scrive(make_app, app_mod, monkeypatch, tmp_path):
+    """#191 P1 (round 3) — TOCTOU sotto il lock: l'epoch coincide all'INGRESSO (passa il gate),
+    poi un STOP→START avanza l'epoch PRIMA della scrittura. Il ricontrollo sotto `_queue_lock`
+    deve impedire la scrittura con la cfg della vecchia sessione.
+
+    Si simula il cambio epoch col primo `self.after` di `_process` (eseguito subito
+    dall'harness, dopo il gate d'ingresso e prima del lock di scrittura).
+
+    Fail-first: senza il ricontrollo sotto il lock, `_process` scrive (gate d'ingresso già
+    passato con epoch=1)."""
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    a = make_app(csv_path=path, queue=q,
+                 tracker=signal_dedupe.SignalTracker(),
+                 daily=safety_guard.DailyLimiter(max_per_day=10))
+    a._listener_epoch = 1                      # coincide all'ingresso → il gate iniziale passa
+    spy = _spy_writer(monkeypatch, app_mod, fail=False)
+    _patch_resolve(monkeypatch, app_mod, _row("Inter v Milan"))
+
+    # Un nuovo START avanza l'epoch DOPO il gate d'ingresso ma PRIMA del lock di scrittura:
+    # lo si aggancia al primo `after` invocato da `_process` (bump "received"), che l'harness
+    # esegue immediatamente. Si ripristina `after` subito dopo per non riavanzare ad ogni call.
+    orig_after = a.after
+
+    def _after_then_bump_epoch(delay=None, func=None, *x, **k):
+        a._listener_epoch = 2                  # STOP→START intervenuto a metà processo
+        a.after = orig_after
+        return orig_after(delay, func, *x, **k)
+
+    a.after = _after_then_bump_epoch
+
+    app_mod.App._process(a, "msg", {"csv_path": path, "dry_run": False}, chat_id="1", epoch=1)
+
+    assert spy["n"] == 0                       # ricontrollo sotto il lock: nessuna scrittura
+    assert q.active_rows() == []               # coda non mutata (segnale resta ritentabile)
+
+
 def test_process_duplicato_non_riscrive_ma_persiste(make_app, app_mod, monkeypatch, tmp_path):
     path = str(tmp_path / "segnali.csv")
     q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
@@ -188,6 +246,27 @@ def test_confirmation_gate_running_false_e_no_op(make_app, app_mod, tmp_path):
                                       {"csv_path": path})
 
     assert len(q.active_rows()) == 1               # callback tardivo: coda non mutata
+    assert _events_in_csv(path) == ["Roma v Lazio"]
+    assert a.expiry_calls == []
+
+
+def test_confirmation_gate_epoch_superato_e_no_op(make_app, app_mod, tmp_path):
+    """#191 P1 (round 3): una conferma del VECCHIO updater non deve rimuovere/riscrivere se la
+    sessione listener è cambiata (epoch avanzato) anche con `_running=True`. Con `epoch=1` ma
+    `_listener_epoch=2`, `_process_confirmation` è no-op (coda e CSV intatti, segnale ritentabile).
+
+    Fail-first: sul vecchio codice ignorava l'epoch → confermava e riscriveva (running True)."""
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = _queue_with(_row("Roma v Lazio"))
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q)
+    a._listener_epoch = 2                          # un nuovo START è già intervenuto
+
+    app_mod.App._process_confirmation(a, "Roma v Lazio Esito finale Roma piazzata",
+                                      {"csv_path": path}, epoch=1)
+
+    assert len(q.active_rows()) == 1               # sessione superata: coda non mutata
     assert _events_in_csv(path) == ["Roma v Lazio"]
     assert a.expiry_calls == []
 

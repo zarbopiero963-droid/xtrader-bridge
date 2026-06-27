@@ -111,3 +111,14 @@ shutdown; `_safe_shutdown_tg(app, loop)` riceve l'app e il loop della propria se
 `self._tg_app` solo se punta ancora alla propria app. `self._tg_app`/`self._async_stop_event`
 restano solo come *handle* per i lettori esterni e per `_stop` (che sveglia la sessione
 corrente), senza più dirottare il teardown di una sessione superata.
+
+**Hardening review Codex #191 (P1, round 3) — epoch ricontrollato al punto di scrittura.**
+Il gate epoch in `_handle` era solo all'INGRESSO del callback: tra quel check e la scrittura
+in `_process`/`_process_confirmation`, un STOP→START sul thread GUI può avanzare l'epoch
+(1→2) e rimettere `_running=True`, e quei metodi facevano gate solo su `_running` → il vecchio
+callback scriveva/consumava stato con la cfg della VECCHIA sessione (TOCTOU). Correzione:
+`_process`/`_process_confirmation` ricevono `epoch` da `_handle` e lo ricontrollano via
+`_epoch_current(epoch)` (running **e** stesso `_listener_epoch`) sia all'ingresso sia **sotto
+`_queue_lock`**, allo stesso punto della scrittura. Così uno STOP→START intervenuto a metà
+non fa scrivere/confermare una sessione superata (il segnale resta in coda, ritentabile).
+`epoch=None` per chiamanti legacy/test → comportamento invariato (solo `_running`).
