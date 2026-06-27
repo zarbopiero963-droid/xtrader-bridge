@@ -51,6 +51,16 @@ _ALLOWED_EXE_PATH = "dist/" + _ALLOWED_EXE_NAME + ".exe"
 _ALLOWED_BUNDLE_SRC = "data/dizionario_xtrader.csv"
 _ALLOWED_BUNDLE_DEST = "data"
 _ALLOWED_SCRIPT = "main.py"
+# Allowlist delle OPZIONI PyInstaller ammesse nel comando di build: SOLO quelle usate dai
+# workflow reali. Tutto il resto è rifiutato fail-closed, così non serve inseguire ogni
+# singolo flag pericoloso (`--resource`, `--runtime-hook`, `--additional-hooks-dir`,
+# `--uac-admin`, `--collect-datas`, …): qualunque opzione non elencata fa fallire il gate
+# (Codex). `--name`/`-n` sono ammessi come opzione, ma il loro VALORE è verificato a parte.
+_ALLOWED_OPTS = {
+    "--onefile", "--windowed", "--name", "-n", "--paths",
+    "--collect-submodules", "--collect-all", "--add-data", "--hidden-import",
+}
+
 # Coppie (opzione, pacchetto) di raccolta ammesse: ESATTE, non solo il nome del pacchetto.
 # Così `--collect-all xtrader_bridge` (che raccoglierebbe i DATI del package) resta vietato,
 # mentre `--collect-submodules xtrader_bridge` (solo codice) è ammesso (CodeRabbit).
@@ -72,7 +82,8 @@ _PYINSTALLER_DETECT = re.compile(
     r"^\s*&?\s*pyinstaller\b"
     r"|^\s*&?\s*python\s+-m\s+pyinstaller\b"
     r"|pyinstaller\.__main__"
-    r"|(?:^|\s)import\s+pyinstaller\b",
+    r"|(?:^|\s)import\s+pyinstaller\b"
+    r"|from\s+pyinstaller\s+import",
     re.IGNORECASE)
 # Forma canonica analizzabile: il comando È l'eseguibile CLI `pyinstaller …` (con `&` opz.).
 _PYINSTALLER_CLI = re.compile(r"^\s*&?\s*pyinstaller\b", re.IGNORECASE)
@@ -223,6 +234,25 @@ def _py_scripts(cmd: str):
     return re.findall(r"(?<!\S)([^\s\"']+\.py)(?!\S)", cmd)
 
 
+def _name_values(cmd: str):
+    """Valori del nome EXE da `--name`/`-n`, robusto anche alla forma corta CONCATENATA
+    (`-nAdmin`) oltre a `--name X`/`--name=X`/`-n X`/`-n=X` (Codex)."""
+    vals = _opt_values(cmd, "--name")
+    for mm in re.finditer(r"""(?<![\w-])-n(?:=|\s*)(?:"([^"]*)"|'([^']*)'|([^\s]+))""", cmd):
+        vals.append(next(g for g in mm.groups() if g is not None))
+    return vals
+
+
+def _option_tokens(cmd: str):
+    """Nomi-opzione normalizzati nel comando: per `--opt`/`--opt=val` → `--opt`; per la forma
+    corta `-xVAL`/`-x` → `-x` (la singola lettera). I valori e gli script (non inizianti con
+    `-`) non sono opzioni."""
+    opts = []
+    for tok in re.findall(r"(?<!\S)--?[A-Za-z][^\s=]*", cmd):
+        opts.append(tok.split("=")[0] if tok.startswith("--") else tok[:2])
+    return opts
+
+
 def _build_commands():
     """`(workflow_name, command)` per OGNI comando di shell che invoca PyInstaller (qualsiasi
     forma)."""
@@ -275,11 +305,22 @@ def test_un_solo_build_e_onefile_per_workflow():
             f"{name}: build non --onefile (EXE singolo personale)"
 
 
-def test_nome_exe_solo_quello_personale():
-    """Il nome EXE (`--name`/`-n`, anche `--opt=value`) dev'essere esattamente quello
-    personale: blocca «Admin» o altri nomi."""
+def test_solo_opzioni_note():
+    """Allowlist delle opzioni PyInstaller: il comando di build può usare SOLO le opzioni
+    note e sicure dei workflow reali. Qualunque altra opzione — `--resource`/`-r`,
+    `--runtime-hook`, `--additional-hooks-dir`, `--uac-admin`, `--collect-datas`, … — è
+    rifiutata fail-closed (Codex)."""
     for name, cmd in _build_commands():
-        names = _opt_values(cmd, "--name", "-n")
+        for opt in _option_tokens(cmd):
+            assert opt in _ALLOWED_OPTS, \
+                f"{name}: opzione PyInstaller non in allowlist: {opt!r} ({cmd!r})"
+
+
+def test_nome_exe_solo_quello_personale():
+    """Il nome EXE (`--name`/`-n`, anche `--opt=value` o forma corta concatenata `-nX`)
+    dev'essere esattamente quello personale: blocca «Admin» o altri nomi."""
+    for name, cmd in _build_commands():
+        names = _name_values(cmd)
         assert names, f"{name}: build senza --name (nome EXE ambiguo)"
         for got in names:
             assert _norm(got) == _ALLOWED_EXE_NAME, \
