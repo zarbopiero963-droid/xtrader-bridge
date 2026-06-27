@@ -1450,19 +1450,31 @@ class App(ctk.CTk):
         loop = asyncio.new_event_loop()
         self._loop = loop
         asyncio.set_event_loop(loop)
+        # App Telegram di QUESTA sessione tenuta in un riferimento LOCALE, non solo in
+        # `self._tg_app` (condiviso e sovrascrivibile da un nuovo START). Lo shutdown in-loop
+        # e quello d'errore devono fermare l'app COSTRUITA da questa sessione, mai quella di un
+        # successore: in uno STOP→START rapido il vecchio loop, leggendo `self._tg_app`,
+        # fermerebbe l'app NUOVA e lascerebbe il proprio updater a fare polling (Codex #191).
+        session_app = None
 
         def _is_current():
             # Sessione ancora valida: bridge attivo E nessun nuovo START intervenuto.
             return self._running and self._listener_epoch == epoch
 
         async def _async_run():
+            nonlocal session_app
             # Evento di stop IN-loop (#184 H5 / Codex #191): `_stop`, dal thread GUI, lo sveglia
             # con `call_soon_threadsafe` così il supervisor esce SUBITO dall'attesa e ferma
             # l'updater promptamente (niente finestra di ~1s con il vecchio poller ancora
             # attivo), restando un percorso atteso in-loop (nessuna coroutine scartata da
-            # `loop.close`). Ricreato a ogni (ri)connessione: appartiene a QUESTO loop.
-            self._async_stop_event = asyncio.Event()
-            self._tg_app = ApplicationBuilder().token(cfg["bot_token"]).build()
+            # `loop.close`). LOCALE alla coroutine (l'attesa sotto ci si aggancia direttamente),
+            # con `self._async_stop_event` solo come handle per `_stop`: un nuovo START che
+            # riassegna l'attributo non dirotta l'attesa di QUESTA sessione.
+            stop_evt = asyncio.Event()
+            self._async_stop_event = stop_evt
+            app = ApplicationBuilder().token(cfg["bot_token"]).build()
+            session_app = app
+            self._tg_app = app          # handle per lettori esterni; un START successivo lo rimpiazza
 
             async def _handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 # Gate fail-closed per epoch (Codex #191 P1): finché il vecchio updater non
@@ -1542,12 +1554,12 @@ class App(ctk.CTk):
                 self.after(0, lambda m=first_line[:120]: self._set_last("message", m))
                 self._process(text, cfg, chat_id=runtime_chat, route_cfg=route)
 
-            self._tg_app.add_handler(MessageHandler(filters.ALL, _handle))
-            await self._tg_app.initialize()
-            await self._tg_app.start()
+            app.add_handler(MessageHandler(filters.ALL, _handle))
+            await app.initialize()
+            await app.start()
             # drop_pending_updates: scarta i messaggi accodati mentre il bridge era
             # offline, così all'avvio non si processano segnali vecchi (PR-11, #9).
-            await self._tg_app.updater.start_polling(
+            await app.updater.start_polling(
                 allowed_updates=["message", "channel_post"], drop_pending_updates=True)
             # Connessione stabilita: azzera il backoff e segnala (utile dopo una
             # riconnessione). drop_pending_updates=True a OGNI (ri)connessione scarta
@@ -1560,14 +1572,16 @@ class App(ctk.CTk):
             # finestra di ~1s che lascerebbe vivo il vecchio poller (Codex #191).
             while _is_current():
                 try:
-                    await asyncio.wait_for(self._async_stop_event.wait(), timeout=1)
+                    await asyncio.wait_for(stop_evt.wait(), timeout=1)
                 except asyncio.TimeoutError:
                     pass
-                if self._async_stop_event.is_set():
+                if stop_evt.is_set():
                     break
-            await self._tg_app.updater.stop()
-            await self._tg_app.stop()
-            await self._tg_app.shutdown()
+            # Shutdown sull'app LOCALE di questa sessione (non `self._tg_app`, che un nuovo
+            # START può aver già rimpiazzato): si ferma SEMPRE il proprio updater (Codex #191).
+            await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
 
         # Supervisor con backoff: riprova le cadute di rete (errori transitori) finché
         # il bridge è in esecuzione; non ritenta dopo uno STOP manuale né su un errore
@@ -1579,7 +1593,7 @@ class App(ctk.CTk):
                 loop.run_until_complete(_async_run())
                 break                      # uscita pulita: STOP richiesto
             except Exception as ex:        # noqa: BLE001 — gestito sotto
-                self._safe_shutdown_tg()   # chiude il vecchio updater prima di ritentare
+                self._safe_shutdown_tg(session_app, loop)   # chiude l'app DI QUESTA sessione prima di ritentare
                 # Un nuovo START (epoch cambiato) o uno STOP invalidano QUESTA
                 # sessione: esci senza ritentare (Codex P1, niente doppio poller).
                 if not _is_current():
@@ -1621,10 +1635,11 @@ class App(ctk.CTk):
         if self._loop is loop:
             self._loop = None
 
-    def _safe_shutdown_tg(self) -> None:
-        """Chiude in modo best-effort l'app Telegram fallita prima di un nuovo
-        tentativo, così non restano due updater/polling attivi insieme."""
-        app = self._tg_app
+    def _safe_shutdown_tg(self, app, loop) -> None:
+        """Chiude in modo best-effort l'app Telegram di QUESTA sessione (riferimento LOCALE
+        `app`, sul `loop` di questa sessione) prima di un nuovo tentativo, così non restano due
+        updater/polling attivi insieme. NON usa `self._tg_app`/`self._loop`: un nuovo START
+        concorrente li avrebbe già rimpiazzati e si fermerebbe l'app/loop sbagliati (Codex #191)."""
         if app is None:
             return
 
@@ -1636,10 +1651,13 @@ class App(ctk.CTk):
                     pass
 
         try:
-            self._loop.run_until_complete(_shutdown())
+            loop.run_until_complete(_shutdown())
         except Exception:                # noqa: BLE001
             pass
-        self._tg_app = None
+        # Azzera l'handle SOLO se punta ancora alla nostra app: non clobberare il `_tg_app`
+        # di un nuovo START intervenuto nel frattempo (Codex #191).
+        if self._tg_app is app:
+            self._tg_app = None
 
     def _reconnect_wait(self, delay: float) -> None:
         """Attesa del backoff interrompibile, senza busy-poll: `Event.wait` dorme fino

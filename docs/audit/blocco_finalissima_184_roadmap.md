@@ -100,3 +100,14 @@ pulsante AVVIA era già riabilitato. Due correzioni complementari:
    (`_running` rimesso True dal nuovo START) e scrivere con la cfg della VECCHIA sessione
    (CSV/DRY_RUN/limiti) → rischio segnale doppio/stantio. Ora `_handle` ritorna subito se
    `not _is_current()` (running **e** stesso epoch), indipendente dal timing dell'arresto.
+
+**Hardening review Codex #191 (P1, round 2) — shutdown legato alla sessione.** Lo shutdown
+in-loop e quello d'errore usavano `self._tg_app`/`self._loop`/`self._async_stop_event`
+(attributi CONDIVISI): in uno STOP→START rapido un nuovo START li rimpiazza prima che il
+vecchio loop arrivi allo shutdown, così il vecchio `_async_run` fermava l'app NUOVA e
+lasciava il proprio updater a fare polling (segnali persi / conflitto Telegram). Correzione:
+ogni sessione tiene riferimenti LOCALI (`app`, `stop_evt`) e li usa per handler/avvio/attesa/
+shutdown; `_safe_shutdown_tg(app, loop)` riceve l'app e il loop della propria sessione e azzera
+`self._tg_app` solo se punta ancora alla propria app. `self._tg_app`/`self._async_stop_event`
+restano solo come *handle* per i lettori esterni e per `_stop` (che sveglia la sessione
+corrente), senza più dirottare il teardown di una sessione superata.

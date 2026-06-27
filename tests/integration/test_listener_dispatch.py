@@ -233,3 +233,77 @@ def test_handle_dopo_stop_non_instrada(make_app, app_mod, monkeypatch):
 
     assert a.processed == []
     assert a.confirmations == []
+
+
+# ── Codex #191 P1 (round 2): lo shutdown deve fermare l'app DI QUESTA sessione ──────
+
+class _RecApp:
+    """App Telegram finta che REGISTRA l'ordine di teardown (updater.stop/stop/shutdown),
+    così il test verifica QUALE app viene fermata in uno STOP→START concorrente."""
+
+    def __init__(self, on_start_polling=None):
+        self.stops = []
+        self.handlers = []
+        outer = self
+
+        class _Upd:
+            async def start_polling(self, **kw):
+                if on_start_polling is not None:
+                    on_start_polling()
+
+            async def stop(self):
+                outer.stops.append("updater_stop")
+
+        self.updater = _Upd()
+
+    def add_handler(self, h):
+        self.handlers.append(h)
+
+    async def initialize(self):
+        pass
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        self.stops.append("stop")
+
+    async def shutdown(self):
+        self.stops.append("shutdown")
+
+
+def test_shutdown_ferma_app_locale_non_quella_di_un_nuovo_start(make_app, app_mod, monkeypatch):
+    """Codex #191 P1: in uno STOP→START rapido un nuovo START sovrascrive `self._tg_app`
+    PRIMA che il vecchio loop arrivi allo shutdown. Il vecchio `_async_run` deve fermare la
+    PROPRIA app (riferimento locale), NON quella nuova: altrimenti fermerebbe il nuovo updater
+    e lascerebbe vivo il proprio poller (segnali persi / conflitto Telegram).
+
+    Fail-first: sul vecchio codice lo shutdown usava `self._tg_app` → avrebbe fermato l'app
+    NUOVA (`new_app.stops` popolato) e non la propria (`old_app.stops` vuoto)."""
+    a = make_app(config=CFG)
+    a._running = True
+    a._listener_epoch = 1
+    new_app = _RecApp()                # l'app che un START concorrente mette in self._tg_app
+
+    def _simula_nuovo_start():
+        a._running = False             # fa uscire il wait loop di QUESTA sessione
+        a._tg_app = new_app            # un nuovo START ha già rimpiazzato l'handle condiviso
+
+    old_app = _RecApp(on_start_polling=_simula_nuovo_start)
+
+    def _builder():
+        class _B:
+            def token(self, _t):
+                return self
+
+            def build(self):
+                return old_app
+        return _B()
+
+    monkeypatch.setattr(app_mod, "ApplicationBuilder", _builder)
+    monkeypatch.setattr(app_mod, "MessageHandler", lambda *a_, **k: ("MH", a_, k))
+
+    app_mod.App._run_bot(a, {"bot_token": "x"}, 1)
+
+    assert old_app.stops == ["updater_stop", "stop", "shutdown"]   # ferma la PROPRIA app
+    assert new_app.stops == []                                     # NON tocca l'app del nuovo START
