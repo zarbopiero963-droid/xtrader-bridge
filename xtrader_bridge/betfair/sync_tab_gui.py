@@ -28,11 +28,16 @@ class BetfairSyncPanel(ctk.CTkFrame):
     assenti, i pulsanti relativi restano comunque governati dal controller."""
 
     def __init__(self, master=None, session: BetfairSession = None,
-                 on_login=None, on_sync=None, autosync=None, on_autosync_change=None):
+                 on_login=None, on_sync=None, autosync=None, on_autosync_change=None,
+                 on_invalidate=None):
         super().__init__(master)
         self.controller = BetfairSyncController(session=session)
         self._on_login = on_login
         self._on_sync = on_sync
+        # Invalidazione del login in volo (logout/«Cancella credenziali»): così il
+        # completamento di un login partito PRIMA non riporta la sessione a «connesso»
+        # dopo l'azione utente (Codex su #184 H1).
+        self._on_invalidate = on_invalidate
         self._autosync = autosync or {}
         self._on_autosync_change = on_autosync_change
         self._sync_in_progress = False
@@ -231,11 +236,20 @@ class BetfairSyncPanel(ctk.CTkFrame):
         self._refresh_buttons()
 
     def _logout(self):
+        # Invalida PRIMA dell'azione distruttiva: così un login in volo che finisce durante
+        # il logout (o il keyring) non può ri-settare il token DOPO — l'epoch è già bumpato
+        # e il completamento stantio viene scartato (Codex).
+        if self._on_invalidate:
+            self._on_invalidate()
         self.controller.logout()
         self._action_status.configure(text="")
         self._refresh_buttons()
 
     def _delete(self):
+        # Invalida PRIMA del path distruttivo (anche se il keyring blocca/fallisce): l'intento
+        # dell'utente è cancellare, quindi nessun login in volo deve lasciare la sessione attiva.
+        if self._on_invalidate:
+            self._on_invalidate()
         if self.controller.delete_saved_credentials():
             self._action_status.configure(text="🗑️ Credenziali cancellate.")
             self._reload()                  # solo dopo una cancellazione riuscita

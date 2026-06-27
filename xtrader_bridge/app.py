@@ -104,6 +104,14 @@ def _retention_label(days: int) -> str:
 
 
 class App(ctk.CTk):
+    # Default di CLASSE (non di istanza): garantiscono che questi attributi esistano SEMPRE
+    # nel class dict, così un accesso non trova mai "attributo mancante" che — su una vera
+    # `customtkinter.CTk` senza `self.tk` inizializzato (es. istanza headless nei test) —
+    # cadrebbe nel `__getattr__` di tkinter e ricorrerebbe all'infinito (RecursionError, #184 H1).
+    _betfair_login_busy = False     # True mentre un login Betfair è in corso (anti-rientro)
+    _betfair_login_epoch = 0        # epoch del login: logout/delete lo bumpa → scarta i completamenti stantii
+    _betfair_panel = None           # pannello tab Betfair, valorizzato in `_open_tools`
+
     def __init__(self):
         super().__init__()
         self.title(f"XTrader Signal Bridge v{__version__}")
@@ -927,6 +935,99 @@ class App(ctk.CTk):
             return DictionaryResolver(self._betfair_sync_engine().db)
         except Exception:   # noqa: BLE001 — best-effort: il flusso live non deve crashare
             return None
+
+    def _betfair_login_work(self, creds):
+        """Esegue il login Betfair (POST HTTPS **bloccante**, fino a ~20s) e ritorna il
+        messaggio di log (già redatto, mai segreti). Pensato per girare su un WORKER
+        THREAD (H1): NON tocca Tk. Su successo porta la App Key del login nell'engine
+        (così la sync funziona anche con credenziali non ancora salvate nel keyring);
+        su `LoginError` ritorna il messaggio safe del client (nessuna response grezza)."""
+        from .betfair.auth_client import LoginError
+        try:
+            self._betfair_auth_client().login(creds)
+            try:
+                self._betfair_sync_engine().set_app_key(creds.app_key)
+            except Exception:           # noqa: BLE001 — l'engine può mancare se il DB fallisce
+                pass
+            return "🔵 Login Betfair riuscito (sessione in memoria)."
+        except LoginError as ex:        # messaggio già safe (nessun segreto)
+            return f"❌ Login Betfair fallito: {ex}"
+
+    def _betfair_login_async(self, creds):
+        """Callback «Accedi» della tab Betfair (H1): il login (rete, fino a ~20s) gira su
+        un WORKER THREAD per non bloccare la GUI Tk — come `_betfair_sync` — e l'esito è
+        marshalato sul main thread con `after(0, ...)`. Un flag anti-rientro
+        (`_betfair_login_busy`) evita login concorrenti finché uno è in corso (equivale a
+        disabilitare il bottone). Prima del fix il login girava sincrono nella callback Tk
+        e congelava la finestra (no repaint/STOP/chiusura) per tutta la durata della POST.
+
+        Robustezza (Codex su #184 H1):
+        - **teardown**: se l'app si sta chiudendo il worker NON rientra in Tk (flag
+          `_closing`), così non chiama `after` su una root distrutta;
+        - **completamento stantio**: ogni login prende un `gen` (epoch); se nel frattempo
+          l'utente fa logout o «Cancella credenziali» (`_betfair_invalidate_login` bumpa
+          l'epoch), il login in volo è stantio → si scarta il token appena settato
+          (`_betfair_discard_stale_login`) e non si riporta la UI a «connesso». Il flag
+          anti-rientro serializza i login, quindi un mismatch di epoch = logout/delete."""
+        if self._betfair_login_busy:
+            return
+        self._betfair_login_busy = True
+        self._betfair_login_epoch += 1
+        gen = self._betfair_login_epoch
+
+        def _worker():
+            msg = self._betfair_login_work(creds)
+            if gen != self._betfair_login_epoch:
+                # logout/delete arrivato durante il login: disfa il token stantio.
+                self._betfair_login_busy = False
+                self._betfair_discard_stale_login()
+                return
+            if self._closing:           # app in chiusura: niente chiamate Tk dal worker
+                self._betfair_login_busy = False
+                return
+            try:
+                self.after(0, lambda: self._betfair_login_done(msg, gen))
+            except Exception:           # noqa: BLE001 — race: root distrutta TRA il check
+                # `_closing` e lo schedule (`destroy()` invalida l'interprete Tcl). Niente
+                # eccezione non gestita sul daemon thread a teardown (Codex).
+                self._betfair_login_busy = False
+
+        t = threading.Thread(target=_worker, daemon=True, name="betfair-login")
+        self._betfair_login_thread = t      # esposto per join nei test (deterministico)
+        t.start()
+
+    def _betfair_login_done(self, msg, gen):
+        """Rientro nel main thread dopo il login (via `after`): libera il flag, e — solo se
+        il login NON è stantio (epoch) e la root è viva (`_closing`/`winfo_exists`) — logga
+        l'esito redatto e aggiorna gli stati dei bottoni della tab."""
+        self._betfair_login_busy = False
+        if gen != self._betfair_login_epoch:        # superato da logout/delete: ignora
+            return
+        if self._closing or not self.winfo_exists():
+            return
+        self._log(msg)
+        panel = self._betfair_panel
+        if panel is not None:
+            try:
+                panel._refresh_buttons()
+            except Exception:           # noqa: BLE001 — refresh best-effort, mai crash GUI
+                pass
+
+    def _betfair_invalidate_login(self):
+        """Invalida un eventuale login in volo: chiamato dal pannello su «Logout» e
+        «Cancella credenziali» così il completamento di un login partito PRIMA dell'azione
+        non riporti la sessione a «connesso» DOPO che l'utente ha sloggato/cancellato
+        (Codex). Bumpa solo l'epoch (lettura/scrittura int semplice, thread-safe in CPython)."""
+        self._betfair_login_epoch += 1
+
+    def _betfair_discard_stale_login(self):
+        """Un login STANTIO (superato da logout/delete) ha già settato il sessionToken
+        dentro `auth_client.login`: lo si scarta pulendo la sessione (solo RAM), così
+        l'utente resta sloggato come voleva. Best-effort, fuori dal main thread (niente Tk)."""
+        try:
+            self._betfair_session_obj().clear()
+        except Exception:               # noqa: BLE001 — best-effort
+            pass
 
     def _betfair_autosync_tick(self):
         """Tick periodico (mentre il bridge è APERTO) dell'auto-sync Betfair. La
@@ -1883,7 +1984,6 @@ class App(ctk.CTk):
         from .name_mapping_gui import MappingPanel
         from .custom_parser_gui import CustomParserPanel
         from .betfair.sync_tab_gui import BetfairSyncPanel
-        from .betfair.auth_client import LoginError
         from .betfair.sync_engine import OK as _SYNC_OK
 
         # UNA sola finestra hub: se è già aperta, si cambia scheda e la si porta in primo
@@ -1988,21 +2088,6 @@ class App(ctk.CTk):
             panel_refs["mapping"] = MappingPanel(parent, on_saved=_mapping_saved)
             return panel_refs["mapping"]
 
-        def _betfair_login(creds):
-            """Callback «Accedi» della tab Betfair: login con certificato. L'esito va
-            nel log (redatto): mai token/segreti in chiaro."""
-            try:
-                self._betfair_auth_client().login(creds)
-                # Porta la App Key del login nell'engine: così la sync funziona anche
-                # dopo un login con credenziali NON ancora salvate nel keyring (Codex).
-                try:
-                    self._betfair_sync_engine().set_app_key(creds.app_key)
-                except Exception:           # noqa: BLE001 — l'engine può mancare se il DB fallisce
-                    pass
-                self._log("🔵 Login Betfair riuscito (sessione in memoria).")
-            except LoginError as ex:        # messaggio già safe (nessun segreto)
-                self._log(f"❌ Login Betfair fallito: {ex}")
-
         def _betfair_sync(sports):
             """Callback «Sincronizza ora»: la sync (rete) gira su un WORKER THREAD per
             non bloccare la GUI Tk; l'esito è marshalato sul main thread con
@@ -2067,7 +2152,8 @@ class App(ctk.CTk):
             _cfg_bf = self._load_config()
             self._betfair_panel = BetfairSyncPanel(
                 parent, session=self._betfair_session_obj(),
-                on_login=_betfair_login, on_sync=_betfair_sync,
+                on_login=self._betfair_login_async, on_sync=_betfair_sync,
+                on_invalidate=self._betfair_invalidate_login,
                 autosync={"enabled": config_store.as_bool_optin(_cfg_bf.get("betfair_auto_sync", False)),
                           "hour": _cfg_bf.get("betfair_auto_sync_hour", 23),
                           "sports": _cfg_bf.get("betfair_sync_sports")},
