@@ -77,16 +77,20 @@ _FORBIDDEN_BUNDLE = re.compile(
     re.IGNORECASE)
 
 # Invocazione PyInstaller in QUALSIASI forma su un SINGOLO comando di shell: CLI (anche con
-# call-operator PowerShell `& pyinstaller`), `python -m PyInstaller`, o API Python.
+# call-operator PowerShell `& pyinstaller`, `& "pyinstaller"` o `& "C:\…\pyinstaller.exe"`),
+# `python -m PyInstaller`, o API Python. Il prefisso `["']?(?:[^\s"']*[\\/])?` ammette
+# l'eventuale virgoletta del call-operator e un path completo (Codex).
+_CLI_PREFIX = r"""^\s*&?\s*["']?(?:[^\s"']*[\\/])?pyinstaller(?:\.exe)?\b"""
 _PYINSTALLER_DETECT = re.compile(
-    r"^\s*&?\s*pyinstaller\b"
-    r"|^\s*&?\s*python\s+-m\s+pyinstaller\b"
+    _CLI_PREFIX
+    + r"""|^\s*&?\s*["']?python(?:\.exe)?["']?\s+-m\s+pyinstaller\b"""
     r"|pyinstaller\.__main__"
     r"|(?:^|\s)import\s+pyinstaller\b"
     r"|from\s+pyinstaller\s+import",
     re.IGNORECASE)
-# Forma canonica analizzabile: il comando È l'eseguibile CLI `pyinstaller …` (con `&` opz.).
-_PYINSTALLER_CLI = re.compile(r"^\s*&?\s*pyinstaller\b", re.IGNORECASE)
+# Forma canonica analizzabile: il comando È l'eseguibile CLI `pyinstaller …` (call-operator e
+# virgolette/percorso ammessi).
+_PYINSTALLER_CLI = re.compile(_CLI_PREFIX, re.IGNORECASE)
 # `python -m pytest …` come comando eseguibile (no echo/commenti), con `&` PowerShell opz.
 _PYTEST_CMD = re.compile(r"^\s*&?\s*python\s+-m\s+pytest\b", re.IGNORECASE)
 # Indicatori di block scalar YAML per `run:` (folded `>` / literal `|`).
@@ -122,7 +126,7 @@ def _jobs(text: str):
     for ln in lines[start:]:
         if re.match(r"^\S", ln):   # tornati a colonna 0: fine sezione jobs
             break
-        m = re.match(r"^  ([\w-]+):\s*$", ln)   # header job a 2 spazi
+        m = re.match(r"^  ([\w-]+):\s*(?:#.*)?$", ln)   # header job a 2 spazi (commento opz.)
         if m:
             if cur_name is not None:
                 jobs.append((cur_name, "\n".join(cur_body)))
@@ -192,6 +196,10 @@ def _split_shell(step: str):
             cmds.append("".join(buf))
             buf = []
             i += 2
+        elif ch in "&|":   # `&` (background/sequenza PowerShell) e `|` (pipe) singoli
+            cmds.append("".join(buf))
+            buf = []
+            i += 1
         else:
             buf.append(ch)
             i += 1
@@ -289,6 +297,23 @@ def test_forma_build_canonica():
         scripts = _py_scripts(cmd)
         assert scripts == [_ALLOWED_SCRIPT], \
             f"{name}: lo script di build dev'essere solo {_ALLOWED_SCRIPT}, trovati {scripts}"
+
+
+def test_build_e_comando_isolato_nel_suo_step():
+    """Il comando di build dev'essere l'UNICO comando del suo passo `run:`: nessun
+    concatenamento nello stesso step (`pytest && pyinstaller`, `pytest || pyinstaller`,
+    `pytest & pyinstaller`, `cd x; pyinstaller`). Così la build non può essere resa
+    condizionale al fallimento dei test (`||`) né accodata ad altri comandi (Codex)."""
+    found = False
+    for path in _workflow_files():
+        for step in _run_steps(_read(path)):
+            cmds = [c.strip() for c in _split_shell(step)
+                    if c.strip() and not c.strip().startswith("#")]
+            if any(_PYINSTALLER_DETECT.search(c) for c in cmds):
+                found = True
+                assert len(cmds) == 1, \
+                    f"{os.path.basename(path)}: la build dev'essere isolata nel suo step: {cmds}"
+    assert found, "nessun passo di build trovato"
 
 
 def test_un_solo_build_e_onefile_per_workflow():
