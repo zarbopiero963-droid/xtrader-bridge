@@ -429,6 +429,31 @@ def test_migrate_strip_chat_id_evita_filtro_sordo():
     ascoltare). Fail-first: il vecchio `_migrate` salvava il valore non strippato."""
     assert config_store._migrate({"chat_id": "  -100123\n"})["chat_id"] == "-100123"
     assert config_store._migrate({"chat_id": "\t999 "})["chat_id"] == "999"
+    # Boundary fail-closed (review Sourcery/CodeRabbit): un chat_id di SOLI whitespace/newline
+    # si normalizza a "" — cioè "nessun filtro configurato", non un filtro-fantasma che
+    # matcherebbe nulla mascherato da valore valido. Vedi il lock-in a valle qui sotto.
+    assert config_store._migrate({"chat_id": " \n\t "})["chat_id"] == ""
+
+
+def test_migrate_chat_id_solo_whitespace_resta_fail_closed_a_valle():
+    """#184 M1 (review Sourcery/CodeRabbit): un `chat_id` di soli whitespace, dopo `_migrate`,
+    è `""` e a valle vale "NESSUN filtro configurato" (`has_chat_filter` False), NON un percorso
+    "admit-all" nascosto. L'admit-all legacy resta comunque bloccato dal fail-fast d'avvio
+    (`app._start`) e dal dispatch `IGNORE_NO_FILTER`. Un id reale (anche con padding), invece,
+    resta un filtro valido che ammette SOLO quella chat."""
+    from xtrader_bridge import signal_router
+
+    # Soli whitespace → "" → nessun filtro configurato (non un filtro-fantasma).
+    vuoto = config_store._migrate({"chat_id": " \n\t "})
+    assert vuoto["chat_id"] == ""
+    assert signal_router.has_chat_filter(vuoto) is False
+
+    # Id reale con padding → normalizzato → filtro valido che ammette SOLO quella chat.
+    reale = config_store._migrate({"chat_id": "  -100123  "})
+    assert reale["chat_id"] == "-100123"
+    assert signal_router.has_chat_filter(reale) is True
+    assert signal_router.is_chat_allowed(reale, "-100123") is True   # la chat configurata passa
+    assert signal_router.is_chat_allowed(reale, "-999") is False     # nessun'altra è ammessa
 
 
 def test_migrate_strip_campi_stringa_noti():
@@ -470,6 +495,17 @@ def test_load_config_strippa_chat_id_da_file(tmp_path):
     p.write_text(json.dumps({"chat_id": " -100999\n", "provider": "TG_PRE "}))
     cfg = config_store.load_config(str(p))
     assert cfg["chat_id"] == "-100999"
+    assert cfg["provider"] == "TG_PRE"
+
+
+def test_load_config_coercisce_e_strippa_chat_id_numerico_da_file(tmp_path):
+    """#184 M1 end-to-end (review Sourcery): un `config.json` con `chat_id` NUMERICO
+    (`-100123` come numero JSON, input malformato ma realistico) viene coerciuto a stringa e
+    normalizzato via `load_config` → `_migrate`, senza crash."""
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"chat_id": -100123, "provider": "TG_PRE "}))
+    cfg = config_store.load_config(str(p))
+    assert cfg["chat_id"] == "-100123"
     assert cfg["provider"] == "TG_PRE"
 
 

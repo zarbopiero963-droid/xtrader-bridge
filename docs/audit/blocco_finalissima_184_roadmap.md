@@ -54,7 +54,7 @@ dell'allowlist `_STRIP_STR_KEYS` (`chat_id`, `xtrader_notification_chat_id`, `pr
 editata a mano / copia-incolla da Telegram) altrimenti non matcherebbe il confronto a
 valle e renderebbe "sordo" il filtro single-chat (fail-closed: nessuna bet sbagliata, ma
 il bridge smette di ascoltare). Esclusi di proposito: `bot_token` (segreto, gestito da
-`token_store`/keyring) e `csv_path` (un path può contenere spazi; validazione è un finding
+`token_store`/keyring) e `csv_path` (un path può contenere spazi; la validazione è un finding
 separato). Normalizzazione di chiavi ESISTENTI: nessun cambio di contratto/colonne CSV.
 
 ## Decisioni del proprietario (NON implementare senza conferma)
