@@ -126,6 +126,32 @@ def test_restore_state_day_malformato_non_azzera_il_conteggio():
     assert lim.allow(now=t) is False            # tetto raggiunto: niente overtrading
 
 
+def test_restore_state_day_impossibile_non_azzera_il_conteggio():
+    """#184 M4 (Codex P1 / Sourcery): un `day` con FORMATO `YYYY-MM-DD` ma data IMPOSSIBILE
+    (`2026-99-99`, `2026-02-30`) non è un giorno reale e NON deve far azzerare il conteggio.
+    Con un controllo solo-regex passerebbe come "valido diverso da oggi" → reset → cap pieno
+    (overtrading). La validazione di calendario lo tratta come UNKNOWN (fail-closed).
+
+    Fail-first: con il vecchio controllo `_DAY_RE` `remaining` tornava al massimo (5)."""
+    t = 1_000_000.0
+    for impossibile in ("2026-99-99", "2026-02-30", "2026-13-01", "2026-00-10"):
+        lim = sg.DailyLimiter(max_per_day=5)
+        assert lim.restore_state({"day": impossibile, "count": 4}) is True
+        assert lim.remaining(now=t) == 1, f"{impossibile}: conteggio scartato (overtrading)"
+        assert lim.allow(now=t) is True
+        assert lim.allow(now=t) is False        # tetto: niente cap pieno da stato corrotto
+
+
+def test_is_valid_day_solo_date_canoniche_reali():
+    """#184 M4: `_is_valid_day` accetta SOLO date di calendario reali in forma canonica
+    zero-padded (quella di `_day_key`); rifiuta formati/varianti non canoniche e impossibili."""
+    assert sg._is_valid_day("2026-06-28") is True
+    assert sg._is_valid_day(sg._day_key(1_000_000.0)) is True       # round-trip con _day_key
+    for bad in ("2026-99-99", "2026-02-30", "2026-13-01", "2026-1-1", " 2026-06-28",
+                "2026/06/28", "garbage", "", None, 20260628):
+        assert sg._is_valid_day(bad) is False, f"{bad!r} accettato per errore"
+
+
 def test_restore_state_day_valido_giorno_diverso_azzera_normalmente():
     """#184 M4 (contro-prova): un `day` VALIDO ma di un GIORNO DIVERSO da oggi deve continuare
     ad azzerare il conteggio (è un nuovo giorno reale, reset legittimo). La protezione M4 vale
