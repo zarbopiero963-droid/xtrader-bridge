@@ -110,6 +110,71 @@ def test_restore_state_malformato_ignorato():
     assert lim.restore_state({"day": "2026-01-01", "count": 2}) is True
 
 
+def test_restore_state_day_malformato_non_azzera_il_conteggio():
+    """#184 M4: uno stato corrotto con `day` MALFORMATO (non `YYYY-MM-DD`) ma `count` valido
+    NON deve concedere un cap giornaliero PIENO. Prima `_roll`, vedendo `day` diverso da oggi,
+    azzerava il conteggio → overtrading (fail-open). Ora il conteggio viene CONSERVATO e
+    attribuito al giorno corrente (fail-closed): il tetto residuo riflette i segnali già usati.
+
+    Fail-first: sul vecchio codice `_roll` azzerava → `remaining` tornava al massimo (5)."""
+    t = 1_000_000.0
+    lim = sg.DailyLimiter(max_per_day=5)
+    # `day` malformato (es. file corrotto/manomesso) ma 4 segnali già consumati.
+    assert lim.restore_state({"day": "non-una-data", "count": 4}) is True
+    assert lim.remaining(now=t) == 1            # conteggio conservato (NON un cap pieno)
+    assert lim.allow(now=t) is True             # l'ultimo ammesso
+    assert lim.allow(now=t) is False            # tetto raggiunto: niente overtrading
+
+
+def test_restore_state_day_impossibile_non_azzera_il_conteggio():
+    """#184 M4 (Codex P1 / Sourcery): un `day` con FORMATO `YYYY-MM-DD` ma data IMPOSSIBILE
+    (`2026-99-99`, `2026-02-30`) non è un giorno reale e NON deve far azzerare il conteggio.
+    Con un controllo solo-regex passerebbe come "valido diverso da oggi" → reset → cap pieno
+    (overtrading). La validazione di calendario lo tratta come UNKNOWN (fail-closed).
+
+    Fail-first: con il vecchio controllo `_DAY_RE` `remaining` tornava al massimo (5)."""
+    t = 1_000_000.0
+    for impossibile in ("2026-99-99", "2026-02-30", "2026-13-01", "2026-00-10"):
+        lim = sg.DailyLimiter(max_per_day=5)
+        assert lim.restore_state({"day": impossibile, "count": 4}) is True
+        assert lim.remaining(now=t) == 1, f"{impossibile}: conteggio scartato (overtrading)"
+        assert lim.allow(now=t) is True
+        assert lim.allow(now=t) is False        # tetto: niente cap pieno da stato corrotto
+
+
+def test_is_valid_day_solo_date_canoniche_reali():
+    """#184 M4: `_is_valid_day` accetta SOLO date di calendario reali in forma canonica
+    zero-padded (quella di `_day_key`); rifiuta formati/varianti non canoniche e impossibili."""
+    assert sg._is_valid_day("2026-06-28") is True
+    assert sg._is_valid_day(sg._day_key(1_000_000.0)) is True       # round-trip con _day_key
+    for bad in ("2026-99-99", "2026-02-30", "2026-13-01", "2026-1-1", " 2026-06-28",
+                "2026/06/28", "garbage", "", None, 20260628):
+        assert sg._is_valid_day(bad) is False, f"{bad!r} accettato per errore"
+
+
+def test_restore_state_day_valido_giorno_diverso_azzera_normalmente():
+    """#184 M4 (contro-prova): un `day` VALIDO ma di un GIORNO DIVERSO da oggi deve continuare
+    ad azzerare il conteggio (è un nuovo giorno reale, reset legittimo). La protezione M4 vale
+    SOLO per i `day` malformati, non cambia il rollover quotidiano normale."""
+    ieri = 1_000_000.0                          # _day_key ≈ 1970-01-12
+    oggi = ieri + 86_400.0                       # +1 giorno → chiave diversa ma VALIDA
+    lim = sg.DailyLimiter(max_per_day=5)
+    assert lim.restore_state({"day": sg._day_key(ieri), "count": 4}) is True
+    assert lim.remaining(now=oggi) == 5         # nuovo giorno valido → reset al cap pieno
+
+
+def test_restore_state_day_non_stringa_conserva_count_fail_closed():
+    """#184 M4: anche un `day` non-stringa (es. `null`/numero da JSON manomesso) con `count`
+    valido non scarta il conteggio: `day` → "" (unknown) e il conteggio resta del giorno
+    corrente (fail-closed)."""
+    t = 1_000_000.0
+    lim = sg.DailyLimiter(max_per_day=3)
+    assert lim.restore_state({"day": None, "count": 2}) is True   # day non-stringa accettato come unknown
+    assert lim.remaining(now=t) == 1
+    assert lim.allow(now=t) is True
+    assert lim.allow(now=t) is False
+
+
 # ── audit #105 P2: persistenza daily state atomica + fsync ────────────────────
 
 def test_save_load_state_round_trip_senza_temporanei(tmp_path):

@@ -25,6 +25,11 @@ from . import atomic_io, validators
 
 DEFAULT_MAX_PER_DAY = 200      # tetto di segnali nuovi accettati in un giorno (UTC)
 
+# Sentinel "giorno sconosciuto": stato fresco o `day` corrotto/non interpretabile. `_roll` lo
+# tratta fail-closed (adotta oggi CONSERVANDO il conteggio), distinto da un giorno valido
+# diverso da oggi (→ reset legittimo). Fonte unica per non ripetere `self._day or ""` (Sourcery).
+_UNKNOWN_DAY = ""
+
 # Valori stringa interpretati come "spento" = modalità REALE (per config che
 # arrivano da campi testuali GUI o da un vecchio config.json scritto a mano).
 # NB: solo valori OFF **espliciti**. Vuoto / `None` / `"none"` NON sono qui: un
@@ -64,11 +69,35 @@ def real_mode_warning(cfg) -> str:
             "(DRY_RUN) per i test.")
 
 
+def _fmt_day(year: int, mon: int, mday: int) -> str:
+    """Forma canonica zero-padded ``YYYY-MM-DD`` (fonte unica per `_day_key`/`_is_valid_day`)."""
+    return f"{year:04d}-{mon:02d}-{mday:02d}"
+
+
 def _day_key(now: float) -> str:
     """Chiave del giorno (UTC) ``YYYY-MM-DD`` per `now` (epoch). UTC per evitare
     salti di fuso/ora legale che falserebbero il reset giornaliero."""
     t = time.gmtime(now)
-    return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}"
+    return _fmt_day(t.tm_year, t.tm_mon, t.tm_mday)
+
+
+def _is_valid_day(day) -> bool:
+    """True se `day` è una data di CALENDARIO reale in forma canonica ``YYYY-MM-DD`` (quella
+    prodotta da `_day_key`).
+
+    Non basta il formato (Codex P1 / Sourcery): una data IMPOSSIBILE come ``2026-99-99``
+    supererebbe un controllo solo-regex e, differendo dalla chiave di oggi, farebbe azzerare
+    il conteggio in `_roll` → cap giornaliero pieno (overtrading, fail-open). `strptime` valida
+    i range di mese/giorno; il confronto con la forma canonica zero-padded esclude varianti non
+    canoniche (es. ``2026-1-1``, spazi). Tutto ciò che non è una data canonica reale è trattato
+    come `_UNKNOWN_DAY` (fail-closed): il conteggio NON viene mai scartato su uno stato corrotto."""
+    if not isinstance(day, str):
+        return False
+    try:
+        t = time.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return day == _fmt_day(t.tm_year, t.tm_mon, t.tm_mday)
 
 
 @dataclass
@@ -89,9 +118,19 @@ class DailyLimiter:
 
     def _roll(self, now: float) -> None:
         key = _day_key(now)
-        if key != self._day:
-            self._day = key
+        if key == self._day:
+            return
+        # Giorno diverso da oggi. Se `_day` è una data VALIDA (YYYY-MM-DD) → è un nuovo giorno:
+        # reset del conteggio (comportamento normale). Se invece è MALFORMATO/vuoto — stato
+        # corrotto o manomesso (M4 #184) — NON si azzera: non si sa a quale giorno appartenga il
+        # conteggio e fidarsi darebbe un cap PIENO oggi (overtrading, fail-OPEN). Si adotta il
+        # giorno corrente CONSERVANDO il conteggio (fail-CLOSED): al più si è più restrittivi
+        # oggi, mai più permissivi; al prossimo giorno reale (con `_day` valido) si azzererà.
+        # `_is_valid_day` valida il CALENDARIO, non solo il formato: una data impossibile
+        # (`2026-99-99`) da stato corrotto è UNKNOWN, non un giorno valido → niente reset.
+        if _is_valid_day(self._day):
             self._count = 0
+        self._day = key
 
     def allow(self, *, now: float = None) -> bool:
         """True se il segnale è ammesso oggi (e lo conta); False se tetto raggiunto."""
@@ -122,8 +161,12 @@ class DailyLimiter:
             return False
         day = data.get("day")
         count = data.get("count")
-        if isinstance(day, str) and isinstance(count, int) and count >= 0:
-            self._day = day
+        if isinstance(count, int) and count >= 0:
+            # `day` data di calendario reale e canonica → usato così com'è; altrimenti (malformato,
+            # data impossibile, non-stringa) → `_UNKNOWN_DAY` (M4 #184). Il conteggio NON viene
+            # scartato (sarebbe un cap pieno = overtrading): è attribuito al giorno corrente da
+            # `_roll` (fail-closed).
+            self._day = day if _is_valid_day(day) else _UNKNOWN_DAY
             self._count = count
             return True
         return False
