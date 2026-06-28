@@ -335,6 +335,82 @@ def test_replace_with_retry_esaurisce_gli_attempt_e_rilancia(monkeypatch):
     assert calls["n"] == 4                 # ha provato esattamente `attempts` volte
 
 
+# ── _replace_with_retry: errori STRUTTURALI escalano subito (M5, issue #184) ───────
+
+def _oserror(errno_=None, winerror=None, msg="boom"):
+    """Costruisce un OSError con `errno`/`winerror` espliciti (winerror settato come attributo,
+    così il test gira anche su POSIX dove `os.replace` non lo valorizzerebbe)."""
+    exc = OSError(errno_ if errno_ is not None else 0, msg)
+    if winerror is not None:
+        exc.winerror = winerror
+    return exc
+
+
+def test_replace_with_retry_errore_strutturale_escala_subito(monkeypatch):
+    """#184 M5: un errore STRUTTURALE/permanente (es. EISDIR: la destinazione è una directory,
+    o EACCES: dir read-only) NON deve essere ritentato 10×0.1s (~1s sprecato a ogni segnale
+    prima dell'escalation): si propaga al PRIMO tentativo.
+
+    Fail-first: il vecchio codice catturava OGNI OSError e ritentava `attempts` volte."""
+    import errno as _errno
+    for permanent in (_errno.EISDIR, _errno.EACCES, _errno.ENOENT, _errno.EXDEV):
+        calls = {"n": 0}
+
+        def boom(src, dst, _e=permanent):
+            calls["n"] += 1
+            raise _oserror(errno_=_e)
+
+        monkeypatch.setattr(csv_writer.os, "replace", boom)
+        monkeypatch.setattr(csv_writer.time, "sleep", lambda *_: None)
+        with pytest.raises(OSError):
+            csv_writer._replace_with_retry("src", "dst", attempts=10, delay=0)
+        assert calls["n"] == 1, f"errno {permanent}: ritentato invece di escalare subito"
+
+
+def test_replace_with_retry_windows_sharing_violation_ritenta(monkeypatch):
+    """#184 M5: su Windows una ERROR_SHARING_VIOLATION (winerror 32 — XTrader tiene il CSV
+    aperto in lettura) è TRANSITORIA → si ritenta entro il budget e poi riesce."""
+    calls = {"n": 0}
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _oserror(errno_=13, winerror=32)     # sharing violation (transitoria)
+        return None
+
+    monkeypatch.setattr(csv_writer.os, "replace", flaky)
+    csv_writer._replace_with_retry("src", "dst", attempts=5, delay=0)
+    assert calls["n"] == 3                              # 2 retry + successo
+
+
+def test_replace_with_retry_windows_access_denied_escala_subito(monkeypatch):
+    """#184 M5: su Windows un ERROR_ACCESS_DENIED (winerror 5 — es. directory read-only) è
+    STRUTTURALE → escala al primo tentativo, non è una contesa di lock transitoria."""
+    calls = {"n": 0}
+
+    def boom(src, dst):
+        calls["n"] += 1
+        raise _oserror(errno_=13, winerror=5)          # access denied (strutturale)
+
+    monkeypatch.setattr(csv_writer.os, "replace", boom)
+    monkeypatch.setattr(csv_writer.time, "sleep", lambda *_: None)
+    with pytest.raises(OSError):
+        csv_writer._replace_with_retry("src", "dst", attempts=10, delay=0)
+    assert calls["n"] == 1
+
+
+def test_is_retryable_replace_error_classifica_transitori_e_permanenti():
+    """#184 M5: la classificazione: sharing/lock-violation Windows e errori generici (senza
+    errno, es. lock simulato) sono ritentabili; errno strutturali e access-denied Windows no."""
+    import errno as _errno
+    assert csv_writer._is_retryable_replace_error(_oserror(winerror=32)) is True
+    assert csv_writer._is_retryable_replace_error(_oserror(winerror=33)) is True
+    assert csv_writer._is_retryable_replace_error(_oserror(winerror=5)) is False   # access denied
+    assert csv_writer._is_retryable_replace_error(OSError("lock generico")) is True  # errno None
+    for permanent in (_errno.EISDIR, _errno.EACCES, _errno.ENOENT, _errno.ENOTDIR, _errno.EXDEV):
+        assert csv_writer._is_retryable_replace_error(_oserror(errno_=permanent)) is False
+
+
 # ── H3 (#184): check-then-clear di clear_stale_csv ATOMICO sotto _write_lock ──
 
 def test_clear_stale_csv_legge_header_sotto_il_lock(tmp_path, monkeypatch):
