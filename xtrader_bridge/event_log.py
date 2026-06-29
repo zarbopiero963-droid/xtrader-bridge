@@ -16,8 +16,10 @@ redazione di eventuali segreti resta responsabilità del chiamante (cfr.
 
 import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from urllib.parse import quote
 
 from . import config_store
 
@@ -37,12 +39,89 @@ def normalize_level(level) -> str:
 _TELEGRAM_TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_-]{20,}")
 _REDACTED = "[REDACTED_TOKEN]"
 
+# Registro di segreti ESATTI da mascherare per-literal, OLTRE alla regex (issue #184 M7).
+# La regex copre solo lo shape CANONICO del token (<id>:<20+ char>): una forma non-standard
+# (porzione segreta < 20 char, URL-encoded, spezzata su righe) le sfuggirebbe. Registrando il
+# token VIVO da config (`register_secret`), lo si maschera comunque ovunque compaia, in
+# qualunque forma. Soglia minima di lunghezza per non mascherare frammenti banali. Thread-safe
+# (additivo). Mirror della stessa idea in `betfair/log_safety`.
+_MIN_SECRET_LEN = 8
+_secret_lock = threading.Lock()
+_secret_literals: set = set()
+
+
+def register_secret(value) -> bool:
+    """Registra un valore segreto (es. il bot token da config) da mascherare per-literal in
+    `redact_secrets`, ovunque compaia e in QUALSIASI forma. Ritorna `True` se registrato.
+    Valori vuoti/non-stringa o troppo corti (< 8 char) sono ignorati (`False`): meglio non
+    mascherare un frammento banale che inquinerebbe i log."""
+    if not value:
+        return False
+    s = str(value)
+    if len(s) < _MIN_SECRET_LEN:
+        return False
+    with _secret_lock:
+        _secret_literals.add(s)
+    return True
+
+
+def unregister_secret(value) -> None:
+    """Rimuove un segreto dal registro (es. quando il token cambia)."""
+    if not value:
+        return
+    with _secret_lock:
+        _secret_literals.discard(str(value))
+
+
+def clear_secrets() -> None:
+    """Svuota il registro dei segreti (utile nei test e in un reset completo)."""
+    with _secret_lock:
+        _secret_literals.clear()
+
+
+def _secret_forms(secret: str):
+    """Forme derivate di un segreto da mascherare, OLTRE al literal grezzo: la forma
+    **URL-encoded** (`:`→`%3A`, ecc.), realistica quando il token finisce in un URL/HTTP (es. il
+    path `…/bot<token>/…` o una query) dentro il testo di un'eccezione o nella diagnostica.
+
+    Senza questa derivazione, registrare il token GREZZO (come fa `app._register_secret_token`)
+    non maschererebbe la sua forma encoded, che né la regex né il match grezzo riconoscono
+    (Codex #184 M7). Coprire OGNI possibile re-encoding/normalizzazione è impossibile: si coprono
+    le forme realistiche; resta il limite residuo documentato in `redact_secrets`."""
+    forms = {secret}
+    enc = quote(secret, safe="")
+    if enc != secret:
+        forms.add(enc)
+    return forms
+
 
 def redact_secrets(text: str) -> str:
-    """Maschera valori che assomigliano a un bot token Telegram. Difesa unica per
-    i log (GUI e file): un token incorporato per sbaglio (es. nel testo di
-    un'eccezione) non viene mai scritto in chiaro."""
-    return _TELEGRAM_TOKEN_RE.sub(_REDACTED, str(text or ""))
+    """Maschera i segreti nei log (GUI e file): un token incorporato per sbaglio (es. nel testo
+    di un'eccezione) non viene mai scritto in chiaro.
+
+    Due livelli (issue #184 M7):
+    1. **regex** sullo shape CANONICO del bot token Telegram (`<id>:<20+ char>`) — euristica che
+       intercetta anche token NON registrati (es. di un'altra fonte);
+    2. **per-literal** dei segreti registrati con `register_secret` (es. il token VIVO da
+       config), mascherati per esatta corrispondenza E nelle loro forme derivate
+       (`_secret_forms`: grezzo + URL-encoded) — così è coperta anche la forma encoded che la
+       regex non riconosce, registrando solo il token GREZZO (Codex #184 M7).
+
+    Limite residuo onesto: un segreto MAI registrato, o in una forma derivata non prevista
+    (es. spezzato su righe, doppia codifica), può ancora sfuggire; per questo il token di config
+    va registrato (lo fa `app` a load/save)."""
+    s = _TELEGRAM_TOKEN_RE.sub(_REDACTED, str(text or ""))
+    # Espande ogni literal registrato nelle sue forme derivate (grezzo + URL-encoded), poi
+    # sostituisce le più LUNGHE prima: evita che un segreto contenuto in un altro venga
+    # mascherato a metà lasciando un frammento dell'altro in chiaro.
+    with _secret_lock:
+        literals = list(_secret_literals)
+    forms = set()
+    for sec in literals:
+        forms.update(_secret_forms(sec))
+    for sec in sorted(forms, key=len, reverse=True):
+        s = s.replace(sec, _REDACTED)
+    return s
 
 
 # Marker emoji con cui la GUI prefissa i messaggi → livello di log. Serve a

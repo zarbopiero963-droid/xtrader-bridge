@@ -413,6 +413,82 @@ def test_stop_non_sottomette_coroutine_fire_and_forget_al_loop(
     assert _events_in_csv(active) == []
 
 
+def test_register_secret_token_maschera_il_token_nei_log(make_app, app_mod):
+    """#184 M7: `_register_secret_token` registra il bot token nel redattore di `event_log`,
+    così `redact_secrets` lo maschera per-literal in QUALSIASI forma finisca in un log (anche
+    non-canonica). Glue chiamata da `_load_config`/`_save_config`.
+
+    Fail-first: senza la registrazione il token in forma non-canonica resta in chiaro."""
+    from xtrader_bridge import event_log
+    event_log.clear_secrets()
+    try:
+        a = make_app()
+        token = "555:shortSecret_nonCanonico"      # porzione < 20 → la regex NON lo prende
+        assert token in event_log.redact_secrets(f"x {token} y")   # baseline: non mascherato
+        app_mod.App._register_secret_token(a, {"bot_token": token})
+        assert token not in event_log.redact_secrets(f"❌ {token} fine")   # ora mascherato
+        # Codex #184 M7: registrando il solo GREZZO, anche la forma URL-encoded è mascherata.
+        from urllib.parse import quote
+        enc = quote(token, safe="")
+        assert enc != token and enc not in event_log.redact_secrets(f"GET /bot{enc}/x")
+        # cfg senza token o non-dict → no-op senza crash
+        app_mod.App._register_secret_token(a, {})
+        app_mod.App._register_secret_token(a, None)
+    finally:
+        event_log.clear_secrets()
+
+
+def test_register_secret_token_non_passa_da_getattr_su_attr_assente(app_mod):
+    """#184 M7 regression (CI RecursionError): su un widget Tk un attributo ASSENTE fa ricorrere
+    `__getattr__` (e il default di `getattr` NON intercetta il RecursionError). La lettura di
+    `_registered_token` deve avvenire via `__dict__`, non via `getattr(self, ...)`.
+
+    Fail-first: col vecchio `getattr(self, "_registered_token", None)` questo solleva
+    RecursionError, esattamente come nel job `integration` su CI."""
+    from xtrader_bridge import event_log
+
+    class _TkLike:
+        # Imita tkinter.Misc.__getattr__: un attributo mancante delega a se stesso → ricorsione.
+        def __getattr__(self, name):
+            return getattr(self, name)
+
+    event_log.clear_secrets()
+    try:
+        obj = _TkLike()                              # nessun _registered_token in __dict__
+        tok = "123456789:RegressionTokenValue_abcd"
+        app_mod.App._register_secret_token(obj, {"bot_token": tok})   # non deve ricorrere
+        assert obj.__dict__.get("_registered_token") == tok
+        assert tok not in event_log.redact_secrets(f"err {tok} x")
+    finally:
+        event_log.clear_secrets()
+
+
+def test_register_secret_token_deregistra_il_precedente_quando_cambia(make_app, app_mod):
+    """#184 M7 (Sourcery): quando il bot token CAMBIA, il precedente viene deregistrato, così il
+    registro dei segreti non cresce all'infinito e un vecchio token non resta mascherato per
+    sempre. Quando viene RIMOSSO (cfg senza token), idem.
+
+    Fail-first: sul vecchio codice `_register_secret_token` registrava soltanto, senza mai
+    deregistrare → il vecchio token restava mascherato per sempre."""
+    from xtrader_bridge import event_log
+    event_log.clear_secrets()
+    try:
+        a = make_app()
+        old = "111:oldSecret_nonCanonico"          # porzioni < 20 → la regex non li prende
+        new = "222:newSecret_nonCanonico"
+        app_mod.App._register_secret_token(a, {"bot_token": old})
+        assert old not in event_log.redact_secrets(f"x {old} y")   # vecchio mascherato
+        # cambio token → il vecchio NON deve più essere mascherato, il nuovo sì
+        app_mod.App._register_secret_token(a, {"bot_token": new})
+        assert old in event_log.redact_secrets(f"x {old} y")       # vecchio NON più mascherato
+        assert new not in event_log.redact_secrets(f"x {new} y")   # nuovo mascherato
+        # rimozione token (cfg senza token) → anche il nuovo viene deregistrato
+        app_mod.App._register_secret_token(a, {})
+        assert new in event_log.redact_secrets(f"x {new} y")       # non più mascherato
+    finally:
+        event_log.clear_secrets()
+
+
 def test_stop_sveglia_attesa_in_loop_via_call_soon_threadsafe(make_app, app_mod, tmp_path):
     """#184 H5 / Codex #191: con una sessione viva `_stop` sveglia SUBITO l'attesa in-loop di
     `_async_run` settando `_async_stop_event` tramite `call_soon_threadsafe` (dal thread GUI).

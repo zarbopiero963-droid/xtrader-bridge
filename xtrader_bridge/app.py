@@ -127,6 +127,11 @@ class App(ctk.CTk):
         gui_utils.fit_to_screen(self, 720, 760, 720, 600)
         self.resizable(False, True)
 
+        # Ultimo bot token registrato nel redattore dei log (#184 M7): serve a deregistrare
+        # il precedente quando il token cambia, così il registro non cresce all'infinito e un
+        # vecchio token non resta mascherato per sempre. Inizializzato PRIMA di _load_config,
+        # che chiama _register_secret_token.
+        self._registered_token = None
         self._config = self._load_config()
         self._running = False
         self._session_real = False   # la sessione attiva è partita in modalità reale? (#136 p4 banner)
@@ -250,11 +255,32 @@ class App(ctk.CTk):
                       "restare attivo nel CSV finché XTrader non rilascia il file.")
 
     # ── CONFIG ────────────────────────────────
+    def _register_secret_token(self, cfg) -> None:
+        """Registra il bot token corrente nel redattore dei log (#184 M7): così viene
+        mascherato per-literal in QUALSIASI forma finisca in un log (anche non-canonica,
+        che la regex di `redact_secrets` non riconoscerebbe). No-op se non c'è token.
+
+        Se il token è CAMBIATO rispetto all'ultimo registrato (o è stato rimosso), deregistra
+        il precedente (Sourcery): così il registro dei segreti non cresce all'infinito e un
+        vecchio token non resta mascherato per sempre. Punto unico usato da
+        `_load_config`/`_save_config`, così la deregistrazione vale per entrambi i percorsi."""
+        new_token = cfg.get("bot_token") if isinstance(cfg, dict) else None
+        # Lettura via __dict__ e NON getattr: su un widget Tk un attributo ASSENTE farebbe
+        # ricorrere `__getattr__` (→ RecursionError), e il default di getattr non lo intercetta.
+        prev = self.__dict__.get("_registered_token")
+        if prev and prev != new_token:
+            event_log.unregister_secret(prev)
+            self._registered_token = None
+        if new_token and event_log.register_secret(new_token):
+            self._registered_token = new_token
+
     def _load_config(self) -> dict:
         # Migra il vecchio config.json (accanto all'EXE) la prima volta, poi carica
         # dalla cartella utente persistente (%APPDATA%\XTraderBridge).
         migrate_legacy_config(CONFIG_FILE)
-        return load_config(CONFIG_FILE)
+        cfg = load_config(CONFIG_FILE)
+        self._register_secret_token(cfg)   # #184 M7: token noto → mascherato nei log
+        return cfg
 
     def _save_config(self) -> dict:
         # Timeout robusto: un valore non numerico non deve crashare il salvataggio
@@ -310,6 +336,7 @@ class App(ctk.CTk):
                           "attivo (OVERWRITE_LAST).")
         saved, ok = save_config(cfg, CONFIG_FILE)
         self._config = saved
+        self._register_secret_token(saved)     # #184 M7: aggiorna il token mascherato nei log
         self._update_real_mode_banner(saved)   # banner rosso persistente se in REALE (#136 p4)
         if not self._running:
             self._update_active_indicator(0)   # indicatore tetto aggiornato (#136 p5)

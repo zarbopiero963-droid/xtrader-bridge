@@ -91,6 +91,93 @@ def test_redact_secrets_lascia_testo_normale():
     assert el.redact_secrets("") == ""
 
 
+# ── #184 M7: redazione per-literal del token registrato (forme non canoniche) ──────
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_secret_registry():
+    """Isola il registro dei segreti tra i test (additivo e di modulo)."""
+    el.clear_secrets()
+    yield
+    el.clear_secrets()
+
+
+def test_register_secret_maschera_token_in_forma_non_canonica():
+    """#184 M7: la regex copre solo lo shape canonico `<id>:<20+ char>`. Un token in forma
+    NON standard (porzione segreta corta, URL-encoded, spezzata su righe) le sfugge. Registrando
+    il token vivo da config con `register_secret`, viene mascherato per-literal in QUALSIASI
+    forma compaia.
+
+    Fail-first: senza il registro questi token restavano in chiaro."""
+    short = "999:abcDEF12"                         # porzione < 20 char → regex NON matcha
+    assert el.redact_secrets(f"err {short} x") == f"err {short} x"   # baseline: la regex non lo prende
+    assert el.register_secret(short) is True
+    out = el.redact_secrets(f"❌ Errore: {short} - fine")
+    assert short not in out and "[REDACTED_TOKEN]" in out
+    assert out.startswith("❌ Errore:")
+
+    # URL-encoded: registrando il token GREZZO, anche la sua forma encoded (`:`→`%3A`) viene
+    # mascherata, perché `redact_secrets` deriva le forme con `_secret_forms` (Codex #184 M7).
+    from urllib.parse import quote
+    raw = "123456789:AAtoken_urlencoded_value"   # canonico; ':' → '%3A' nell'URL
+    enc = quote(raw, safe="")
+    assert enc != raw                                            # la codifica cambia davvero
+    el.register_secret(raw)                                      # si registra SOLO il grezzo
+    assert enc not in el.redact_secrets(f"GET /set?token={enc}&x=1")   # encoded mascherato lo stesso
+
+
+def test_register_secret_rifiuta_frammenti_banali_e_vuoti():
+    """#184 M7: valori vuoti/non-stringa o troppo corti (< 8 char) NON vengono registrati,
+    per non mascherare frammenti banali che inquinerebbero i log."""
+    for trivial in ("", None, "abc", "1234567"):
+        assert el.register_secret(trivial) is False
+    # un valore >= 8 char è registrato.
+    assert el.register_secret("12345678") is True
+    assert "[REDACTED_TOKEN]" in el.redact_secrets("x 12345678 y")
+
+
+def test_unregister_e_clear_secrets():
+    """#184 M7: un segreto rimosso (token cambiato) non viene più mascherato; clear svuota tutto."""
+    tok = "SECRETtoken_value_123"
+    el.register_secret(tok)
+    assert tok not in el.redact_secrets(f"a {tok} b")
+    el.unregister_secret(tok)
+    assert el.redact_secrets(f"a {tok} b") == f"a {tok} b"   # non più mascherato
+    el.register_secret(tok)
+    el.clear_secrets()
+    assert el.redact_secrets(f"a {tok} b") == f"a {tok} b"
+
+
+def test_register_grezzo_maschera_la_forma_url_encoded():
+    """#184 M7 (Codex P1): `app` registra SOLO il token grezzo. Se nei log compare la sua forma
+    URL-encoded (`:`→`%3A`, come in un path `…/bot<token>/…` dentro un'eccezione HTTP), né la
+    regex né il match grezzo la riconoscono. `redact_secrets` deve mascherarla comunque derivando
+    le forme dal literal registrato.
+
+    Fail-first: senza la derivazione delle forme, registrare il solo grezzo lasciava la forma
+    encoded in chiaro."""
+    from urllib.parse import quote
+    raw = "987654321:LiveBotTokenSecretValue_xyz"
+    enc = quote(raw, safe="")
+    assert enc != raw
+    # baseline: senza registrare nulla, la forma encoded NON è canonica → la regex non la prende.
+    assert enc in el.redact_secrets(f"HTTP GET https://api/bot{enc}/getMe")
+    el.register_secret(raw)                       # come fa app._register_secret_token: solo grezzo
+    out = el.redact_secrets(f"HTTP GET https://api/bot{enc}/getMe failed")
+    assert enc not in out and "[REDACTED_TOKEN]" in out
+
+
+def test_redact_secrets_literal_piu_lungo_prima():
+    """#184 M7: i literal più LUNGHI vengono sostituiti prima, così un segreto contenuto in un
+    altro non lascia frammenti dell'altro in chiaro."""
+    el.register_secret("ABCDEFGH")            # contenuto in quello sotto
+    el.register_secret("ABCDEFGHIJKLMNOP")    # più lungo
+    out = el.redact_secrets("tok ABCDEFGHIJKLMNOP end")
+    assert "ABCDEF" not in out and "[REDACTED_TOKEN]" in out
+
+
 def test_classify_dal_marker():
     # Lo storico distingue errori/segnali derivando il livello dal marker (#11).
     assert el.classify("❌ CSV non scrivibile") == "ERROR"
