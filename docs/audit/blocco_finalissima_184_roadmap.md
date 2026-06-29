@@ -150,6 +150,12 @@ scartava (fail-closed, ma prezzo perso). Fix: nuovo `_decimal_sep_to_point` — 
 numerico/garbage resta tale (rifiutato a valle). Test fail-first: `1.234,56` ora è VALID con
 `Price=1234.56` (prima INVALID_PRICE); unit del helper sui formati comuni/europeo/US/garbage.
 
+Refinement (Codex P1): il collasso dei separatori avviene SOLO se il raggruppamento migliaia è
+VALIDO (`\d{1,3}(<sep>\d{3})+` + decimali = sole cifre). Un doppio separatore MALFORMATO (es.
+`1.2,3`, gruppo non da 3 cifre) NON viene "aggiustato" a `12.3` (prezzo sbagliato ma valido nel CSV
+scommessa): resta invariato → scartato (`INVALID_PRICE`, fail-closed). Docs di dominio aggiornate
+(`docs/xtrader_csv_contract.md`, `docs/custom_parser.md`) come richiesto da AGENTS.md (Codex P1#2).
+
 ## low-isodds-inf — `_is_odds` rifiuta i valori non finiti (`inf`/`nan`)
 
 `_is_odds` faceva `float(value) > 1.0`: `float("inf") > 1.0` è `True`, quindi un valore non finito

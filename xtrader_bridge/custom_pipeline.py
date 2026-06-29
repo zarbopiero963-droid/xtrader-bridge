@@ -81,16 +81,24 @@ def _decimal_sep_to_point(value) -> str:
     migliaia (#184 low-pipeline-comma).
 
     Se sono presenti SIA `,` SIA `.`, l'ULTIMO che compare è il separatore **decimale** e l'altro è
-    quello delle **migliaia** (rimosso): `"1.234,56"` → `"1234.56"` e `"1,234.56"` → `"1234.56"`,
-    invece del rotto `"1.234.56"` della sostituzione naive (che il validatore poi scartava). Con il
-    solo `,` è il decimale (`,`→`.`); con il solo `.` resta invariato (le quote tipiche `1.85` non
-    cambiano); senza separatori, invariato. Un input non numerico resta tale (rifiutato a valle)."""
+    quello delle **migliaia** — ma SOLO se la parte intera è un raggruppamento migliaia VALIDO
+    (`\\d{1,3}(<sep>\\d{3})+`) e i decimali sono sole cifre: `"1.234,56"` → `"1234.56"`,
+    `"1,234.56"` → `"1234.56"`. Altrimenti (raggruppamento malformato, es. `"1.2,3"`) si lascia il
+    valore **invariato**, così il validatore a valle lo scarta (fail-closed) invece di emettere un
+    prezzo SBAGLIATO ma valido (Codex #184): `Price` finisce nella riga di scommessa CSV.
+
+    Con il solo `,` è il decimale (`,`→`.`); con il solo `.` resta invariato (le quote tipiche
+    `1.85` non cambiano); senza separatori, invariato. Un input non numerico resta tale (rifiutato
+    a valle)."""
     s = str(value).strip()
     last_comma, last_dot = s.rfind(","), s.rfind(".")
     if last_comma != -1 and last_dot != -1:
-        if last_comma > last_dot:                 # virgola = decimale, punto = migliaia
-            return s.replace(".", "").replace(",", ".")
-        return s.replace(",", "")                 # punto = decimale, virgola = migliaia
+        dec_sep, th_sep = (",", ".") if last_comma > last_dot else (".", ",")
+        int_part, dec_part = s.rsplit(dec_sep, 1)
+        grouped = re.fullmatch(r"\d{1,3}(?:" + re.escape(th_sep) + r"\d{3})+", int_part)
+        if grouped and dec_part.isdigit():
+            return int_part.replace(th_sep, "") + "." + dec_part
+        return s                                   # raggruppamento non valido → invariato (fail-closed)
     if last_comma != -1:                          # solo virgola → decimale
         return s.replace(",", ".")
     return s                                       # solo punto, o nessun separatore
