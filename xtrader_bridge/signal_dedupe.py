@@ -74,6 +74,23 @@ def message_hash(text: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
+# Campi identificativi della riga per la deduplica PER-RIGA (#192). Provider+evento+mercato+
+# selezione+lato individuano univocamente una scommessa: due righe dello stesso messaggio che
+# differiscono in uno di questi campi NON sono duplicati, mentre una riga identica reinviata sì.
+_ROW_KEY_FIELDS = ("Provider", "EventName", "MarketType", "SelectionName", "BetType")
+
+
+def row_dedup_key(text: str, row: dict) -> str:
+    """Chiave di deduplica PER-RIGA (#192): combina l'hash del messaggio con i campi
+    identificativi della riga (`_ROW_KEY_FIELDS`). Così un singolo messaggio che genera più
+    mercati/selezioni non auto-dedupa le sue righe diverse, ma lo stesso identico segnale
+    (stesso messaggio + stessi campi) resta un duplicato. Per il single-row la chiave dipende
+    comunque dal messaggio, quindi un messaggio ripetuto è ancora bloccato come prima."""
+    parts = [message_hash(text)]
+    parts += [str((row or {}).get(k, "") or "").strip() for k in _ROW_KEY_FIELDS]
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+
+
 @dataclass
 class RegisterResult:
     """Esito di `SignalTracker.register`."""
@@ -117,17 +134,21 @@ class SignalTracker:
         # distinguibile dal normale scorrere del tempo: vedi nota nel docstring del modulo.)
         self._seen = [(h, t) for (h, t) in self._seen if t >= cutoff or t > now]
 
-    def register(self, text: str, *, now: float = None) -> RegisterResult:
+    def register(self, text: str, *, now: float = None, key: str = None) -> RegisterResult:
         """Registra un messaggio e decide il suo esito (senza scrivere nulla):
 
         - **DUPLICATE**: stesso hash già visto nella finestra di deduplica;
         - **RATE_LIMITED**: troppi segnali NUOVI nell'ultimo minuto;
         - **NEW**: accettato (e memorizzato).
 
-        Un DUPLICATE o un RATE_LIMITED NON vengono memorizzati come nuovi."""
+        Un DUPLICATE o un RATE_LIMITED NON vengono memorizzati come nuovi.
+
+        `key` (#192): se fornita, è la chiave di deduplica usata al posto dell'hash del
+        messaggio (vedi `row_dedup_key` per la deduplica PER-RIGA del multi-output). Assente
+        (default) → `message_hash(text)`, comportamento single-row invariato."""
         now = time.time() if now is None else validators.require_finite_now(now)
         self._prune(now)
-        h = message_hash(text)
+        h = message_hash(text) if key is None else str(key)
         # Duplicato: stesso hash entro la finestra di deduplica (NON l'intera
         # storia conservata, che può essere più lunga per il conteggio al minuto).
         dedupe_cutoff = now - self.dedupe_window

@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import live_guard
+from . import live_guard, safety_guard, signal_dedupe
 
 
 @dataclass(frozen=True)
@@ -117,3 +117,77 @@ def commit_signal(tracker, daily, queue, cfg, text, row, path, now, write_rows):
 
     return CommitResult(decision=decision, blocked_by_cap=blocked_by_cap,
                         rows=rows, write_error=write_error)
+
+
+def _summary_decision(decisions: list, accepted: int) -> str:
+    """Esito riassuntivo del commit multi-riga: WRITE se almeno una riga è stata accodata,
+    altrimenti il primo esito di soppressione (DUPLICATE/RATE_LIMITED/DAILY_LIMITED) per la
+    diagnostica."""
+    if accepted > 0:
+        return live_guard.WRITE
+    for d in decisions:
+        if d != live_guard.WRITE:
+            return d
+    return live_guard.WRITE
+
+
+def commit_signals(tracker, daily, queue, cfg, text, rows, path, now, write_rows):
+    """Commit MULTI-RIGA (#192): un singolo messaggio produce più righe (MultiMarket/
+    MultiSelection). Valuta OGNI riga con **deduplica PER-RIGA** (`signal_dedupe.row_dedup_key`),
+    accoda le righe `WRITE` e riscrive ATOMICAMENTE tutte le righe attive, con rollback fail-safe.
+
+    Stesse invarianti di `commit_signal` (vedi docstring del modulo): chiamato SOTTO il lock del
+    chiamante; solo le righe `WRITE` finiscono in coda; in `DRY_RUN` il CSV operativo NON viene
+    scritto e i guardrail consumati sono ripristinati; se la scrittura fallisce, coda E guardrail
+    tornano allo stato precedente (segnali ritentabili). Per il single-row usare `commit_signal`
+    (percorso legacy, comportamento bit-identico e invariato).
+
+    Limite v1 (documentato, issue #192): se le righe superano `max_active` della coda, quelle
+    oltre il tetto non vengono accodate e la loro slot guardrail non è ripristinata in questa
+    versione → configurare `max_active_signals >= numero di righe attese."""
+    rows = list(rows or [])
+    tracker_snap = tracker.state() if tracker is not None else None
+    daily_snap = (daily.state() if (tracker is not None and daily is not None) else None)
+    queue_snap = queue.state()
+    queue.expire(now=now)
+
+    decisions = []
+    accepted = 0
+    for row in rows:
+        if tracker is None:
+            # Chiamanti senza guardrail (test): accoda direttamente.
+            if queue.add(row, now=now) is not None:
+                accepted += 1
+            decisions.append(live_guard.WRITE)
+            continue
+        key = signal_dedupe.row_dedup_key(text, row)
+        d = live_guard.evaluate(cfg, tracker, daily, text, dedup_key=key)
+        decisions.append(d)
+        if d == live_guard.WRITE:
+            if queue.add(row, now=now) is not None:
+                accepted += 1
+
+    # DRY_RUN: simulazione → NON scrivere il CSV operativo; ripristina coda E guardrail.
+    if safety_guard.is_dry_run(cfg):
+        queue.restore_state(queue_snap)
+        if tracker is not None:
+            tracker.restore_state(tracker_snap)
+            if daily is not None and daily_snap is not None:
+                daily.restore_state(daily_snap)
+        return CommitResult(decision=live_guard.DRY_RUN, blocked_by_cap=False,
+                            rows=[], write_error=None)
+
+    active = queue.active_rows()
+    try:
+        write_rows(active, path)
+    except Exception as ex:   # noqa: BLE001 — riportato al chiamante, no crash
+        queue.restore_state(queue_snap)
+        if tracker is not None:
+            tracker.restore_state(tracker_snap)
+            if daily is not None and daily_snap is not None:
+                daily.restore_state(daily_snap)
+        return CommitResult(decision=live_guard.WRITE, blocked_by_cap=False,
+                            rows=[], write_error=ex)
+
+    return CommitResult(decision=_summary_decision(decisions, accepted),
+                        blocked_by_cap=False, rows=active, write_error=None)

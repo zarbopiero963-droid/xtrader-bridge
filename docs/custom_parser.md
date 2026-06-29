@@ -397,6 +397,52 @@ comportamento legacy (tutte le chat ammesse — responsabilità dell'utente).
 
 ---
 
+## 5-bis. Output multi-riga: MultiMarket / MultiSelection (#192)
+
+Un singolo messaggio Telegram può generare **più righe CSV**. Le **14 righe del parser**
+restano la **riga base** (campi comuni: Provider, EventName, eventuali Market/Selection di
+default, Price, BetType…); due opzioni del modello la espandono in più righe:
+
+- **MultiMarket** (`multi_market_enabled` + `multi_markets`): più **mercati diversi** della
+  stessa partita (es. `FIRST_HALF_GOALS_05 / Over 0,5` **e** `OVER_UNDER_15 / Over 1,5`).
+- **MultiSelection** (`multi_selection_enabled` + `multi_selections`): più **selezioni dello
+  stesso mercato** (es. `CORRECT_SCORE` con `1 - 0`, `2 - 1`, `1 - 2`).
+
+**Modello** (`custom_parser.MultiRowRule`): ogni riga multi porta
+`start_after, end_before, market_type, market_name, selection_name, price, min_price,
+max_price, bet_type, points, handicap, enabled`. Ogni campo **non vuoto SOVRASCRIVE** quello
+della riga base; un campo **vuoto eredita** dalla base. Tutto è serializzato nel JSON del
+parser ed è **retro-compatibile**: i file salvati prima di #192 (senza questi campi) caricano
+con flag `False` e liste vuote → comportamento **single-row identico a prima**.
+
+**Pipeline** (`custom_pipeline.build_validated_rows`): ritorna una **lista** di righe validate
+(una per mercato/selezione attiva). Ogni riga è validata singolarmente: una riga non valida
+**non blocca** le altre (l'instradamento scrive solo quelle piazzabili). `signal_router.
+resolve_row` espone le righe in `RouteResult.rows` (e `RouteResult.row` resta la **prima**,
+retro-compatibile).
+
+**Regole e limiti (v1):**
+
+- `BetType` resta `PUNTA`/`BANCA` (contratto XTrader): una riga multi con un valore diverso
+  (es. `BACK`) risulta **non valida** in validazione — il contratto CSV non cambia.
+- `start_after`/`end_before` delle righe multi sono **conservati** ma in questa versione i
+  valori sono **fissi** (override diretto); l'estrazione per-riga è un'estensione futura.
+- **MultiMarket + MultiSelection insieme** generano righe **separate** (prima i mercati, poi
+  le selezioni sul mercato base), **mai** il prodotto cartesiano (`custom_pipeline.
+  both_multi_active` segnala il caso, da avvisare in GUI).
+- **Deduplica per-riga** (`signal_dedupe.row_dedup_key`): la chiave combina l'hash del
+  messaggio con `Provider+EventName+MarketType+SelectionName+BetType`, così righe diverse
+  dello **stesso** messaggio non si auto-dedupano, ma una riga **identica** reinviata resta un
+  duplicato.
+- **Coda/CSV**: `write_path.commit_signals` accoda tutte le righe `WRITE` e riscrive il CSV in
+  modo **atomico** (rollback completo se la scrittura fallisce; in DRY_RUN non scrive nulla).
+  Con `APPEND_ACTIVE`/`QUEUE_UNTIL_CONFIRMED` configurare **`max_active` ≥ numero di righe**
+  attese; in `OVERWRITE_LAST` resta attivo solo l'ultimo blocco.
+
+**GUI:** i checkbox MultiMarket/MultiSelection, le righe dinamiche `[+]/[Rimuovi]` e la
+preview tabellare multi-riga arrivano in una **PR successiva** (non collaudabili headless); il
+motore qui descritto è già completo e coperto da test (`tests/unit/test_multirow_192.py`).
+
 ## 6. Riferimenti (codice e test)
 
 | Componente | Modulo | Test |
