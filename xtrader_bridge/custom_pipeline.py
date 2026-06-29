@@ -317,6 +317,88 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
     return PipelineResult(status, row, list(res.missing_required), detail)
 
 
+# ── Output multi-riga (#192): un messaggio → più righe CSV ────────────────────
+
+# Override colonna-CSV ← attributo della riga multi. Un valore vuoto eredita dalla riga base.
+_MULTI_OVERRIDE = (
+    ("MarketType", "market_type"), ("MarketName", "market_name"),
+    ("SelectionName", "selection_name"), ("Price", "price"),
+    ("MinPrice", "min_price"), ("MaxPrice", "max_price"),
+    ("BetType", "bet_type"), ("Points", "points"), ("Handicap", "handicap"),
+)
+
+# Stati del gate base che impediscono di derivare righe multi: la riga base non è abbastanza
+# completa/coerente da fornire i campi comuni (evento, provider, handicap, mappature) → si
+# propaga la base (fail-closed: nessuna riga inventata).
+_BASE_BLOCKING = (NOT_READY, INVALID_MISSING_PROVIDER, INVALID_HANDICAP,
+                  MAPPING_MISSING, MARKET_MAPPING_MISSING)
+
+
+def _apply_multi_rule(base_row: dict, rule) -> dict:
+    """Deriva una riga CSV dalla riga BASE applicando gli override NON VUOTI della regola
+    multi (#192); i campi vuoti ereditano dalla base. La riga risultante è normalizzata al
+    contratto (virgola→punto sulle quote, BetType maiuscolo, Handicap default)."""
+    row = dict(base_row)
+    clear_ids = False
+    for col, attr in _MULTI_OVERRIDE:
+        val = getattr(rule, attr, "")
+        if str(val).strip():
+            row[col] = val
+            # Identità del mercato/selezione cambiata: gli ID risolti per la riga BASE (da regola
+            # ID/BOTH o dal dizionario Betfair) non valgono più → vanno azzerati, altrimenti la riga
+            # nominerebbe un mercato/selezione ma lo identificherebbe con l'ID di un altro (CSV
+            # incoerente, bet sbagliato in ID/BOTH). Stessa regola del market-mapping (Codex/CodeRabbit).
+            if col in ("MarketType", "MarketName", "SelectionName", "Handicap"):
+                clear_ids = True
+    if clear_ids:
+        row["MarketId"] = ""
+        row["SelectionId"] = ""
+    return _normalize_to_contract(row, str(row.get("Provider", "") or ""))
+
+
+def _validated_multi_row(base_row: dict, rule, mode: str, require_price: bool) -> PipelineResult:
+    """Costruisce e VALIDA una singola riga multi derivata dalla base."""
+    row = _apply_multi_rule(base_row, rule)
+    status, detail = validator.validate(row, mode, require_price)
+    missing = list(detail) if isinstance(detail, (list, tuple)) else []
+    return PipelineResult(status, row, missing, detail)
+
+
+def build_validated_rows(defn: CustomParserDef, text: str, **kwargs) -> "list[PipelineResult]":
+    """Variante multi-riga (#192) di `build_validated_row`: ritorna una LISTA di
+    `PipelineResult`, una per riga generata. Accetta gli stessi keyword di
+    `build_validated_row` (`provider`, `mode`, `require_price`, mappature, `id_resolver`).
+
+    - MultiMarket/MultiSelection disattivati (o senza righe attive) → ``[base]`` — IDENTICO al
+      single-row di sempre (retro-compatibile);
+    - altrimenti la riga base (già arricchita da mappature nomi/mercati e dizionario) fornisce
+      i campi comuni ed OGNI regola MultiMarket/MultiSelection genera UNA riga distinta, validata
+      singolarmente (una riga non valida non blocca le altre);
+    - se la riga base non supera i gate strutturali (Non pronto / provider / handicap / mappature)
+      non si derivano righe multi: si propaga ``[base]`` (fail-closed);
+    - MultiMarket e MultiSelection insieme → righe SEPARATE (prima i mercati, poi le selezioni
+      sul mercato base), MAI il prodotto cartesiano (vedi `both_multi_active`).
+    """
+    base = build_validated_row(defn, text, **kwargs)
+    markets = defn.active_multi_markets()
+    selections = defn.active_multi_selections()
+    if not markets and not selections:
+        return [base]
+    if base.status in _BASE_BLOCKING:
+        return [base]
+    mode = kwargs.get("mode", recognition.DEFAULT_MODE)
+    require_price = kwargs.get("require_price", True)
+    out = [_validated_multi_row(base.row, r, mode, require_price) for r in markets]
+    out += [_validated_multi_row(base.row, r, mode, require_price) for r in selections]
+    return out
+
+
+def both_multi_active(defn: CustomParserDef) -> bool:
+    """`True` se MultiMarket E MultiSelection hanno entrambi righe attive: la GUI/validazione
+    deve avvisare che verranno generate righe SEPARATE, non combinazioni automatiche (#192)."""
+    return bool(defn.active_multi_markets()) and bool(defn.active_multi_selections())
+
+
 def is_placeable(defn: CustomParserDef, text: str, **kwargs) -> bool:
     """Scorciatoia: True se il messaggio produce una riga piazzabile."""
     return build_validated_row(defn, text, **kwargs).placeable

@@ -211,17 +211,30 @@ def should_process(cfg: dict, chat: str, text: str, parsers_dir: str = None) -> 
 
 @dataclass
 class RouteResult:
-    """Esito dell'instradamento. `row` è valorizzata SOLO se piazzabile."""
+    """Esito dell'instradamento. `row` è valorizzata SOLO se piazzabile.
+
+    `rows` (#192) contiene TUTTE le righe piazzabili quando il parser è multi-riga
+    (MultiMarket/MultiSelection). Per il single-row resta `None` e si usa `row` (retro-
+    compatibile: i chiamanti esistenti che leggono `row`/`placeable` continuano a funzionare;
+    `row` riflette comunque la prima riga). Usare `all_rows()` per iterare in modo uniforme."""
 
     row: dict = None
     status: str = validator.VALID
     source: str = HARDCODED                       # custom | hardcoded
     detail: object = None                         # motivo dello scarto
     missing_required: list = field(default_factory=list)
+    rows: list = None                             # multi-row (#192); None → single via `row`
 
     @property
     def placeable(self) -> bool:
-        return self.row is not None
+        return bool(self.all_rows())
+
+    def all_rows(self) -> list:
+        """Tutte le righe piazzabili: `rows` se valorizzato (multi), altrimenti `[row]` se
+        presente, altrimenti `[]` (#192, retro-compatibile)."""
+        if self.rows is not None:
+            return [r for r in self.rows if r]
+        return [self.row] if self.row is not None else []
 
 
 def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str = None,
@@ -270,28 +283,36 @@ def resolve_row(text: str, cfg: dict, *, chat_id: str = None, parsers_dir: str =
         market_mapping_profiles = (
             market_mapping_store.entries_for_profiles(cfg, defn.market_mapping_profiles)
             if defn.market_mapping_profiles else None)
-        res = custom_pipeline.build_validated_row(
+        # #192: pipeline multi-riga. Per un parser single-row (MultiMarket/MultiSelection
+        # disattivati) `build_validated_rows` ritorna ESATTAMENTE un elemento → comportamento
+        # identico a prima. Per un parser multi-riga ritorna una riga per mercato/selezione.
+        results = custom_pipeline.build_validated_rows(
             defn, text, provider=provider, mode=mode, require_price=require_price,
             name_mapping_profiles=name_mapping_profiles,
             market_mapping_profiles=market_mapping_profiles,
             id_resolver=id_resolver)
-        if not res.placeable:
-            return RouteResult(None, res.status, CUSTOM, res.detail, list(res.missing_required))
-        # Gate di contenuto: la riga è piazzabile, ma il parser deve aver estratto
-        # qualcosa DA QUESTO messaggio. Un parser a soli valori fissi sarebbe
-        # piazzabile su qualsiasi testo (anche vuoto): nel live, che bypassa il
-        # prefiltro marker, scriverebbe lo stesso bet su ogni messaggio. Scartiamo.
+        placeable = [r.row for r in results if r.placeable]
+        if not placeable:
+            # Nessuna riga piazzabile: riporta la diagnostica del primo esito (per il single-row
+            # `results` ha un solo elemento → identico a prima).
+            first = results[0]
+            return RouteResult(None, first.status, CUSTOM, first.detail, list(first.missing_required))
+        # Gate di contenuto: una riga è piazzabile, ma il parser deve aver estratto qualcosa DA
+        # QUESTO messaggio. Un parser a soli valori fissi sarebbe piazzabile su qualsiasi testo
+        # (anche vuoto): nel live, che bypassa il prefiltro marker, scriverebbe lo stesso bet su
+        # ogni messaggio. Vale per l'intero messaggio → un solo controllo.
         if not custom_parser_engine.matches_message(defn, text, mode):
             return RouteResult(None, NO_CONTENT_MATCH, CUSTOM, "no_content_match")
-        row = res.row
-        # PR-24: per una chat che è una **sorgente attiva**, il provider della
-        # sorgente (esplicito o PRE/LIVE) VINCE sull'eventuale Provider fisso del
-        # parser custom — così il routing per-chat del Provider vale anche per i
-        # formati custom. Per le chat non-sorgente il Provider del parser resta.
+        # PR-24: per una chat che è una **sorgente attiva**, il provider della sorgente
+        # (esplicito o PRE/LIVE) VINCE sull'eventuale Provider fisso del parser custom — vale per
+        # TUTTE le righe generate. Per le chat non-sorgente il Provider del parser resta.
         if source_manager.source_for_chat(cfg, chat) is not None:
-            row = dict(row)
-            row["Provider"] = provider
-        return RouteResult(row, validator.VALID, CUSTOM)
+            placeable = [{**row, "Provider": provider} for row in placeable]
+        # Single-row: `rows=None`, si usa `row` (comportamento invariato). Multi-row: `rows`
+        # contiene tutte le righe; `row` resta la prima per retro-compatibilità.
+        if len(placeable) == 1:
+            return RouteResult(placeable[0], validator.VALID, CUSTOM)
+        return RouteResult(placeable[0], validator.VALID, CUSTOM, rows=placeable)
 
     # Nessun Parser Personalizzato caricato: il parser automatico P.Bet è DISATTIVATO
     # (CP-09b), quindi il messaggio è ignorato (riga non piazzabile, nessuna scrittura).

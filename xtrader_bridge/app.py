@@ -1860,7 +1860,11 @@ class App(ctk.CTk):
                 f"⚠️ Segnale scartato ({result.source}/{result.status}): {detail}"))
             return
 
-        row = result.row
+        # #192: il parser può produrre PIÙ righe (MultiMarket/MultiSelection). Per il single-row
+        # `all_rows()` ne ritorna una sola → percorso legacy invariato. `row` resta la prima riga,
+        # usata per i log/diagnostica.
+        rows_to_commit = result.all_rows()
+        row = rows_to_commit[0]
         # Event journal (#230): segnale validato (piazzabile). Solo la sorgente del parser,
         # nessun dato del messaggio.
         self._journal("SIGNAL_VALIDATED", source=result.source)
@@ -1884,9 +1888,15 @@ class App(ctk.CTk):
             # superata. Ricontrollo sotto LO STESSO lock della scrittura, non solo all'ingresso.
             if not self._epoch_current(epoch):
                 return
-            commit = write_path.commit_signal(
-                self._tracker, self._daily, self._queue,
-                cfg, text, row, path, now, write_rows)
+            if len(rows_to_commit) == 1:
+                commit = write_path.commit_signal(
+                    self._tracker, self._daily, self._queue,
+                    cfg, text, row, path, now, write_rows)
+            else:
+                # #192: dedup PER-RIGA + scrittura atomica di tutte le righe del messaggio.
+                commit = write_path.commit_signals(
+                    self._tracker, self._daily, self._queue,
+                    cfg, text, rows_to_commit, path, now, write_rows)
             # #153 H2: registra l'esito del lock CSV mentre la scrittura è ancora serializzata
             # (Codex #156). Solo il ramo WRITE scrive davvero su disco.
             csv_lock_event = self._record_csv_lock(

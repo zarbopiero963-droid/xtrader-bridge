@@ -31,14 +31,16 @@ RATE_LIMITED = "RATE_LIMITED"
 DAILY_LIMITED = "DAILY_LIMITED"
 
 
-def evaluate(cfg, tracker, daily, text, *, now=None) -> str:
+def evaluate(cfg, tracker, daily, text, *, now=None, dedup_key=None) -> str:
     """Decide l'esito del percorso di scrittura per `text` (vedi modulo).
 
     `tracker`: `signal_dedupe.SignalTracker` (dedup + limite/minuto); obbligatorio.
     `daily`: `safety_guard.DailyLimiter` o None (None = nessun limite giornaliero).
+    `dedup_key` (#192): chiave di deduplica PER-RIGA per il multi-output (vedi
+    `signal_dedupe.row_dedup_key`); assente → dedup sull'hash del messaggio (single-row).
     Effetti: un segnale accettato consuma una slot nel tracker e (se presente) nel
     `daily`; un duplicato/rate-limited NON consuma la slot giornaliera."""
-    reg = tracker.register(text, now=now)
+    reg = tracker.register(text, now=now, key=dedup_key)
     if reg.status == signal_dedupe.DUPLICATE:
         return DUPLICATE
     if reg.status == signal_dedupe.RATE_LIMITED:

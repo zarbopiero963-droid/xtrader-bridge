@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import live_guard
+from . import live_guard, safety_guard, signal_dedupe, signal_queue
 
 
 @dataclass(frozen=True)
@@ -117,3 +117,115 @@ def commit_signal(tracker, daily, queue, cfg, text, row, path, now, write_rows):
 
     return CommitResult(decision=decision, blocked_by_cap=blocked_by_cap,
                         rows=rows, write_error=write_error)
+
+
+def _summary_decision(decisions: list, accepted: int) -> str:
+    """Esito riassuntivo del commit multi-riga: WRITE se almeno una riga è stata accodata,
+    altrimenti il primo esito di soppressione (DUPLICATE/RATE_LIMITED/DAILY_LIMITED) per la
+    diagnostica."""
+    if accepted > 0:
+        return live_guard.WRITE
+    for d in decisions:
+        if d != live_guard.WRITE:
+            return d
+    return live_guard.WRITE
+
+
+def commit_signals(tracker, daily, queue, cfg, text, rows, path, now, write_rows):
+    """Commit MULTI-RIGA (#192): un singolo messaggio produce più righe (MultiMarket/
+    MultiSelection). Valuta OGNI riga con **deduplica PER-RIGA** (`signal_dedupe.row_dedup_key`),
+    accoda le righe `WRITE` e riscrive ATOMICAMENTE tutte le righe attive, con rollback fail-safe.
+
+    Stesse invarianti di `commit_signal` (vedi docstring del modulo): chiamato SOTTO il lock del
+    chiamante; solo le righe `WRITE` finiscono in coda; in `DRY_RUN` il CSV operativo NON viene
+    scritto e i guardrail consumati sono ripristinati; se la scrittura fallisce, coda E guardrail
+    tornano allo stato precedente (segnali ritentabili). Per il single-row usare `commit_signal`
+    (percorso legacy, comportamento bit-identico e invariato).
+
+    Accodamento per modo coda (Codex/CodeRabbit #239):
+    - `OVERWRITE_LAST`: l'«ultima istruzione» è il BLOCCO INTERO del messaggio → tutte le righe
+      accettate restano attive insieme (`queue.replace_block`), non solo l'ultima;
+    - `APPEND_ACTIVE`/`QUEUE_UNTIL_CONFIRMED`: `queue.add` per riga, rispettando `max_active`.
+
+    Accounting guardrail per-riga (mirror del single-row): una riga `DAILY_LIMITED` o bloccata
+    dal tetto `max_active` (`add` → None) NON è scritta → il suo consumo di tracker/daily viene
+    annullato (segnale ritentabile). Se NESSUNA riga è accettata (tutte duplicati/limiti), il CSV
+    operativo NON viene toccato (come il single-row su DUPLICATE). In `DRY_RUN` non si scrive e i
+    guardrail sono ripristinati. Se la scrittura fallisce, coda E guardrail tornano allo stato
+    precedente. Per il single-row usare `commit_signal` (percorso legacy invariato)."""
+    rows = list(rows or [])
+    tracker_snap = tracker.state() if tracker is not None else None
+    daily_snap = (daily.state() if (tracker is not None and daily is not None) else None)
+    queue_snap = queue.state()
+    overwrite = queue.mode == signal_queue.OVERWRITE_LAST
+    queue.expire(now=now)
+
+    decisions = []
+    accepted_rows = []
+    for row in rows:
+        if tracker is None:
+            # Chiamanti senza guardrail (test): accetta direttamente (cap rispettato in append).
+            decisions.append(live_guard.WRITE)
+            if overwrite:
+                accepted_rows.append(row)
+            elif queue.add(row, now=now) is not None:
+                accepted_rows.append(row)
+            continue
+        key = signal_dedupe.row_dedup_key(text, row)
+        row_tracker_snap = tracker.state()
+        row_daily_snap = daily.state() if daily is not None else None
+        d = live_guard.evaluate(cfg, tracker, daily, text, dedup_key=key)
+        decisions.append(d)
+        if d == live_guard.WRITE:
+            if overwrite:
+                accepted_rows.append(row)        # in OVERWRITE_LAST il tetto è ininfluente
+            else:
+                sid = queue.add(row, now=now)
+                if sid is not None:
+                    accepted_rows.append(row)
+                else:
+                    # Oltre max_active: riga NON accodata → rollback guardrail (ritentabile).
+                    tracker.restore_state(row_tracker_snap)
+                    if daily is not None and row_daily_snap is not None:
+                        daily.restore_state(row_daily_snap)
+        elif d == live_guard.DAILY_LIMITED:
+            # `daily.allow` ha rifiutato senza consumare slot ma `evaluate` ha registrato l'hash:
+            # annulla SOLO il tracker (come single-row), non il daily (giorno normalizzato).
+            tracker.restore_state(row_tracker_snap)
+
+    # DRY_RUN: simulazione → NON scrivere il CSV operativo; ripristina coda E guardrail.
+    if safety_guard.is_dry_run(cfg):
+        queue.restore_state(queue_snap)
+        if tracker is not None:
+            tracker.restore_state(tracker_snap)
+            if daily is not None and daily_snap is not None:
+                daily.restore_state(daily_snap)
+        return CommitResult(decision=live_guard.DRY_RUN, blocked_by_cap=False,
+                            rows=[], write_error=None)
+
+    # Nessuna riga accettata (tutte soppresse): NON toccare il CSV operativo (come il single-row
+    # su DUPLICATE — XTrader non deve riconsumare righe identiche riscritte). Ripristina la coda
+    # (annulla l'expire) e riporta l'esito di soppressione.
+    if not accepted_rows:
+        queue.restore_state(queue_snap)
+        return CommitResult(decision=_summary_decision(decisions, 0), blocked_by_cap=False,
+                            rows=[], write_error=None)
+
+    # OVERWRITE_LAST: l'ultima istruzione è il BLOCCO intero del messaggio (tutte le righe).
+    if overwrite:
+        queue.replace_block(accepted_rows, now=now)
+
+    active = queue.active_rows()
+    try:
+        write_rows(active, path)
+    except Exception as ex:   # noqa: BLE001 — riportato al chiamante, no crash
+        queue.restore_state(queue_snap)
+        if tracker is not None:
+            tracker.restore_state(tracker_snap)
+            if daily is not None and daily_snap is not None:
+                daily.restore_state(daily_snap)
+        return CommitResult(decision=live_guard.WRITE, blocked_by_cap=False,
+                            rows=[], write_error=ex)
+
+    return CommitResult(decision=_summary_decision(decisions, len(accepted_rows)),
+                        blocked_by_cap=False, rows=active, write_error=None)

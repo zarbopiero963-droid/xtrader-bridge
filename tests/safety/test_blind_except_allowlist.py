@@ -42,7 +42,9 @@ _ALLOWLIST = {
     "source_chats_gui.py": (1, "GUI Tk sorgenti: best-effort"),
     "token_store.py": (5, "soft-import/fallback keyring: qualsiasi errore = backend non disponibile"),
     "tools_gui.py": (3, "GUI Tk finestra strumenti: apertura sotto-finestre best-effort"),
-    "write_path.py": (1, "summary/notifica best-effort dopo il commit del segnale"),
+    "write_path.py": (2, "write-failure fail-safe: la scrittura CSV fallita non deve crashare → "
+                         "rollback di coda/guardrail ed errore riportato, in commit_signal e "
+                         "commit_signals (multi-riga #192)"),
     "betfair/auth_client.py": (1, "errore login safe: niente response/segreti nel messaggio"),
     "betfair/auto_sync.py": (7, "ciclo auto login→sync→logout best-effort: logout/release/summary/state"),
     "betfair/credential_store.py": (4, "soft-import/fallback keyring credenziali Betfair"),

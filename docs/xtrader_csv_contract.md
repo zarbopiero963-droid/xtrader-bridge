@@ -166,6 +166,14 @@ esclusiva), il bridge:
 - `init_csv()`/`write_csv()` scrivono in `utf-8-sig` con `QUOTE_ALL`. ✅
 - README aggiornato sul formato reale. ✅
 
+### Output multi-riga (#192) — contratto per-riga invariato
+
+Un singolo messaggio Telegram può ora produrre **più righe CSV** (MultiMarket/MultiSelection,
+vedi `docs/custom_parser.md`). Questo **non cambia il contratto**: header e **ordine delle 14
+colonne restano identici** e **ogni riga** rispetta lo stesso formato per-riga descritto qui
+(quota col punto, `BetType` ∈ {PUNTA, BANCA}, `Handicap="0"` di default, ecc.). Cambia solo il
+**numero di righe dati** scritte (1 → N). **Non è un breaking change.**
+
 ### Rimandato (fuori scope PR-01)
 
 - **`SelectionName` in italiano** (es. `Over 2,5 gol`, `Sì`/`No`, `Pareggio`): localizzato

@@ -126,6 +126,52 @@ class FieldRule:
 
 
 @dataclass
+class MultiRowRule:
+    """Una riga MultiMarket/MultiSelection (#192): valori che SOVRASCRIVONO i campi
+    mercato/selezione della riga base. Un campo vuoto EREDITA dalla riga base.
+
+    `start_after`/`end_before` sono conservati per una futura estrazione per-riga dal
+    messaggio; in questa prima versione i valori dei campi sono fissi (override diretto).
+    `enabled=False` esclude la riga dalla generazione (fail-closed sui valori malformati)."""
+
+    start_after: str = ""
+    end_before: str = ""
+    market_type: str = ""
+    market_name: str = ""
+    selection_name: str = ""
+    price: str = ""
+    min_price: str = ""
+    max_price: str = ""
+    bet_type: str = ""
+    points: str = ""
+    handicap: str = ""
+    enabled: bool = True
+
+    def to_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MultiRowRule":
+        """Crea una riga multi da dict tollerando chiavi mancanti (default) ed extra
+        (ignorate). `enabled` malformato → ``False`` (fail-closed: nessun bet ambiguo)."""
+        if not isinstance(data, dict):
+            raise ValueError(f"riga multi non è un oggetto JSON: {type(data).__name__}")
+        known = {f.name for f in dataclasses.fields(cls)}
+        rule = cls()
+        for k, v in data.items():
+            if k not in known:
+                continue
+            if k == "enabled":
+                try:
+                    rule.enabled = _as_bool(v)
+                except ValueError:
+                    rule.enabled = False
+            else:
+                setattr(rule, k, "" if v is None else str(v))
+        return rule
+
+
+@dataclass
 class CustomParserDef:
     """Definizione di un Parser Personalizzato: nome + elenco di regole."""
 
@@ -157,6 +203,13 @@ class CustomParserDef:
     # ma — nelle PR successive — restringe la risoluzione degli ID Betfair all'event_type_id
     # corretto. Il parser per-profilo cambia con il profilo (active_parser nello snapshot).
     sport: str = ""
+    # Output multi-riga (#192): un solo messaggio → più righe CSV. MultiMarket = più mercati
+    # diversi della stessa partita; MultiSelection = più selezioni dello stesso mercato. Vuoti/
+    # disattivati = comportamento single-row invariato (retro-compatibile con i file pre-#192).
+    multi_market_enabled: bool = False
+    multi_selection_enabled: bool = False
+    multi_markets: "list[MultiRowRule]" = field(default_factory=list)
+    multi_selections: "list[MultiRowRule]" = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -169,7 +222,19 @@ class CustomParserDef:
             "team_separator": self.team_separator,
             "market_mapping_profiles": list(self.market_mapping_profiles),
             "rules": [r.to_dict() for r in self.rules],
+            "multi_market_enabled": bool(self.multi_market_enabled),
+            "multi_selection_enabled": bool(self.multi_selection_enabled),
+            "multi_markets": [r.to_dict() for r in self.multi_markets],
+            "multi_selections": [r.to_dict() for r in self.multi_selections],
         }
+
+    def active_multi_markets(self) -> "list[MultiRowRule]":
+        """Righe MultiMarket attive (#192): solo se la modalità è abilitata e la riga è enabled."""
+        return [r for r in self.multi_markets if r.enabled] if self.multi_market_enabled else []
+
+    def active_multi_selections(self) -> "list[MultiRowRule]":
+        """Righe MultiSelection attive (#192): solo se la modalità è abilitata e la riga è enabled."""
+        return [r for r in self.multi_selections if r.enabled] if self.multi_selection_enabled else []
 
     def event_type_id(self):
         """`event_type_id` Betfair dello sport del parser, o ``None`` se lo sport non è
@@ -218,6 +283,24 @@ class CustomParserDef:
             sport = raw_sport.strip()
         else:
             sport = str(raw_sport)
+        # Output multi-riga (#192). Migrazione/retro-compatibilità: chiave assente/malformata →
+        # flag False e liste vuote (single-row come prima). I valori non-dict nelle liste sono
+        # ignorati; `enabled` malformato per riga → fail-closed (riga disabilitata).
+        def _flag(key):
+            v = data.get(key, False)
+            if isinstance(v, bool):
+                return v
+            try:
+                return _as_bool(v)
+            except (ValueError, TypeError):
+                return False
+
+        def _multi_list(key):
+            raw = data.get(key, [])
+            if not isinstance(raw, list):
+                return []
+            return [MultiRowRule.from_dict(r) for r in raw if isinstance(r, dict)]
+
         return cls(
             name=str(data.get("name", "")),
             description=str(data.get("description", "")),
@@ -226,6 +309,10 @@ class CustomParserDef:
             name_mapping_profiles=profiles,
             team_separator=str(data.get("team_separator", "") or ""),
             market_mapping_profiles=market_profiles,
+            multi_market_enabled=_flag("multi_market_enabled"),
+            multi_selection_enabled=_flag("multi_selection_enabled"),
+            multi_markets=_multi_list("multi_markets"),
+            multi_selections=_multi_list("multi_selections"),
             # Modalità: SOLO la chiave assente/null (file legacy pre-feature) → "" =
             # eredita il globale. Un `mode` ESPLICITO valido è tenuto; `""` esplicito è
             # l'eredità scelta dalla GUI; un valore malformato (typo, file corrotto) →
