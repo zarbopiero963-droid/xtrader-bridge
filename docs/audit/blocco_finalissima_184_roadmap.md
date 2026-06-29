@@ -27,8 +27,8 @@ branch dedicato off `main` aggiornato, **test hard di resilienza** (fail-first),
 | M6 | m6-journal-atomic | `event_journal.py` | merged (#202) |
 | M7 | m7-token-redact | `event_log.py` | merged (#203) |
 | M8 | m8-privacy-prefix | `log_privacy.py` | merged (#204) |
-| M9 | m9-market-types-get | `dizionario.py` | in PR |
-| M10 | m10-score-tail | `parser.py` | da fare |
+| M9 | m9-market-types-get | `dizionario.py` | merged (#205) |
+| M10 | m10-score-tail | `parser.py` | in PR |
 | M11 | m11-tls-context | `betfair/catalogue_client.py` | da fare |
 | M12 | m12-viewer-debounce | `betfair/dictionary_viewer_gui.py` | da fare |
 | LOW | low-timer-lock | `app.py` (`_schedule_expiry` sotto lock) | da fare |
@@ -137,6 +137,24 @@ corruttivo) e il docstring "atomicità della singola riga" sovrastimava la garan
 (un crash kernel→disco può lasciare una coda parziale, dipende da fs/hardware), ma quella è già
 gestita: `read_events` salta la riga troncata e il prossimo append antepone un separatore.
 Output invariato; cambia solo il numero di write (1 invece di 2 nel caso separatore).
+
+## M10 — `parser`: punteggio in mezzo come separatore squadre sulle righe 🆚
+
+Su una riga 🆚 col punteggio IN MEZZO (`Real Madrid 2 - 1 Barcelona`) il `_SCORE_TAIL`
+(`\s+\d+\s*[-–:]\s*\d+(?:\s.*)?$`) divorava ` 2 - 1 Barcelona` lasciando solo `Real Madrid`:
+nessun separatore → `_teams_from` ritornava `None` → squadre PERSE (fail-closed, ma è un formato
+comune). Fix: aggiunto `_teams_from_score` (con `_SCORE_SEP`) come ULTIMO fallback nella sola
+branch 🆚 (dopo `v/vs` e ` - `): il punteggio fa da separatore, home prima / away dopo. Ogni lato
+passa per `_clean_team_side`, che rimuove la coda di metadati di tempo/stato col marcatore esplicito
+(`46m`/`46'`/`90+2`/`HT`/`FT`/`LIVE`/`PRE`) e valida il resto come squadra reale (#184 M10, Codex
+P1/P2): così `Real Madrid 2 - 1 Barcelona 46m` → `Real Madrid v Barcelona`, mentre `… 2 - 1 HT/FT/
+LIVE` o `46m 2 - 1 …` falliscono chiusi (nessuna squadra). Una cifra NUDA non è metadato: i club a
+cifra iniziale (`1. FC Köln`, `1860 Munich`) e i suffissi numerici (`Schalke 04`) sono preservati.
+La coda quota/@/probabilità sulla stessa riga viene ripulita prima dello split. Vale SOLO per le
+righe 🆚
+(l'emoji conferma la coppia di squadre); in testo libero uno score in mezzo resta ambiguo e non
+produce squadre (`Italy 2 - 1 Serie A` → vuoto). Nessun cambio su CSV/quota/score; la rimozione
+del punteggio a fine riga (`Home v Away 6 - 0 46m`) resta invariata.
 
 ## M9 — `dizionario.market_types()` degrada con `.get()` invece di `KeyError`
 

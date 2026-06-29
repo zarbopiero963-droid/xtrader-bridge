@@ -39,6 +39,21 @@ _LABEL_WORDS = frozenset({
 # La classe [-–:] include di proposito sia il trattino ASCII "-" sia l'EN DASH "–"
 # (e i due punti) perché i punteggi reali usano l'uno o l'altro carattere.
 _SCORE_TAIL = re.compile(r'\s+\d+\s*[-–:]\s*\d+(?:\s.*)?$')
+# Punteggio che fa da SEPARATORE tra due squadre su una riga 🆚 ("Real Madrid 2 - 1 Barcelona"):
+# cattura home (prima del punteggio) e away (dopo). Diverso da _SCORE_TAIL, che rimuove un
+# punteggio a FINE riga (e divorerebbe la squadra away di una riga con score in mezzo, #184 M10).
+_SCORE_SEP = re.compile(r'^(.+?)\s+\d+\s*[-–:]\s*\d+\s+(.+)$')
+# Token di metadati "non-squadra" che possono SEGUIRE (o COSTITUIRE) un lato in una riga 🆚 con
+# punteggio-separatore: minuti col marcatore (46m, 46', 90+2) e stati (HT/FT/LIVE/PRE/PREMATCH).
+# NB: una cifra NUDA (es. "04" in "Schalke 04", "1860" in "1860 Munich") NON è metadato — fa parte
+# del nome — quindi è esclusa: si distingue per il marcatore esplicito (m/'/+) o per essere una
+# parola di stato. Così si recuperano i club a cifra iniziale e si scartano i suffissi di tempo/stato
+# (#184 M10, Codex P1/P2).
+_META_TOK = r"(?:\d+\s*[m'’]|\d+\+\d+|ht|ft|live|prematch|pre)"
+# Coda di uno o più token di metadati a fine lato ("Barcelona 46m FT" → "Barcelona").
+_META_TAIL = re.compile(r'(?:\s+' + _META_TOK + r')+\s*$', re.IGNORECASE)
+# L'intero lato è SOLO un token di metadati (nessuna squadra): "46m", "HT", "FT", "LIVE".
+_META_ONLY = re.compile(r'^' + _META_TOK + r'$', re.IGNORECASE)
 # Token di stato da togliere dal signal_type (LIVE/PRE) prima del mapping.
 _STATUS_TAIL = re.compile(r'\s+\b(?:live|pre|prematch)\b.*$', re.IGNORECASE)
 
@@ -157,6 +172,43 @@ def _teams_from(line: str, sep: re.Pattern):
     return None
 
 
+def _clean_team_side(side: str):
+    """Ripulisce un lato squadra (di una riga 🆚 con punteggio-separatore) dalla coda di metadati
+    di tempo/stato (`Barcelona 46m` → `Barcelona`) e lo valida. Ritorna il nome pulito, oppure
+    `None` se NON è una squadra reale: vuoto, solo metadati (`46m`/`HT`/`FT`/`LIVE`) o senza
+    lettere. Una cifra iniziale è ammessa (`1. FC Köln`, `1860 Munich`): non è metadato (#184 M10,
+    Codex P1/P2)."""
+    s = _META_TAIL.sub('', side).strip()
+    if not s or _META_ONLY.match(s) or not _HAS_ALPHA.search(s):
+        return None
+    return s
+
+
+def _teams_from_score(line: str):
+    """Fallback per le righe 🆚 dove il PUNTEGGIO fa da separatore tra le squadre
+    ("Real Madrid 2 - 1 Barcelona" → "Real Madrid v Barcelona"): senza, `_SCORE_TAIL`
+    rimuoverebbe il punteggio E la squadra in trasferta, perdendo il segnale (#184 M10).
+
+    Si applica SOLO alle righe 🆚 (l'emoji conferma che è una coppia di squadre), MAI al testo
+    libero, dove uno score in mezzo è troppo ambiguo ("Italy 2 - 1 Serie A"). Ogni lato è ripulito
+    dalla coda di metadati (minuto/stato) e validato come squadra reale da `_clean_team_side`: così
+    "Real Madrid 2 - 1 Barcelona 46m" → "Real Madrid v Barcelona", mentre "... 2 - 1 HT/FT/LIVE" o
+    "46m 2 - 1 ..." falliscono chiusi (nessuna squadra), e i club a cifra iniziale sono ammessi."""
+    if _looks_like_label(line) or any(e in line for e in _EMOJI_MARKERS):
+        return None
+    # togli un'eventuale coda quota/@/probabilità sulla stessa riga (come in `_teams_from`).
+    cleaned = re.sub(r'\s+(?:quota\b|@|probabilit[àa]\b|probability\b|prob\b).*$', '',
+                     line, flags=re.IGNORECASE).strip()
+    m = _SCORE_SEP.match(cleaned)
+    if not m:
+        return None
+    home = _clean_team_side(m.group(1))
+    away = _clean_team_side(m.group(2))
+    if not home or not away:
+        return None
+    return f"{home} v {away}"
+
+
 def _find_teams(lines) -> str:
     """Cerca la riga squadre in testo semplice: SOLO " v "/" vs " (cue forte).
     Il separatore " - " è ammesso solo nelle righe 🆚 (l'emoji conferma le squadre):
@@ -221,8 +273,12 @@ def parse_message(text: str) -> dict:
             result['competition'] = re.sub(r'[🏆\s]+', ' ', line).strip()
             continue
         if '🆚' in line:
-            t = _teams_from(re.sub(r'[🆚]', ' ', line).strip(), _SEP_VVS) \
-                or _teams_from(re.sub(r'[🆚]', ' ', line).strip(), _SEP_DASH)
+            base = re.sub(r'[🆚]', ' ', line).strip()
+            # v/vs (forte) → " - " (debole, ammesso perché l'emoji conferma) → punteggio come
+            # separatore ("Real Madrid 2 - 1 Barcelona", #184 M10) come ultimo fallback.
+            t = _teams_from(base, _SEP_VVS) \
+                or _teams_from(base, _SEP_DASH) \
+                or _teams_from_score(base)
             result['teams'] = t or result['teams']
             continue
         if '⚽' in line:
