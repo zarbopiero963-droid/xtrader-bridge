@@ -215,7 +215,11 @@ class NameMappingPanel(ctk.CTkFrame):
             self._status.configure(text="⛔ Crea prima un profilo con «Nuovo».",
                                    text_color="#ef5350")
             return
-        self._append_row_widget("", "", "")
+        # Riga vuota da compilare: nessun argomento posizionale (tutti i campi ai
+        # default vuoti), come la riga iniziale in `_render`. Evita l'under-fill
+        # posizionale fragile `("", "", "")` su una firma a 5 parametri (#184 LOW):
+        # un riordino della firma non sposterebbe più i tre "" sui campi sbagliati.
+        self._append_row_widget()
 
     def _delete_row(self, refs):
         refs["frame"].destroy()

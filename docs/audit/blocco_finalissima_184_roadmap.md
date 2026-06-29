@@ -43,7 +43,7 @@ branch dedicato off `main` aggiornato, **test hard di resilienza** (fail-first),
 | LOW | low-autosync-release | `betfair/auto_sync.py` (`release()` in finally guardato) | in PR |
 | LOW | low-localdb-timeout | `betfair/local_db.py` (`timeout=30`/PRAGMA) | in PR |
 | LOW | low-syncruns-prune | `betfair/local_db.py` (prune `betfair_sync_runs`) | in PR |
-| LOW | low-namemap-underfill | `name_mapping_gui.py` (under-fill posizionale) | da fare |
+| LOW | low-namemap-underfill | `name_mapping_gui.py` (under-fill posizionale) | in PR |
 | LOW | low-diagnostics-ws | `diagnostics.py` (whitespace → `—`) | da fare |
 | LOW | low-dedupe-skew | `signal_dedupe.py` (non pruneare entry con `t>now` + doc) | da fare |
 
@@ -188,6 +188,20 @@ del disco: il CSV finale era già intatto. Test fail-first: orfani rimossi / fil
 os.remove flaky saltato senza fermare lo sweep / orfano CSV reale rimosso senza toccare il CSV. **Smoke
 manuale** (Windows reale, non in CI): killare il processo durante una scrittura CSV lascia un
 `.segnali_*.tmp`; al riavvio dell'app sparisce e il CSV resta valido.
+
+## low-namemap-underfill — `_add_row` aggiunge la riga vuota senza under-fill posizionale
+
+`NameMappingPanel._add_row` faceva `self._append_row_widget("", "", "")`: tre stringhe vuote
+posizionali su una firma a **5** parametri (`country, betfair, provider, sport, entity_type`).
+Funzionava solo perché i tre valori coincidono coi default e gli altri due restano ai default —
+ma è **fragile**: un riordino della firma sposterebbe i tre `""` sui campi sbagliati. Fix: chiamata
+**senza argomenti** `self._append_row_widget()` (tutti i campi ai default vuoti), identica alla riga
+iniziale creata in `_render`. Nessun cambio di comportamento (la riga aggiunta è vuota come prima).
+Il modulo GUI non è in CI (richiede display); test deterministico headless che stubba `customtkinter`
+con classi reali vuote ed esercita il VERO `_add_row` su un `self` finto: verifica la chiamata senza
+argomenti posizionali (fail-first: il vecchio codice passava `("", "", "")`) e che senza profilo
+selezionato non aggiunge righe. **Smoke manuale** (Windows): «+ riga» nel Dizionario nomi aggiunge una
+riga vuota compilabile.
 
 ## low-syncruns-prune — `betfair_sync_runs` limitata (prune delle run vecchie)
 
