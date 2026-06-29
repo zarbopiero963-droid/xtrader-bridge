@@ -163,6 +163,42 @@ def test_prezzo_virgola_normalizzato_a_punto():
     assert res.row["Price"] == "2.50"
 
 
+def test_decimal_sep_to_point_unit():
+    """#184 low-pipeline-comma: la sostituzione naive `,`→`.` corrompeva un prezzo con separatore
+    delle migliaia (`"1.234,56"` → `"1.234.56"`, multi-dot, poi scartato). Ora l'ultimo separatore è
+    il decimale e l'altro le migliaia (rimosso).
+
+    Fail-first: il vecchio `str(v).replace(",", ".")` dava `"1.234.56"`."""
+    f = pipe._decimal_sep_to_point
+    # casi comuni invariati (quote tipiche)
+    assert f("1,85") == "1.85"
+    assert f("1.85") == "1.85"
+    assert f("2") == "2"
+    # formato europeo migliaia+decimale e formato US: ricostruiti correttamente
+    assert f("1.234,56") == "1234.56"
+    assert f("1,234.56") == "1234.56"
+    assert f("1.000,00") == "1000.00"
+    # input non numerico/garbage resta tale (rifiutato a valle, fail-closed)
+    assert f("abc") == "abc"
+    assert f("1.85.3") == "1.85.3"
+
+
+def test_prezzo_migliaia_e_decimale_europeo_non_corrotto():
+    """#184 low-pipeline-comma: end-to-end — un prezzo `1.234,56` (migliaia `.` + decimale `,`) NON
+    deve diventare `1.234.56` (multi-dot → scartato), ma `1234.56` valido."""
+    defn = cp.CustomParserDef(name="X", rules=[
+        cp.FieldRule(target="Provider", fixed_value="TG"),
+        cp.FieldRule(target="EventName", fixed_value="Inter v Milan", required=True),
+        cp.FieldRule(target="MarketType", fixed_value="BOTH_TEAMS_TO_SCORE", required=True),
+        cp.FieldRule(target="SelectionName", fixed_value="Sì", required=True),
+        cp.FieldRule(target="Price", start_after="Quota:", required=True),
+        cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+    ])
+    res = pipe.build_validated_row(defn, "Quota: 1.234,56")
+    assert res.status == validator.VALID
+    assert res.row["Price"] == "1234.56"
+
+
 def test_prezzo_non_finito_rifiutato():
     defn = cp.CustomParserDef(name="X", rules=[
         cp.FieldRule(target="Provider", fixed_value="TG"),

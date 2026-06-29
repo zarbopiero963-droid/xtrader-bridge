@@ -76,6 +76,26 @@ _HANDICAP_RE = re.compile(r"^" + numbers_re.SIGNED_DECIMAL + r"$")   # frammento
 _PRICE_COLS = ("Price", "MinPrice", "MaxPrice")
 
 
+def _decimal_sep_to_point(value) -> str:
+    """Normalizza il separatore decimale a `.`, interpretando i formati con separatore delle
+    migliaia (#184 low-pipeline-comma).
+
+    Se sono presenti SIA `,` SIA `.`, l'ULTIMO che compare è il separatore **decimale** e l'altro è
+    quello delle **migliaia** (rimosso): `"1.234,56"` → `"1234.56"` e `"1,234.56"` → `"1234.56"`,
+    invece del rotto `"1.234.56"` della sostituzione naive (che il validatore poi scartava). Con il
+    solo `,` è il decimale (`,`→`.`); con il solo `.` resta invariato (le quote tipiche `1.85` non
+    cambiano); senza separatori, invariato. Un input non numerico resta tale (rifiutato a valle)."""
+    s = str(value).strip()
+    last_comma, last_dot = s.rfind(","), s.rfind(".")
+    if last_comma != -1 and last_dot != -1:
+        if last_comma > last_dot:                 # virgola = decimale, punto = migliaia
+            return s.replace(".", "").replace(",", ".")
+        return s.replace(",", "")                 # punto = decimale, virgola = migliaia
+    if last_comma != -1:                          # solo virgola → decimale
+        return s.replace(",", ".")
+    return s                                       # solo punto, o nessun separatore
+
+
 @dataclass
 class PipelineResult:
     """Esito del passaggio messaggio → riga validata."""
@@ -131,7 +151,7 @@ def _normalize_to_contract(row: dict, provider: str) -> dict:
     for col in _PRICE_COLS:
         v = out.get(col)
         if v is not None and str(v).strip():
-            out[col] = str(v).replace(",", ".")
+            out[col] = _decimal_sep_to_point(v)
     bt = out.get("BetType")
     if bt is not None and str(bt).strip():
         out["BetType"] = str(bt).strip().upper()

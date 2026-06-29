@@ -36,7 +36,7 @@ branch dedicato off `main` aggiornato, **test hard di resilienza** (fail-first),
 | LOW | low-bool-count | `safety_guard.py` (`isinstance` bool) | in PR |
 | LOW | low-parser-emoji | `parser.py:215` (strip trailing emoji) | in PR |
 | LOW | low-isodds-inf | `parser.py` (`_is_odds` `math.isfinite`) | in PR |
-| LOW | low-pipeline-comma | `custom_pipeline.py` (replace virgola naive) | da fare |
+| LOW | low-pipeline-comma | `custom_pipeline.py` (replace virgola naive) | in PR |
 | LOW | low-csvpath-validate | `config_store.py` (valida dir `csv_path` a START) | da fare |
 | LOW | low-tmp-sweep | `atomic_io.py` (sweep `.tmp` orfani allo startup) | da fare |
 | LOW | low-session-expiry | `betfair/session.py` (pulisce su errore scadenza) | da fare |
@@ -138,6 +138,17 @@ corruttivo) e il docstring "atomicità della singola riga" sovrastimava la garan
 (un crash kernel→disco può lasciare una coda parziale, dipende da fs/hardware), ma quella è già
 gestita: `read_events` salta la riga troncata e il prossimo append antepone un separatore.
 Output invariato; cambia solo il numero di write (1 invece di 2 nel caso separatore).
+
+## low-pipeline-comma — separatore decimale del prezzo interpretato, non `replace` naive
+
+`_normalize_to_contract` faceva `str(v).replace(",", ".")` sulle colonne quota: un prezzo con
+separatore delle migliaia (`"1.234,56"`) diventava `"1.234.56"` (multi-dot) → il validatore lo
+scartava (fail-closed, ma prezzo perso). Fix: nuovo `_decimal_sep_to_point` — se sono presenti SIA
+`,` SIA `.`, l'ULTIMO è il separatore **decimale** e l'altro le **migliaia** (rimosso): `1.234,56`→
+`1234.56`, `1,234.56`→`1234.56`. Con il solo `,` resta il decimale (`,`→`.`); le quote tipiche
+(`1.85`, `1,85`) sono invariate → nessun rischio di reinterpretare un prezzo reale. Input non
+numerico/garbage resta tale (rifiutato a valle). Test fail-first: `1.234,56` ora è VALID con
+`Price=1234.56` (prima INVALID_PRICE); unit del helper sui formati comuni/europeo/US/garbage.
 
 ## low-isodds-inf — `_is_odds` rifiuta i valori non finiti (`inf`/`nan`)
 
