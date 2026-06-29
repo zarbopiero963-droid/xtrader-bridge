@@ -21,6 +21,7 @@ from . import (
     provider_store,
     sports,
 )
+from .custom_parser import MultiRowRule
 from .parser_builder import ParserBuilder
 
 
@@ -442,6 +443,14 @@ class CustomParserPanel(ctk.CTkFrame):
         self._existing_market_profiles = set()  # profili mercati realmente in config (non ⚠)
         self._reload_market_profile_checks()
 
+        # Output multi-riga (#192): un solo messaggio → più righe CSV. Due interruttori
+        # indipendenti (MultiMarket = più mercati diversi della stessa partita; MultiSelection
+        # = più selezioni dello stesso mercato) + righe dinamiche [+]/[Rimuovi]. Spento =
+        # single-row come prima. La logica (round-trip, anteprima) sta nel controller, testata
+        # in CI; qui SOLO i widget. Il banner sotto avvisa quando entrambi attivi (righe
+        # separate, non cartesiane).
+        self._build_multi_section(outer)
+
         # intestazione colonne
         head = ctk.CTkFrame(outer, fg_color="transparent")
         head.pack(fill="x", padx=10)
@@ -467,6 +476,15 @@ class CustomParserPanel(ctk.CTkFrame):
         self._msg_box.pack(fill="x", padx=6, pady=4)
         self._result = ctk.CTkLabel(test, text="", anchor="w", justify="left")
         self._result.pack(fill="x", padx=6, pady=4)
+        # Anteprima multi-riga (#192): TABELLA con UNA riga per ogni riga CSV generata
+        # (base, oppure le righe MultiMarket/MultiSelection), col verdetto per-riga. Resta
+        # vuota finché non si preme «Prova messaggio».
+        ctk.CTkLabel(test, text="Anteprima righe generate (#192):").pack(anchor="w", padx=6)
+        self._preview_table = ctk.CTkFrame(test, fg_color="transparent")
+        self._preview_table.pack(fill="x", padx=6, pady=(0, 4))
+        # Larghezze colonne della tabella anteprima (px), in ordine.
+        self._preview_cols = (("#", 30), ("Tipo", 90), ("Esito", 70),
+                              ("Riga CSV (campi valorizzati)", 560))
         # Diagnostica per-campo (CP-08b): TABELLA — perché "Non pronto", colonna per colonna.
         ctk.CTkLabel(test, text="Diagnostica (una riga per colonna):").pack(anchor="w", padx=6)
         self._diag_table = ctk.CTkFrame(test, fg_color="transparent")
@@ -475,6 +493,141 @@ class CustomParserPanel(ctk.CTkFrame):
         self._diag_cols = (("Colonna", 110), ("Stato", 64), ("Motivo", 280),
                            ("Inizia dopo", 120), ("Finisce prima", 120), ("Valore estratto", 170))
         self._last_report = ""   # testo per "Copia diagnostica"
+
+    # ── output multi-riga (#192): MultiMarket / MultiSelection ──────────────
+    # Campi editabili di UNA riga multi (attributo MultiRowRule → etichetta, larghezza px).
+    # Un campo vuoto EREDITA dalla riga base; per MultiSelection di norma basta «Selezione».
+    _MULTI_FIELDS = (
+        ("market_type", "Tipo mercato", 150),
+        ("market_name", "Mercato", 160),
+        ("selection_name", "Selezione", 150),
+        ("price", "Quota", 70),
+        ("bet_type", "BetType", 90),
+        ("handicap", "Handicap", 90),
+    )
+
+    def _build_multi_section(self, outer):
+        """Sezione output multi-riga: due interruttori + due liste di righe dinamiche.
+        Solo widget; lo stato vive nel `ParserBuilder` (round-trip/anteprima testati in CI)."""
+        sec = ctk.CTkFrame(outer)
+        sec.pack(fill="x", padx=10, pady=(8, 4))
+        ctk.CTkLabel(sec, text="Output multi-riga (un messaggio → più righe CSV)",
+                     font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
+
+        # MultiMarket: più mercati diversi della stessa partita.
+        mk = ctk.CTkFrame(sec, fg_color="transparent")
+        mk.pack(fill="x", padx=8, pady=2)
+        self._multi_market_var = ctk.BooleanVar(value=bool(self.builder.multi_market_enabled))
+        ctk.CTkCheckBox(mk, text="MultiMarket (più mercati)", variable=self._multi_market_var,
+                        command=self._on_multi_toggle).pack(side="left", padx=4)
+        ctk.CTkButton(mk, text="➕ Aggiungi mercato", width=160,
+                      command=self._add_multi_market_clicked).pack(side="left", padx=6)
+        self._multi_markets_box = ctk.CTkFrame(sec, fg_color="transparent")
+        self._multi_markets_box.pack(fill="x", padx=8, pady=(0, 4))
+        self._multi_market_rows = []     # refs per riga MultiMarket
+
+        # MultiSelection: più selezioni dello stesso mercato (eredita il mercato dalla base).
+        ms = ctk.CTkFrame(sec, fg_color="transparent")
+        ms.pack(fill="x", padx=8, pady=2)
+        self._multi_selection_var = ctk.BooleanVar(value=bool(self.builder.multi_selection_enabled))
+        ctk.CTkCheckBox(ms, text="MultiSelection (più selezioni)",
+                        variable=self._multi_selection_var,
+                        command=self._on_multi_toggle).pack(side="left", padx=4)
+        ctk.CTkButton(ms, text="➕ Aggiungi selezione", width=160,
+                      command=self._add_multi_selection_clicked).pack(side="left", padx=6)
+        self._multi_selections_box = ctk.CTkFrame(sec, fg_color="transparent")
+        self._multi_selections_box.pack(fill="x", padx=8, pady=(0, 4))
+        self._multi_selection_rows = []  # refs per riga MultiSelection
+
+        # Banner avvisi (es. entrambi attivi → righe separate, non cartesiane).
+        self._multi_warn = ctk.CTkLabel(sec, text="", anchor="w", justify="left",
+                                        text_color="#ffa726")
+        self._multi_warn.pack(fill="x", padx=8, pady=(0, 6))
+
+    def _add_multi_row_widget(self, container, refs_list, rule):
+        """Disegna UNA riga multi editabile (campi `_MULTI_FIELDS` + abilitata + Rimuovi)."""
+        row = ctk.CTkFrame(container, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        refs = {"frame": row}
+        for attr, label, w in self._MULTI_FIELDS:
+            cell = ctk.CTkFrame(row, fg_color="transparent")
+            cell.pack(side="left", padx=2)
+            ctk.CTkLabel(cell, text=label, width=w, anchor="w",
+                         font=ctk.CTkFont(size=10)).pack(anchor="w")
+            entry = ctk.CTkEntry(cell, width=w)
+            entry.insert(0, getattr(rule, attr, "") or "")
+            entry.pack()
+            refs[attr] = entry
+        refs["enabled"] = ctk.BooleanVar(value=bool(getattr(rule, "enabled", True)))
+        ctk.CTkCheckBox(row, text="Attiva", variable=refs["enabled"], width=40).pack(
+            side="left", padx=6)
+        ctk.CTkButton(row, text="🗑 Rimuovi", width=90, fg_color="#7f0000",
+                      command=lambda: self._remove_multi_row(refs_list, refs)).pack(
+                          side="left", padx=4)
+        refs_list.append(refs)
+
+    def _remove_multi_row(self, refs_list, refs):
+        """Toglie una riga multi (widget + ref) e aggiorna il banner avvisi."""
+        try:
+            refs_list.remove(refs)
+        except ValueError:
+            pass
+        refs["frame"].destroy()
+        self._refresh_multi_warnings()
+
+    def _add_multi_market_clicked(self):
+        """[+] mercato: spunta MultiMarket (se serve) e aggiunge una riga vuota."""
+        self._multi_market_var.set(True)
+        self._add_multi_row_widget(self._multi_markets_box, self._multi_market_rows,
+                                   MultiRowRule())
+        self._refresh_multi_warnings()
+
+    def _add_multi_selection_clicked(self):
+        """[+] selezione: spunta MultiSelection (se serve) e aggiunge una riga vuota."""
+        self._multi_selection_var.set(True)
+        self._add_multi_row_widget(self._multi_selections_box, self._multi_selection_rows,
+                                   MultiRowRule())
+        self._refresh_multi_warnings()
+
+    def _on_multi_toggle(self):
+        """Interruttore MultiMarket/MultiSelection cambiato: aggiorna solo il banner avvisi
+        (lo stato si legge dai widget in `_sync_to_builder`)."""
+        self._refresh_multi_warnings()
+
+    def _reload_multi_from_builder(self):
+        """Ridisegna interruttori + righe multi dal builder (caricamento parser/nuovo)."""
+        self._multi_market_var.set(bool(self.builder.multi_market_enabled))
+        self._multi_selection_var.set(bool(self.builder.multi_selection_enabled))
+        for refs in list(self._multi_market_rows):
+            refs["frame"].destroy()
+        self._multi_market_rows = []
+        for refs in list(self._multi_selection_rows):
+            refs["frame"].destroy()
+        self._multi_selection_rows = []
+        for rule in self.builder.multi_markets:
+            self._add_multi_row_widget(self._multi_markets_box, self._multi_market_rows, rule)
+        for rule in self.builder.multi_selections:
+            self._add_multi_row_widget(self._multi_selections_box, self._multi_selection_rows, rule)
+        self._refresh_multi_warnings()
+
+    def _sync_multi_to_builder(self):
+        """Riporta interruttori + righe multi nei campi del builder (per save/anteprima)."""
+        self.builder.multi_market_enabled = bool(self._multi_market_var.get())
+        self.builder.multi_selection_enabled = bool(self._multi_selection_var.get())
+        self.builder.multi_markets = [self._multi_rule_from_refs(r) for r in self._multi_market_rows]
+        self.builder.multi_selections = [
+            self._multi_rule_from_refs(r) for r in self._multi_selection_rows]
+
+    def _multi_rule_from_refs(self, refs) -> "MultiRowRule":
+        kwargs = {attr: refs[attr].get().strip() for attr, _, _ in self._MULTI_FIELDS}
+        kwargs["enabled"] = bool(refs["enabled"].get())
+        return MultiRowRule(**kwargs)
+
+    def _refresh_multi_warnings(self):
+        """Aggiorna il banner avvisi dal controller (sincronizza prima i widget)."""
+        self._sync_multi_to_builder()
+        warnings = self.builder.multi_warnings()
+        self._multi_warn.configure(text=("\n".join(f"⚠ {w}" for w in warnings)) if warnings else "")
 
     # ── righe regola ──────────────────────────────────────────────────────
     def _add_row(self, rule):
@@ -533,6 +686,8 @@ class CustomParserPanel(ctk.CTkFrame):
         self._reload_profile_checks(use_builder=True)
         # Mappatura mercati: checkbox profili mercati dal builder.
         self._reload_market_profile_checks(use_builder=True)
+        # Output multi-riga (#192): interruttori + righe dal builder.
+        self._reload_multi_from_builder()
         for rule in self.builder.rules:
             self._add_row(rule)
 
@@ -567,6 +722,8 @@ class CustomParserPanel(ctk.CTkFrame):
         self.builder.name_mapping_profiles = self._selected_profiles()
         # Mappatura mercati: profili mercati spuntati.
         self.builder.market_mapping_profiles = self._selected_market_profiles()
+        # Output multi-riga (#192): interruttori + righe MultiMarket/MultiSelection.
+        self._sync_multi_to_builder()
         self.builder.rules = []
         for refs in self._rows:
             self.builder.add_rule(
@@ -769,6 +926,40 @@ class CustomParserPanel(ctk.CTkFrame):
             self._result.configure(text=f"⛔ Non pronto ({diag.status}){extra}")
         self._last_report = parser_diagnostics.format_report(diag)
         self._render_diag_table(parser_diagnostics.diagnostic_table(diag, defn))
+        # Anteprima multi-riga (#192): tutte le righe generate (base o MultiMarket/
+        # MultiSelection), col verdetto per-riga. Stesso motore del runtime.
+        preview = self.builder.preview_rows(
+            message, provider=self._provider, mode=mode, require_price=require_price,
+            name_mapping_profiles=name_mapping_profiles,
+            market_mapping_profiles=market_mapping_profiles)
+        self._render_preview_table(preview)
+
+    _MULTI_KIND_LABEL = {"base": "Base", "market": "Mercato", "selection": "Selezione"}
+
+    def _render_preview_table(self, preview_rows):
+        """Disegna la tabella anteprima multi-riga (#192) da `PreviewRow` già pronte
+        (`ParserBuilder.preview_rows`, testata in CI): qui solo widget. Verde = riga
+        piazzabile, rosso = scartata (col motivo `status`)."""
+        for child in self._preview_table.winfo_children():
+            child.destroy()
+
+        def add_cells(values, *, header=False, color=None):
+            row = ctk.CTkFrame(self._preview_table, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            font = ctk.CTkFont(size=11, weight="bold" if header else "normal")
+            for (txt, (_, w)) in zip(values, self._preview_cols):
+                ctk.CTkLabel(row, text=txt, width=w, anchor="w", justify="left",
+                             wraplength=w - 6, font=font, text_color=color).pack(side="left", padx=2)
+
+        add_cells([c for c, _ in self._preview_cols], header=True)
+        if not preview_rows:
+            add_cells(["", "", "", "(nessuna riga)"], color="gray")
+            return
+        for pr in preview_rows:
+            kind = self._MULTI_KIND_LABEL.get(pr.kind, pr.kind)
+            esito = "✅" if pr.placeable else f"⛔ {pr.status}"
+            add_cells([str(pr.index + 1), kind, esito, pr.summary],
+                      color=None if pr.placeable else "#ef5350")
 
     def _render_diag_table(self, rows):
         """Disegna la tabella diagnostica da righe già pronte (logica in

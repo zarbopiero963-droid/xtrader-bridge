@@ -449,9 +449,29 @@ retro-compatibile).
   `Handicap`, gli eventuali `MarketId`/`SelectionId` ereditati dalla base vengono **azzerati**
   (una riga non può nominare un mercato e identificarne un altro per ID).
 
-**GUI:** i checkbox MultiMarket/MultiSelection, le righe dinamiche `[+]/[Rimuovi]` e la
-preview tabellare multi-riga arrivano in una **PR successiva** (non collaudabili headless); il
-motore qui descritto è già completo e coperto da test (`tests/unit/test_multirow_192.py`).
+**GUI (scheda 🧩 Parser di «🧰 Strumenti»):** la sezione **«Output multi-riga»** sopra la griglia
+14 colonne offre due interruttori indipendenti — **MultiMarket** e **MultiSelection** — ciascuno
+con un pulsante **`➕ Aggiungi`** che inserisce una **riga dinamica** editabile (Tipo mercato,
+Mercato, Selezione, Quota, BetType, Handicap) con casella **Attiva** e pulsante **`🗑 Rimuovi`**.
+Un **banner ⚠** avvisa quando entrambi gli interruttori sono attivi (righe **separate**, non
+cartesiane) o quando un interruttore è acceso senza righe abilitate. **«Prova messaggio»** mostra,
+oltre al verdetto della riga base, una **tabella «Anteprima righe generate»** con **una riga per
+ogni riga CSV** che il messaggio produrrebbe (Base / Mercato / Selezione), col **verdetto
+per-riga** (✅ piazzabile · ⛔ + motivo): usa lo **stesso motore del runtime**
+(`build_validated_rows`), quindi non mente.
+
+La logica che la GUI usa (round-trip dei campi multi in `to_def()`, gestione righe, avvisi,
+anteprima `ParserBuilder.preview_rows`) vive nel **controller** ed è coperta in CI da
+`tests/unit/test_parser_builder_multirow.py`; i widget (`custom_parser_gui.py`) restano una
+**vista sottile**, verificabile solo manualmente su Windows (display richiesto). Il motore è
+coperto da `tests/unit/test_multirow_192.py`.
+
+**Collaudo manuale GUI (Windows):** apri «🧰 Strumenti» → scheda 🧩 Parser; spunta MultiMarket,
+premi `➕ Aggiungi mercato` due volte e compila due mercati; incolla un messaggio reale e premi
+«Prova messaggio»; verifica che la tabella mostri **2 righe Mercato** entrambe ✅. Spunta anche
+MultiSelection, aggiungi 3 selezioni → la tabella deve mostrare **5 righe** (2 Mercato + 3
+Selezione), col banner ⚠ «righe SEPARATE». Salva, riapri il parser e verifica che interruttori
+e righe siano ripristinati.
 
 ## 6. Riferimenti (codice e test)
 
@@ -466,6 +486,7 @@ motore qui descritto è già completo e coperto da test (`tests/unit/test_multir
 | Riga validata col contratto | `custom_pipeline.py` | `tests/unit/test_custom_pipeline.py` |
 | Diagnostica «Prova messaggio» (per-campo) | `parser_diagnostics.py` | `tests/unit/test_parser_diagnostics.py` |
 | Builder GUI (controller + vista) — scheda 🧩 Parser di "🧰 Strumenti" | `parser_builder.py`, `custom_parser_gui.py` (`CustomParserPanel`) | `tests/unit/test_parser_builder.py` |
+| Output multi-riga GUI (controller: round-trip, righe, anteprima `preview_rows`) | `parser_builder.py` (`PreviewRow`, `preview_rows`, `multi_warnings`), `custom_parser_gui.py` (sezione «Output multi-riga» + tabella anteprima) | `tests/unit/test_parser_builder_multirow.py` (+ vista: verifica manuale GUI) |
 | Adattamento finestre allo schermo (clamp altezza + minsize) | `gui_utils.py` | `tests/smoke/test_imports.py` |
 | Finestra hub "🧰 Strumenti" a schede (consolidazione GUI) | `tools_gui.py` | `tests/smoke/test_imports.py` |
 | Parser attivo / override per chat | `parser_manager.py` | `tests/unit/test_parser_manager.py` |
