@@ -157,6 +157,14 @@ ogni tasto); premi Invio → aggiornamento immediato; cambia Livello/Sport/«Sol
 → aggiornamento immediato. Atteso: nessun lag percepibile su un dizionario grande. Resta non
 verificato in automatico il rendering reale dei widget (richiede display).
 
+Teardown (Codex P2): il pannello sovrascrive `destroy()` per chiamare `cancel_pending()` prima di
+`super().destroy()`. Senza, se l'utente digita e chiude la finestra Strumenti entro i 250 ms, il
+timer `after` scatterebbe contro un pannello già distrutto (Tcl background error sul normale
+percorso di chiusura). Il meccanismo su cui si basa (`cancel_pending` impedisce l'azione) è coperto
+dal test headless; la sovrascrittura di `destroy` NON è auto-testabile (il modulo GUI richiede
+`customtkinter`+display, assenti in CI). **Smoke test manuale aggiuntivo**: digita in «Cerca» e
+chiudi SUBITO la finestra Strumenti → nessun errore in console alla chiusura.
+
 ## M11 — `catalogue_client`: contesto TLS esplicito sulle chiamate read-only
 
 `_http_post_json` e `_http_navigation` chiamavano `urlopen` SENZA `context=` esplicito, a differenza

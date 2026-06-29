@@ -42,6 +42,17 @@ class DictionaryViewerPanel(ctk.CTkFrame):
         self._build_ui()
         self._refresh()
 
+    def destroy(self):
+        """Teardown (#184 M12, Codex P2): annulla un eventuale refresh in debounce PRIMA che i
+        widget vengano distrutti. Senza, un timer `after` ancora pendente (l'utente digita e chiude
+        la finestra Strumenti entro 250 ms) scatterebbe contro un pannello già distrutto, con un Tcl
+        background error sul normale percorso di chiusura. Tkinter, distruggendo i widget, NON
+        annulla gli `after` pendenti: vanno annullati a mano qui."""
+        deb = getattr(self, "_search_debouncer", None)
+        if deb is not None:
+            deb.cancel_pending()
+        super().destroy()
+
     # ── costruzione UI ────────────────────────────────────────────────────────
     def _build_ui(self):
         ctk.CTkLabel(
