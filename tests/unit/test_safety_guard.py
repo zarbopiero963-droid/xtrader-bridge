@@ -62,6 +62,24 @@ def test_limite_giornaliero_blocca_oltre_il_tetto():
     assert lim.remaining(now=t) == 0
 
 
+def test_release_restituisce_una_slot_mantenendo_il_giorno():
+    """#184 low-tracker-nonwrite (Codex P2): `release()` restituisce UNA slot consumata (decremento,
+    mai sotto 0) MANTENENDO il giorno corrente — serve a disfare il consumo di un DRY_RUN senza
+    riportare indietro la normalizzazione del giorno."""
+    t = 1_000_000.0
+    lim = sg.DailyLimiter(max_per_day=3)
+    assert lim.allow(now=t) and lim.allow(now=t)         # 2 consumate
+    assert lim.remaining(now=t) == 1
+    day = lim.state()["day"]
+    lim.release()                                         # restituisce 1
+    assert lim.remaining(now=t) == 2
+    assert lim.state()["day"] == day                     # giorno invariato
+    # floor a 0: più release del consumato non va sotto zero.
+    lim.release(); lim.release(); lim.release()
+    assert lim.remaining(now=t) == 3
+    assert lim.state()["count"] == 0
+
+
 def test_reset_al_cambio_giorno():
     lim = sg.DailyLimiter(max_per_day=2)
     day1 = 1_000_000.0                          # 1970-01-12 (UTC)

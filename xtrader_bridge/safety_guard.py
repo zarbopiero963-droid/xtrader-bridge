@@ -142,6 +142,15 @@ class DailyLimiter:
         self._count += 1
         return True
 
+    def release(self) -> None:
+        """Restituisce UNA slot consumata da un precedente `allow()` (decremento, mai sotto 0),
+        **mantenendo** il giorno corrente già normalizzato da `_roll`. Serve a disfare il consumo
+        di un esito che poi NON ha scritto (es. DRY_RUN), senza riportare indietro la
+        normalizzazione del giorno: ripristinare un intero snapshot del limiter rimetterebbe un
+        giorno corrotto (state file malformato) e bloccherebbe per sempre il tetto (#184 Codex)."""
+        if self._count > 0:
+            self._count -= 1
+
     def remaining(self, *, now: float = None) -> int:
         """Segnali ancora ammessi nel giorno corrente (senza consumarne)."""
         now = time.time() if now is None else now

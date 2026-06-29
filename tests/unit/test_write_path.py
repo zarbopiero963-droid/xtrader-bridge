@@ -189,6 +189,44 @@ def test_daily_limited_resta_ritentabile_dopo_il_reset():
     assert written == [[_row("B")]]
 
 
+def test_daily_limited_giorno_corrotto_resta_normalizzato_non_si_blocca():
+    """#184 low-tracker-nonwrite (Codex P2): con un `daily_state` corrotto (giorno malformato) e
+    count al tetto, `allow()` rifiuta MA normalizza `_day` a oggi. Il rollback NON deve scartare
+    quella normalizzazione: altrimenti il giorno corrotto verrebbe ri-salvato e il bridge resterebbe
+    bloccato per sempre (mai un reset domani).
+
+    Fail-first: col rollback pieno del daily, `_day` tornava al valore corrotto (UNKNOWN)."""
+    tracker = signal_dedupe.SignalTracker()
+    daily = safety_guard.DailyLimiter(max_per_day=1)
+    # Stato corrotto tollerato da restore_state: giorno non valido → UNKNOWN, count al tetto.
+    assert daily.restore_state({"day": "20XX-99-99", "count": 1}) is True
+    assert not safety_guard._is_valid_day(daily.state()["day"])     # baseline: giorno NON valido
+    queue = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, max_active=0)
+    res = write_path.commit_signal(
+        tracker, daily, queue, CFG_REAL, "B", _row("B"), "out.csv", 100.0, _ok_writer([]))
+    assert res.decision == live_guard.DAILY_LIMITED
+    # Il giorno è stato NORMALIZZATO a una data valida (oggi), non riportato al valore corrotto:
+    # così al prossimo giorno reale il tetto si resetterà invece di restare bloccato.
+    assert safety_guard._is_valid_day(daily.state()["day"])
+
+
+def test_dry_run_giorno_corrotto_resta_normalizzato_e_slot_restituita():
+    """#184 low-tracker-nonwrite (Codex P2): anche in DRY_RUN il rollback non deve riportare un
+    giorno corrotto. `release()` disfa la sola slot consumata, mantenendo la normalizzazione.
+
+    Fail-first: col rollback pieno del daily, `_day` tornava al valore corrotto (UNKNOWN)."""
+    tracker = signal_dedupe.SignalTracker()
+    daily = safety_guard.DailyLimiter(max_per_day=5)
+    assert daily.restore_state({"day": "bad-day", "count": 0}) is True
+    assert not safety_guard._is_valid_day(daily.state()["day"])
+    queue = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, max_active=0)
+    res = write_path.commit_signal(
+        tracker, daily, queue, CFG_DRY, "S", _row("S"), "out.csv", 100.0, _ok_writer([]))
+    assert res.decision == live_guard.DRY_RUN
+    assert safety_guard._is_valid_day(daily.state()["day"])         # giorno normalizzato, non corrotto
+    assert daily.remaining() == 5                                    # slot restituita (release)
+
+
 def test_write_reale_resta_deduplicato_nessuna_doppia_scommessa():
     """#184 low-tracker-nonwrite (guardia anti-regressione): un WRITE reale CONSUMA ancora il
     dedupe, quindi un re-send identico nella finestra resta DUPLICATE → nessuna doppia scommessa."""

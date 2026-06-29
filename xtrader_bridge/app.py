@@ -1789,8 +1789,10 @@ class App(ctk.CTk):
         self._apply_csv_lock_event(csv_lock_event)   # #153 H2: GUI fuori dal lock
         # ── fuori dal lock: side-effect (persistenza guard state, GUI, log) ──
         if decision != live_guard.WRITE:
-            # Esito non-WRITE (dup/rate/daily/dry-run): lo stato è già consumato sotto lock;
-            # persisti e notifica.
+            # Esito non-WRITE (dup/rate/daily/dry-run): DUPLICATE/RATE_LIMITED non hanno consumato
+            # stato; DAILY_LIMITED/DRY_RUN l'avevano consumato sotto lock ma `commit_signal` l'ha
+            # già ANNULLATO (rollback, #184 low-tracker-nonwrite). Si persiste lo stato CORRENTE,
+            # ormai coerente, così l'invariante «guardrail = WRITE reali» sopravvive al riavvio.
             if self._tracker is not None:
                 self._save_guard_state()
             self._after_non_write(decision, row)

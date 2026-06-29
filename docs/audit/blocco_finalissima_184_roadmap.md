@@ -153,9 +153,18 @@ aveva aggiunto nulla). Invariante risultante: *lo stato dei guardrail (dedupe + 
 i WRITE reali*. **Niente doppia scommessa**: un duplicato reale nasce comunque dall'hash di un WRITE
 ed è ancora soppresso; un segnale mai scritto non blocca più una bet futura.
 
+Refinement (Codex P2): il rollback è **per-esito**, non un `restore_state` cieco del daily.
+`DAILY_LIMITED` → si annulla SOLO l'hash del tracker; il daily NON si tocca, perché `allow()` non
+aveva consumato slot (solo, eventualmente, normalizzato il giorno corrente). Un `restore_state`
+pieno avrebbe riportato un **giorno corrotto** (state file malformato → `_UNKNOWN_DAY`), che non si
+resetta mai → bridge bloccato per sempre. `DRY_RUN` → si annulla l'hash e si **restituisce** la slot
+giornaliera con il nuovo `DailyLimiter.release()` (decremento con floor 0) che MANTIENE il giorno
+normalizzato, invece di ripristinare lo snapshot.
+
 Test (fail-first): DRY_RUN non consuma il tetto giornaliero; DRY_RUN non avvelena il dedupe reale;
-DAILY_LIMITED ritentabile dopo il reset del tetto; + guardia anti-regressione che un WRITE reale
-resta deduplicato (no doppia scommessa).
+DAILY_LIMITED ritentabile dopo il reset del tetto; DAILY_LIMITED/DRY_RUN con giorno corrotto lo
+**normalizzano** (non si bloccano); `release()` restituisce una slot mantenendo il giorno (floor 0);
++ guardia anti-regressione che un WRITE reale resta deduplicato (no doppia scommessa).
 
 ## M12 — viewer dizionario: debounce della ricerca (no query+rebuild per keystroke)
 
