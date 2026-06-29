@@ -90,6 +90,25 @@ def test_clear_stale_csv_rimuove_riga_orfana(tmp_path):
     assert _no_tmp_left(str(tmp_path))
 
 
+def test_has_active_row_distingue_riga_da_solo_header(tmp_path):
+    # #234: `has_active_row` deve distinguere un CSV del bridge CON una riga dati da uno a SOLO
+    # header (riscrittura idempotente). Serve a non registrare un falso crash-recovery all'avvio.
+    p = tmp_path / "segnali.csv"
+    csv_writer.init_csv(str(p))                        # CSV del bridge a solo header
+    assert csv_writer.has_active_row(str(p)) is False
+    csv_writer.write_csv(ROW, str(p))                  # ora con una riga attiva
+    assert csv_writer.has_active_row(str(p)) is True
+
+
+def test_has_active_row_falsa_su_assente_vuoto_o_non_bridge(tmp_path):
+    # Read-only/best-effort: path vuoto, file assente, o file NON-bridge → False (mai eccezioni).
+    assert csv_writer.has_active_row("") is False
+    assert csv_writer.has_active_row(str(tmp_path / "non_esiste.csv")) is False
+    altro = tmp_path / "documento_utente.csv"
+    altro.write_text("colonnaA,colonnaB\nvalore1,valore2\n", encoding="utf-8")
+    assert csv_writer.has_active_row(str(altro)) is False   # header diverso da CSV_HEADER
+
+
 def test_clear_stale_csv_non_tocca_file_non_bridge(tmp_path):
     # Sicurezza (Codex P2): un file esistente che NON è un CSV del bridge (prima
     # riga diversa da CSV_HEADER) non deve mai essere sovrascritto/distrutto.

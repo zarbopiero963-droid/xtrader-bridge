@@ -24,7 +24,7 @@ from .config_store import (
     migrate_legacy_config,
     save_config,
 )
-from .csv_writer import clear_stale_csv, init_csv, sweep_orphan_temps, write_rows
+from .csv_writer import clear_stale_csv, has_active_row, init_csv, sweep_orphan_temps, write_rows
 from . import (
     autostart,
     config_store,
@@ -207,6 +207,12 @@ class App(ctk.CTk):
         # BEST-EFFORT (mai bloccante). Potato allo startup per non crescere all'infinito.
         self._journal_path = runtime_state.event_journal_path(config_dir())
         event_journal.prune_events(self._journal_path, _EVENT_JOURNAL_KEEP)
+        # #234: stato REALE del CSV operativo PRIMA del cleanup d'avvio. Il diario emette un
+        # clear/recovery SOLO sulla transizione riga→solo-header (vedi `_journal_csv_cleared_if_had_row`),
+        # così una riscrittura idempotente di un CSV già a solo header NON viene scambiata per un
+        # crash-recovery (falso positivo), mentre una riga stantia reale di una sessione morta sì.
+        self._csv_had_active_row = has_active_row(
+            str((self._config or {}).get("csv_path", "") or "").strip())
 
         self._build_ui()
         self._update_real_mode_banner(self._config)   # banner REALE all'avvio se persistito (#136 p4)
@@ -268,9 +274,10 @@ class App(ctk.CTk):
                 # Messaggio neutro: clear_stale_csv ripristina l'header per qualsiasi
                 # file esistente, anche se era già a solo header (niente riga rimossa).
                 self._log(f"🧹 CSV riportato a solo header {quando}: {path}")
-                # Event journal (#230): un clear all'avvio è un recovery anti-segnale-stantio
-                # (riga orfana di una sessione morta); negli altri casi è un clear normale.
-                self._journal(
+                # Event journal (#230/#234): un clear all'avvio è un recovery anti-segnale-stantio
+                # (riga orfana di una sessione morta); negli altri casi è un clear normale. Emesso
+                # SOLO se c'era davvero una riga (no falso recovery su CSV già a solo header, #234 A).
+                self._journal_csv_cleared_if_had_row(
                     "CRASH_RECOVERY_CSV_CLEARED" if quando == "all'avvio" else "CSV_CLEARED",
                     quando=quando, path=path)
         except OSError as exc:
@@ -295,6 +302,20 @@ class App(ctk.CTk):
         except Exception:   # noqa: BLE001,S110 — il journal è diagnostico: un suo errore non deve
             pass            # mai propagare nel percorso di trading (best-effort, niente log: il
             #                 sink di log potrebbe a sua volta fallire e il diario non è critico)
+
+    def _journal_csv_cleared_if_had_row(self, event_type: str, **data) -> None:
+        """Registra un evento di CLEAR del CSV (`CSV_CLEARED`/`CRASH_RECOVERY_CSV_CLEARED`) SOLO se
+        il CSV operativo aveva davvero una riga attiva — cioè sulla transizione reale
+        riga→solo-header — poi azzera il flag `_csv_had_active_row` (#234).
+
+        Evita due falsi del diario: (a) un crash-recovery/clear su una riscrittura idempotente di un
+        CSV già a solo header (falso positivo), e (b) — combinato con l'impostazione del flag dopo
+        ogni scrittura con righe — la perdita del clear quando è un retry/START a riportare il CSV a
+        solo header. Best-effort: il flag è un mirror diagnostico dello stato disco, aggiornato fuori
+        dal `_queue_lock`; un eventuale micro-disallineamento concorrente non tocca il trading."""
+        if self.__dict__.get("_csv_had_active_row"):
+            self._journal(event_type, **data)
+        self._csv_had_active_row = False
 
     def _sweep_orphan_csv_temps(self) -> None:
         """Rimuove i temporanei `.segnali_*.tmp` orfani nella cartella del CSV (#184 LOW).
@@ -1403,6 +1424,10 @@ class App(ctk.CTk):
             self._log(f"❌ Impossibile inizializzare il CSV ({cfg['csv_path']}): "
                       f"{type(exc).__name__}: {exc}. Avvio annullato.")
             return
+        # #234 B: se una riga stantia è sopravvissuta fino a qui (cleanup avvio/STOP non riuscito
+        # perché XTrader teneva il file lockato), è QUESTO init_csv a rimuoverla → registra il clear
+        # prima del START, altrimenti il diario avrebbe un CSV_WRITTEN senza il clear corrispondente.
+        self._journal_csv_cleared_if_had_row("CSV_CLEARED", reason="start")
 
         self._running = True
         # Nuova sessione: azzera il contatore CSV-lock così i fallimenti di una sessione
@@ -1908,6 +1933,9 @@ class App(ctk.CTk):
         self.after(0, lambda: self._bump("written"))   # PR-14: riga scritta nel CSV
         # Event journal (#230): riga scritta nel CSV (numero righe attive + sorgente).
         self._journal("CSV_WRITTEN", rows=len(rows), source=result.source)
+        # #234: il CSV operativo ora HA una riga attiva su disco → memorizzalo, così il prossimo
+        # ritorno a solo header (scadenza/conferma/manuale/STOP/START) registra un clear reale.
+        self._csv_had_active_row = True
         self.after(0, lambda p=path, n=len(rows): self._note_csv(p, n))
         self.after(0, lambda n=len(rows): self._update_active_indicator(n))   # #136 p5 indicatore
 
@@ -2018,26 +2046,32 @@ class App(ctk.CTk):
                 # #153 H2: esito lock CSV serializzato con la scrittura (Codex #156).
                 csv_lock_event = self._record_csv_lock(True, write_error)
             self._apply_csv_lock_event(csv_lock_event)
+            # Event journal (#230/#234 C): l'esito XTrader è GIÀ avvenuto (`queue.confirm` ha rimosso
+            # il segnale dalla coda) → registralo SEMPRE, anche se la riscrittura CSV fallisce, prima
+            # del return del retry. Altrimenti, su write-failure→retry, l'outcome andrebbe perso.
+            self._journal(
+                "XTRADER_CONFIRMED" if result.status == confirmation_reader.CONFIRMED
+                else "XTRADER_REJECTED",
+                signal_id=result.signal_id, remaining=len(rows))
             if write_error is not None:
                 # Il segnale è già rimosso dalla coda ma il CSV (write fallita) ha
                 # ancora la riga: riprova PRESTO (non a timeout pieno, che terrebbe la
                 # riga stantia un intero intervallo) così la riga sparisce in fretta.
+                # Il flag `_csv_had_active_row` resta com'era: il CSV su disco ha ancora la riga;
+                # sarà il retry (`_expire_tick`) a riportarlo a solo header e a loggare il clear (#234 C).
                 self.after(0, lambda: self._bump("errors"))
                 self.after(0, lambda e=write_error: self._set_last("error", f"CSV dopo conferma: {e}"))
                 self.after(0, lambda e=write_error: self._log(
                     f"❌ Aggiornamento CSV dopo conferma fallito: {e}. Riprovo a breve."))
                 self._schedule_expiry(path, delay=_WRITE_RETRY_DELAY)
                 return
-            # Event journal (#230): esito XTrader applicato (segnale rimosso da coda+CSV).
-            self._journal(
-                "XTRADER_CONFIRMED" if result.status == confirmation_reader.CONFIRMED
-                else "XTRADER_REJECTED",
-                signal_id=result.signal_id, remaining=len(rows))
-            # Se era l'ULTIMO segnale attivo, la riscrittura ha riportato il CSV a solo header:
-            # registra anche il clear, altrimenti il ciclo di vita avrebbe un CSV_WRITTEN senza il
-            # CSV_CLEARED corrispondente (Codex P2 #233). Best-effort, fuori dal lock.
-            if not rows:
-                self._journal("CSV_CLEARED", reason="confirmation")
+            # Scrittura riuscita: aggiorna il flag di stato del CSV. Se era l'ULTIMO segnale attivo
+            # (CSV tornato a solo header) registra il clear sulla transizione reale (#234), altrimenti
+            # restano righe attive → il CSV ha ancora una riga.
+            if rows:
+                self._csv_had_active_row = True
+            else:
+                self._journal_csv_cleared_if_had_row("CSV_CLEARED", reason="confirmation")
             # Guard su None (review Sourcery): se in futuro si aggiungono status
             # terminali senza messaggio, non si logga `None`.
             removed_log = signal_outcome.confirmation_removed_log(result.status)
@@ -2129,11 +2163,15 @@ class App(ctk.CTk):
             self.after(0, lambda n=len(rows): self._update_active_indicator(n))   # #136 p5
             self.after(0, lambda n=len(expired): self._log(
                 f"🗑️  {n} segnale/i scaduto/i rimosso/i dal CSV"))
-            if empty:
-                # L'ULTIMA riga attiva è scaduta → il CSV è tornato a solo header: il diario
-                # deve registrare il clear, altrimenti resterebbe un CSV_WRITTEN senza il
-                # corrispondente CSV_CLEARED (Codex P2 #233). Best-effort, fuori dal lock.
-                self._journal("CSV_CLEARED", reason="expiry", expired=len(expired))
+        # Stato del CSV dopo una scrittura RIUSCITA (#230/#234 D): se restano righe il CSV è ancora
+        # attivo; se è tornato a solo header registra il clear sulla transizione reale. Gestito QUI
+        # (non gated su `expired`) così anche un RETRY post-write-failure — dove `expired` è vuoto
+        # perché gli scaduti erano già stati rimossi in un tick precedente, ma il CSV viene ora
+        # davvero riportato a solo header — registra comunque il clear.
+        if rows:
+            self._csv_had_active_row = True
+        else:
+            self._journal_csv_cleared_if_had_row("CSV_CLEARED", reason="expiry")
         if not empty:
             self._schedule_expiry(path)
 
@@ -2185,11 +2223,10 @@ class App(ctk.CTk):
             return
         self._note_csv(path, 0)
         self._log("🗑️  CSV svuotato manualmente")
-        # Event journal (#230): anche lo svuotamento MANUALE riporta il CSV a solo header →
-        # va registrato, altrimenti il diario avrebbe un CSV_WRITTEN senza il clear
-        # corrispondente (Codex P2 #233). Solo sul percorso riuscito (write_error già
-        # ritornato sopra). Best-effort, fuori dal lock.
-        self._journal("CSV_CLEARED", reason="manual")
+        # Event journal (#230/#234): lo svuotamento MANUALE riporta il CSV a solo header → registralo,
+        # ma SOLO se c'era davvero una riga (no clear spurio se il CSV era già a solo header). Solo sul
+        # percorso riuscito (write_error già ritornato sopra). Best-effort, fuori dal lock.
+        self._journal_csv_cleared_if_had_row("CSV_CLEARED", reason="manual")
 
     def _open_tools(self, initial=None):
         """Apre la finestra hub "🧰 Strumenti" a schede (consolidazione GUI, roadmap).

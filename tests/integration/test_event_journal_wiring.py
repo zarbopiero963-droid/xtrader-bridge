@@ -127,6 +127,7 @@ def test_confirmation_ultimo_segnale_journals_csv_cleared(make_app, app_mod, tmp
     csv_writer.write_rows(q.active_rows(), path)
     a = make_app(csv_path=path, queue=q)
     jpath = _make(a, tmp_path)
+    a._csv_had_active_row = True   # #234: il segnale era stato scritto (CSV_WRITTEN) prima
 
     app_mod.App._process_confirmation(
         a, "Inter v Milan Esito finale Inter piazzata", {"csv_path": path})
@@ -188,10 +189,13 @@ def _stale_csv(path):
 
 
 def test_clear_stale_startup_journals_crash_recovery(make_app, app_mod, tmp_path):
+    from xtrader_bridge import csv_writer
     path = str(tmp_path / "segnali.csv")
     _stale_csv(path)
     a = make_app(config={"csv_path": path})
     jpath = _make(a, tmp_path)
+    # #234: all'avvio __init__ rileva lo stato reale del CSV; qui c'è una riga stantia → flag True.
+    a._csv_had_active_row = csv_writer.has_active_row(path)
 
     app_mod.App._clear_stale_csv(a, "all'avvio")
 
@@ -203,6 +207,7 @@ def test_clear_stale_stop_journals_csv_cleared(make_app, app_mod, tmp_path):
     _stale_csv(path)
     a = make_app()
     jpath = _make(a, tmp_path)
+    a._csv_had_active_row = True   # #234: la sessione aveva scritto una riga prima dello stop
 
     app_mod.App._clear_stale_csv(a, "allo stop", path=path)
 
@@ -257,6 +262,7 @@ def test_expire_clears_last_row_journals_csv_cleared(make_app, app_mod, monkeypa
     q.add(_row("Inter v Milan"), now=0)                  # scade a now=10
     a = make_app(csv_path=path, queue=q)
     jpath = _make(a, tmp_path)
+    a._csv_had_active_row = True   # #234: il segnale era stato scritto prima della scadenza
     monkeypatch.setattr(app_mod.time, "monotonic", lambda: 1000.0)   # oltre la scadenza
 
     app_mod.App._expire_tick(a, path)
@@ -292,6 +298,7 @@ def test_manual_clear_journals_csv_cleared(make_app, app_mod, tmp_path):
     csv_writer.write_rows(q.active_rows(), path)
     a = make_app(csv_path=path, queue=q, running=True)
     jpath = _make(a, tmp_path)
+    a._csv_had_active_row = True   # #234: il segnale era stato scritto prima dello svuotamento
 
     app_mod.App._manual_clear(a)
 
@@ -315,3 +322,95 @@ def test_manual_clear_write_failure_non_logga_clear(make_app, app_mod, monkeypat
     app_mod.App._manual_clear(a)
 
     assert "CSV_CLEARED" not in _types(jpath)
+
+
+# ── #234: fedeltà del diario (transizione reale riga→solo-header) ─────────────
+
+def test_clear_stale_startup_header_only_no_false_recovery(make_app, app_mod, tmp_path):
+    # #234 A: avvio pulito con CSV GIÀ a solo header → `clear_stale_csv` riscrive idempotente ma
+    # nessuna riga è stata rimossa → NIENTE falso `CRASH_RECOVERY_CSV_CLEARED` nel diario.
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    csv_writer.init_csv(path)                                 # CSV del bridge a SOLO header
+    a = make_app(config={"csv_path": path})
+    jpath = _make(a, tmp_path)
+    a._csv_had_active_row = csv_writer.has_active_row(path)   # False: nessuna riga dati
+
+    app_mod.App._clear_stale_csv(a, "all'avvio")
+
+    assert _types(jpath) == []                                # nessun recovery spurio
+
+
+def test_clear_helper_emette_solo_su_transizione_reale(make_app, app_mod, tmp_path):
+    # #234 B (meccanismo): `_journal_csv_cleared_if_had_row` emette il clear SOLO se il CSV aveva una
+    # riga (flag True), poi azzera il flag. È il meccanismo che copre il clear via `init_csv` di START
+    # (e di ogni altro punto): `_start` è GUI/thread-coupled e non istanziabile headless, ma il suo
+    # contributo nuovo è proprio questa chiamata all'helper.
+    a = make_app()
+    jpath = _make(a, tmp_path)
+
+    a._csv_had_active_row = False
+    app_mod.App._journal_csv_cleared_if_had_row(a, "CSV_CLEARED", reason="start")
+    assert _types(jpath) == []                                # CSV già a solo header → niente clear
+
+    a._csv_had_active_row = True
+    app_mod.App._journal_csv_cleared_if_had_row(a, "CSV_CLEARED", reason="start")
+    assert _types(jpath) == ["CSV_CLEARED"]                   # transizione reale → clear loggato
+    assert a._csv_had_active_row is False                     # flag azzerato dopo l'emissione
+
+
+def _raise_oserror(*_a, **_k):
+    raise OSError("CSV lockato da XTrader (simulato)")
+
+
+def test_confirmation_write_failure_logga_outcome_e_retry_pulisce(make_app, app_mod, monkeypatch, tmp_path):
+    # #234 C: se la riscrittura post-conferma fallisce, l'outcome `XTRADER_*` va comunque registrato
+    # (non perso nel retry); il CSV ha ancora la riga (flag resta True) e sarà il retry (`_expire_tick`)
+    # a riportarlo a solo header e a loggare il clear.
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = _queue_with(_row("Inter v Milan"))
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q, running=True)
+    jpath = _make(a, tmp_path)
+    a._csv_had_active_row = True
+
+    # 1) la riscrittura post-conferma fallisce
+    monkeypatch.setattr(app_mod, "write_rows", _raise_oserror)
+    app_mod.App._process_confirmation(
+        a, "Inter v Milan Esito finale Inter piazzata", {"csv_path": path})
+    t1 = _types(jpath)
+    assert "XTRADER_CONFIRMED" in t1            # outcome registrato NONOSTANTE il write fallito
+    assert "CSV_CLEARED" not in t1              # il CSV ha ancora la riga (write fallita)
+    assert a._csv_had_active_row is True
+
+    # 2) il retry (scadenza) riesce → CSV tornato a solo header → clear loggato
+    monkeypatch.setattr(app_mod, "write_rows", csv_writer.write_rows)
+    app_mod.App._expire_tick(a, path)
+    assert "CSV_CLEARED" in _types(jpath)
+
+
+def test_expire_write_failure_poi_retry_logga_clear(make_app, app_mod, monkeypatch, tmp_path):
+    # #234 D: se la scrittura durante la scadenza fallisce dopo aver rimosso l'ultima riga dalla coda,
+    # nel retry `expired` è vuoto ma il CSV viene riportato a solo header → il clear va comunque loggato
+    # (il vecchio gate `if expired:` lo perdeva).
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.QUEUE_UNTIL_CONFIRMED, default_timeout=10)
+    q.add(_row("Inter v Milan"), now=0)
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q, running=True)
+    jpath = _make(a, tmp_path)
+    a._csv_had_active_row = True
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: 1000.0)   # oltre la scadenza
+
+    # 1) scadenza con write fallito: la coda rimuove lo scaduto ma il CSV resta indietro
+    monkeypatch.setattr(app_mod, "write_rows", _raise_oserror)
+    app_mod.App._expire_tick(a, path)
+    assert "CSV_CLEARED" not in _types(jpath)   # write fallita: nessun clear ancora
+    assert a._csv_had_active_row is True
+
+    # 2) retry: `expired` ora è vuoto (già rimosso) ma il CSV viene riportato a solo header
+    monkeypatch.setattr(app_mod, "write_rows", csv_writer.write_rows)
+    app_mod.App._expire_tick(a, path)
+    assert "CSV_CLEARED" in _types(jpath)
