@@ -144,12 +144,14 @@ Su una riga 🆚 col punteggio IN MEZZO (`Real Madrid 2 - 1 Barcelona`) il `_SCO
 (`\s+\d+\s*[-–:]\s*\d+(?:\s.*)?$`) divorava ` 2 - 1 Barcelona` lasciando solo `Real Madrid`:
 nessun separatore → `_teams_from` ritornava `None` → squadre PERSE (fail-closed, ma è un formato
 comune). Fix: aggiunto `_teams_from_score` (con `_SCORE_SEP`) come ULTIMO fallback nella sola
-branch 🆚 (dopo `v/vs` e ` - `): il punteggio fa da separatore, home prima / away dopo. ENTRAMBI i
-lati devono iniziare con una lettera (`_STARTS_ALPHA`), così un tempo/minuto (`46m`) su uno
-qualsiasi dei due lati non diventa una squadra fasulla (`Home 2 - 1 46m` e `46m 2 - 1 Away` →
-nessuna squadra, fail-closed; il guard `_HAS_ALPHA` sul lato home era troppo debole — `46m`
-contiene la lettera `m` — Sourcery). La coda quota/@/probabilità sulla stessa riga viene ripulita
-prima dello split. Vale SOLO per le righe 🆚
+branch 🆚 (dopo `v/vs` e ` - `): il punteggio fa da separatore, home prima / away dopo. Ogni lato
+passa per `_clean_team_side`, che rimuove la coda di metadati di tempo/stato col marcatore esplicito
+(`46m`/`46'`/`90+2`/`HT`/`FT`/`LIVE`/`PRE`) e valida il resto come squadra reale (#184 M10, Codex
+P1/P2): così `Real Madrid 2 - 1 Barcelona 46m` → `Real Madrid v Barcelona`, mentre `… 2 - 1 HT/FT/
+LIVE` o `46m 2 - 1 …` falliscono chiusi (nessuna squadra). Una cifra NUDA non è metadato: i club a
+cifra iniziale (`1. FC Köln`, `1860 Munich`) e i suffissi numerici (`Schalke 04`) sono preservati.
+La coda quota/@/probabilità sulla stessa riga viene ripulita prima dello split. Vale SOLO per le
+righe 🆚
 (l'emoji conferma la coppia di squadre); in testo libero uno score in mezzo resta ambiguo e non
 produce squadre (`Italy 2 - 1 Serie A` → vuoto). Nessun cambio su CSV/quota/score; la rimozione
 del punteggio a fine riga (`Home v Away 6 - 0 46m`) resta invariata.

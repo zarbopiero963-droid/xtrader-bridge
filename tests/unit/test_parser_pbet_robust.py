@@ -305,11 +305,40 @@ def test_vs_line_punteggio_senza_away_non_inventa_squadra():
 
 def test_vs_line_punteggio_senza_home_non_inventa_squadra():
     """#184 M10 (Sourcery): "🆚 46m 2 - 1 Real Madrid" (minuto + punteggio, NESSUNA squadra home)
-    non deve produrre squadre fasulle. Esercita il guard simmetrico sul lato HOME: "46m" contiene
-    una lettera (`m`) ma NON inizia con una lettera, quindi fail-closed.
-
-    Fail-first: col guard `_HAS_ALPHA` sul lato home, "46m" passava → "46m v Real Madrid"."""
+    non deve produrre squadre fasulle: il lato home è solo un minuto → fail-closed."""
     assert parse_message("P.Bet. 1\n🆚 46m 2 - 1 Real Madrid")["teams"] == ""
+
+
+def test_vs_line_coda_tempo_dopo_away_viene_rimossa():
+    """#184 M10 (Codex P1): "🆚 Real Madrid 2 - 1 Barcelona 46m" — la coda di tempo dopo la squadra
+    away va RIMOSSA, non inclusa nell'EventName.
+
+    Fail-first: sul codice precedente l'away era "Barcelona 46m" → "Real Madrid v Barcelona 46m"."""
+    assert parse_message("P.Bet. 1\n🆚 Real Madrid 2 - 1 Barcelona 46m")["teams"] == \
+        "Real Madrid v Barcelona"
+    # più token di metadati in coda
+    assert parse_message("P.Bet. 1\n🆚 Real Madrid 2 - 1 Barcelona 90+2 FT")["teams"] == \
+        "Real Madrid v Barcelona"
+
+
+def test_vs_line_token_di_stato_non_diventa_squadra_away():
+    """#184 M10 (Codex P1): uno stato alfabetico (HT/FT/LIVE/PRE) dopo il punteggio NON è una
+    squadra: la riga deve fallire chiusa, non emettere "Real Madrid v HT".
+
+    Fail-first: sul codice precedente l'away "HT"/"FT"/"LIVE" passava il guard `_STARTS_ALPHA`."""
+    for tok in ("HT", "FT", "LIVE", "PRE"):
+        assert parse_message(f"P.Bet. 1\n🆚 Real Madrid 2 - 1 {tok}")["teams"] == ""
+
+
+def test_vs_line_squadra_away_a_cifra_iniziale_ammessa():
+    """#184 M10 (Codex P2): un club con cifra iniziale ("1. FC Köln", "1860 Munich") è una squadra
+    reale, non un metadato: deve essere ammesso. Una cifra NUDA non è tempo/stato.
+
+    Fail-first: sul codice precedente `_STARTS_ALPHA` rifiutava ogni lato a cifra iniziale → vuoto."""
+    assert parse_message("P.Bet. 1\n🆚 Bayern 2 - 1 1. FC Köln")["teams"] == "Bayern v 1. FC Köln"
+    assert parse_message("P.Bet. 1\n🆚 Augsburg 2 - 1 1860 Munich")["teams"] == "Augsburg v 1860 Munich"
+    # una cifra nuda a fine nome (Schalke 04) NON è un minuto: non va rimossa.
+    assert parse_message("P.Bet. 1\n🆚 Roma 2 - 1 Schalke 04")["teams"] == "Roma v Schalke 04"
 
 
 def test_vs_line_separatore_v_vince_sul_punteggio_in_coda():
