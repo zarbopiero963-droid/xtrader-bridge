@@ -96,18 +96,25 @@ def _append_line(path: str, line: str) -> None:
     """Appende UNA riga al file (creando la cartella se serve) con `flush`+`fsync`.
 
     Se l'ultima riga esistente è TRONCATA (nessun `\\n` finale, es. crash a metà
-    append), inserisce prima un `\\n` separatore: così la riga troncata resta isolata
-    sulla sua riga (verrà saltata da `read_events`) e il NUOVO evento finisce su una
-    riga pulita — senza questo, l'append si concatenerebbe alla riga parziale e anche
-    il nuovo evento andrebbe perso (review Codex P1)."""
+    append), antepone un `\\n` separatore: così la riga troncata resta isolata sulla
+    sua riga (verrà saltata da `read_events`) e il NUOVO evento finisce su una riga
+    pulita — senza questo, l'append si concatenerebbe alla riga parziale e anche il
+    nuovo evento andrebbe perso (review Codex P1).
+
+    Separatore + riga + `\\n` vengono scritti in UN SOLO `f.write` (issue #184 M6): due
+    `write` separati prima del `flush`/`fsync` potevano lasciare, su un crash a metà, solo il
+    separatore senza l'evento (evento perso). La singola write elimina QUESTA finestra a
+    livello di PROCESSO — o tutta la riga o niente, mai "separatore sì, evento no". NON è
+    atomicità a livello di disco: un crash durante il trasferimento kernel→disco può comunque
+    lasciare una riga finale parziale (dipende da filesystem/hardware), ma quella coda troncata
+    è già gestita — `read_events` la salta e il prossimo append vi antepone un separatore
+    (precisazione review Sourcery)."""
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
-    needs_separator = _ends_without_newline(path)
+    prefix = "\n" if _ends_without_newline(path) else ""
     with open(path, "a", encoding="utf-8") as f:
-        if needs_separator:
-            f.write("\n")
-        f.write(line + "\n")
+        f.write(prefix + line + "\n")        # M6: separatore+riga+newline in una sola write
         f.flush()
         os.fsync(f.fileno())
 
