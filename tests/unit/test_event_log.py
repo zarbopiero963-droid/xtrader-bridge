@@ -118,10 +118,14 @@ def test_register_secret_maschera_token_in_forma_non_canonica():
     assert short not in out and "[REDACTED_TOKEN]" in out
     assert out.startswith("❌ Errore:")
 
-    # URL-encoded: i ':' diventano %3A → la regex non matcha, ma il literal registrato sì.
-    enc = "123456789%3AAAtoken_urlencoded_value"
-    el.register_secret(enc)
-    assert enc not in el.redact_secrets(f"GET /set?token={enc}&x=1")
+    # URL-encoded: registrando il token GREZZO, anche la sua forma encoded (`:`→`%3A`) viene
+    # mascherata, perché `redact_secrets` deriva le forme con `_secret_forms` (Codex #184 M7).
+    from urllib.parse import quote
+    raw = "123456789:AAtoken_urlencoded_value"   # canonico; ':' → '%3A' nell'URL
+    enc = quote(raw, safe="")
+    assert enc != raw                                            # la codifica cambia davvero
+    el.register_secret(raw)                                      # si registra SOLO il grezzo
+    assert enc not in el.redact_secrets(f"GET /set?token={enc}&x=1")   # encoded mascherato lo stesso
 
 
 def test_register_secret_rifiuta_frammenti_banali_e_vuoti():
@@ -144,6 +148,25 @@ def test_unregister_e_clear_secrets():
     el.register_secret(tok)
     el.clear_secrets()
     assert el.redact_secrets(f"a {tok} b") == f"a {tok} b"
+
+
+def test_register_grezzo_maschera_la_forma_url_encoded():
+    """#184 M7 (Codex P1): `app` registra SOLO il token grezzo. Se nei log compare la sua forma
+    URL-encoded (`:`→`%3A`, come in un path `…/bot<token>/…` dentro un'eccezione HTTP), né la
+    regex né il match grezzo la riconoscono. `redact_secrets` deve mascherarla comunque derivando
+    le forme dal literal registrato.
+
+    Fail-first: senza la derivazione delle forme, registrare il solo grezzo lasciava la forma
+    encoded in chiaro."""
+    from urllib.parse import quote
+    raw = "987654321:LiveBotTokenSecretValue_xyz"
+    enc = quote(raw, safe="")
+    assert enc != raw
+    # baseline: senza registrare nulla, la forma encoded NON è canonica → la regex non la prende.
+    assert enc in el.redact_secrets(f"HTTP GET https://api/bot{enc}/getMe")
+    el.register_secret(raw)                       # come fa app._register_secret_token: solo grezzo
+    out = el.redact_secrets(f"HTTP GET https://api/bot{enc}/getMe failed")
+    assert enc not in out and "[REDACTED_TOKEN]" in out
 
 
 def test_redact_secrets_literal_piu_lungo_prima():

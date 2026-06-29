@@ -155,6 +155,12 @@ Refinement (Sourcery): `_register_secret_token` è il punto UNICO di load/save e
 token precedente quando cambia o viene rimosso (traccia `self._registered_token`), così il
 registro dei segreti non cresce all'infinito e un vecchio token non resta mascherato per sempre.
 
+Refinement (Codex P1): `app` registra solo il token GREZZO; `redact_secrets` ora deriva le forme
+del literal (`_secret_forms`: grezzo + URL-encoded, `:`→`%3A`), così anche la forma encoded che
+finisce in un URL/HTTP dentro un'eccezione viene mascherata — senza dover registrare a mano la
+forma encoded. Limite residuo: forme non previste (spezzata su righe, doppia codifica) possono
+ancora sfuggire.
+
 ## Decisioni del proprietario (NON implementare senza conferma)
 
 - **low-tracker-nonwrite**: il tracker dedupe trattiene l'hash anche sui path **non-WRITE**

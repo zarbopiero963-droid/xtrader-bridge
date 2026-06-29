@@ -427,6 +427,10 @@ def test_register_secret_token_maschera_il_token_nei_log(make_app, app_mod):
         assert token in event_log.redact_secrets(f"x {token} y")   # baseline: non mascherato
         app_mod.App._register_secret_token(a, {"bot_token": token})
         assert token not in event_log.redact_secrets(f"❌ {token} fine")   # ora mascherato
+        # Codex #184 M7: registrando il solo GREZZO, anche la forma URL-encoded è mascherata.
+        from urllib.parse import quote
+        enc = quote(token, safe="")
+        assert enc != token and enc not in event_log.redact_secrets(f"GET /bot{enc}/x")
         # cfg senza token o non-dict → no-op senza crash
         app_mod.App._register_secret_token(a, {})
         app_mod.App._register_secret_token(a, None)

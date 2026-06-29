@@ -19,6 +19,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from urllib.parse import quote
 
 from . import config_store
 
@@ -78,6 +79,22 @@ def clear_secrets() -> None:
         _secret_literals.clear()
 
 
+def _secret_forms(secret: str):
+    """Forme derivate di un segreto da mascherare, OLTRE al literal grezzo: la forma
+    **URL-encoded** (`:`→`%3A`, ecc.), realistica quando il token finisce in un URL/HTTP (es. il
+    path `…/bot<token>/…` o una query) dentro il testo di un'eccezione o nella diagnostica.
+
+    Senza questa derivazione, registrare il token GREZZO (come fa `app._register_secret_token`)
+    non maschererebbe la sua forma encoded, che né la regex né il match grezzo riconoscono
+    (Codex #184 M7). Coprire OGNI possibile re-encoding/normalizzazione è impossibile: si coprono
+    le forme realistiche; resta il limite residuo documentato in `redact_secrets`."""
+    forms = {secret}
+    enc = quote(secret, safe="")
+    if enc != secret:
+        forms.add(enc)
+    return forms
+
+
 def redact_secrets(text: str) -> str:
     """Maschera i segreti nei log (GUI e file): un token incorporato per sbaglio (es. nel testo
     di un'eccezione) non viene mai scritto in chiaro.
@@ -86,17 +103,23 @@ def redact_secrets(text: str) -> str:
     1. **regex** sullo shape CANONICO del bot token Telegram (`<id>:<20+ char>`) — euristica che
        intercetta anche token NON registrati (es. di un'altra fonte);
     2. **per-literal** dei segreti registrati con `register_secret` (es. il token VIVO da
-       config), mascherati per esatta corrispondenza — così sono coperte anche le forme
-       NON canoniche che la regex non riconosce (porzione corta, URL-encoded, spezzata).
+       config), mascherati per esatta corrispondenza E nelle loro forme derivate
+       (`_secret_forms`: grezzo + URL-encoded) — così è coperta anche la forma encoded che la
+       regex non riconosce, registrando solo il token GREZZO (Codex #184 M7).
 
-    Limite residuo onesto: un segreto MAI registrato e in forma non-canonica può ancora
-    sfuggire; per questo il token di config va registrato (lo fa `app` a load/save)."""
+    Limite residuo onesto: un segreto MAI registrato, o in una forma derivata non prevista
+    (es. spezzato su righe, doppia codifica), può ancora sfuggire; per questo il token di config
+    va registrato (lo fa `app` a load/save)."""
     s = _TELEGRAM_TOKEN_RE.sub(_REDACTED, str(text or ""))
-    # Sostituzione dei literal più LUNGHI prima: evita che un segreto contenuto in un altro
-    # venga mascherato a metà lasciando un frammento dell'altro in chiaro.
+    # Espande ogni literal registrato nelle sue forme derivate (grezzo + URL-encoded), poi
+    # sostituisce le più LUNGHE prima: evita che un segreto contenuto in un altro venga
+    # mascherato a metà lasciando un frammento dell'altro in chiaro.
     with _secret_lock:
-        literals = sorted(_secret_literals, key=len, reverse=True)
+        literals = list(_secret_literals)
+    forms = set()
     for sec in literals:
+        forms.update(_secret_forms(sec))
+    for sec in sorted(forms, key=len, reverse=True):
         s = s.replace(sec, _REDACTED)
     return s
 
