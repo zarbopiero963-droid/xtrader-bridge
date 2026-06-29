@@ -209,3 +209,40 @@ def test_expire_non_svuota_se_restano_righe_non_logga_clear(make_app, app_mod, m
     app_mod.App._expire_tick(a, path)
 
     assert "CSV_CLEARED" not in _types(jpath)
+
+
+# ── _manual_clear ────────────────────────────────────────────────────────────
+
+def test_manual_clear_journals_csv_cleared(make_app, app_mod, tmp_path):
+    # Codex P2 (#233): «Svuota CSV ora» riporta il CSV a solo header e rimuove le righe
+    # attive → deve loggare CSV_CLEARED, altrimenti il diario mostra un CSV_WRITTEN senza il
+    # clear manuale corrispondente (finché non arriva uno STOP/scadenza più tardi).
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = _queue_with(_row("Inter v Milan"))
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q, running=True)
+    jpath = _make(a, tmp_path)
+
+    app_mod.App._manual_clear(a)
+
+    assert "CSV_CLEARED" in _types(jpath)
+    assert event_journal.read_events(jpath)[-1]["data"]["reason"] == "manual"
+
+
+def test_manual_clear_write_failure_non_logga_clear(make_app, app_mod, monkeypatch, tmp_path):
+    # Guard: se lo svuotamento fallisce (I/O), il CSV NON è stato ripulito → niente
+    # CSV_CLEARED (il diario non deve affermare un clear mai avvenuto).
+    path = str(tmp_path / "segnali.csv")
+    q = _queue_with(_row("Inter v Milan"))
+    a = make_app(csv_path=path, queue=q, running=True)
+    jpath = _make(a, tmp_path)
+
+    def _boom(_p):
+        raise OSError("CSV lockato da XTrader (simulato)")
+
+    monkeypatch.setattr(app_mod, "init_csv", _boom)
+
+    app_mod.App._manual_clear(a)
+
+    assert "CSV_CLEARED" not in _types(jpath)

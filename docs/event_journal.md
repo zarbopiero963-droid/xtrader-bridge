@@ -53,6 +53,7 @@ journal non blocca mai il trading) tramite l'helper privato `App._journal(...)`:
 | `_process_confirmation` | `XTRADER_CONFIRMED` / `XTRADER_REJECTED` |
 | `_clear_stale_csv` | `CRASH_RECOVERY_CSV_CLEARED` (all'avvio) / `CSV_CLEARED` (allo stop) |
 | `_expire_tick` | `CSV_CLEARED` (`reason="expiry"`) quando l'ultima riga scade e il CSV torna a solo header |
+| `_manual_clear` | `CSV_CLEARED` (`reason="manual"`) sullo svuotamento manuale riuscito («Svuota CSV ora») |
 | `_run_bot` | `RECONNECT` a ogni tentativo di riconnessione |
 
 Garanzie del wiring: **mai bloccante** (path assente → no-op; qualunque eccezione di

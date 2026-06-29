@@ -2165,6 +2165,11 @@ class App(ctk.CTk):
             return
         self._note_csv(path, 0)
         self._log("🗑️  CSV svuotato manualmente")
+        # Event journal (#230): anche lo svuotamento MANUALE riporta il CSV a solo header →
+        # va registrato, altrimenti il diario avrebbe un CSV_WRITTEN senza il clear
+        # corrispondente (Codex P2 #233). Solo sul percorso riuscito (write_error già
+        # ritornato sopra). Best-effort, fuori dal lock.
+        self._journal("CSV_CLEARED", reason="manual")
 
     def _open_tools(self, initial=None):
         """Apre la finestra hub "🧰 Strumenti" a schede (consolidazione GUI, roadmap).
