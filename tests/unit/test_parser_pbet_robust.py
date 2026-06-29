@@ -284,10 +284,32 @@ def test_vs_line_punteggio_in_mezzo_recupera_le_squadre():
         "Real Madrid v Barcelona"
 
 
+def test_vs_line_punteggio_in_mezzo_con_coda_quota():
+    """#184 M10 (Sourcery): col punteggio in mezzo E una coda quota/@/probabilità sulla stessa
+    riga, `_teams_from_score` ripulisce la coda prima di usare il punteggio come separatore."""
+    assert parse_message("P.Bet. 1\n🆚 Real Madrid 2 - 1 Barcelona @1.85")["teams"] == \
+        "Real Madrid v Barcelona"
+    assert parse_message("P.Bet. 1\n🆚 Real Madrid 2:1 Barcelona @ 1,85")["teams"] == \
+        "Real Madrid v Barcelona"
+    assert parse_message("P.Bet. 1\n🆚 Real Madrid 2-1 Barcelona quota 1.85")["teams"] == \
+        "Real Madrid v Barcelona"
+    assert parse_message("P.Bet. 1\n🆚 Real Madrid 2 - 1 Barcelona Probabilità 72%")["teams"] == \
+        "Real Madrid v Barcelona"
+
+
 def test_vs_line_punteggio_senza_away_non_inventa_squadra():
     """#184 M10: "🆚 Real Madrid 2 - 1 46m" (punteggio + minuto, NESSUNA squadra away) non deve
     produrre squadre fasulle: il lato dopo il punteggio inizia con una cifra (tempo) → fail-closed."""
     assert parse_message("P.Bet. 1\n🆚 Real Madrid 2 - 1 46m")["teams"] == ""
+
+
+def test_vs_line_punteggio_senza_home_non_inventa_squadra():
+    """#184 M10 (Sourcery): "🆚 46m 2 - 1 Real Madrid" (minuto + punteggio, NESSUNA squadra home)
+    non deve produrre squadre fasulle. Esercita il guard simmetrico sul lato HOME: "46m" contiene
+    una lettera (`m`) ma NON inizia con una lettera, quindi fail-closed.
+
+    Fail-first: col guard `_HAS_ALPHA` sul lato home, "46m" passava → "46m v Real Madrid"."""
+    assert parse_message("P.Bet. 1\n🆚 46m 2 - 1 Real Madrid")["teams"] == ""
 
 
 def test_vs_line_separatore_v_vince_sul_punteggio_in_coda():
@@ -298,8 +320,11 @@ def test_vs_line_separatore_v_vince_sul_punteggio_in_coda():
 
 def test_testo_libero_punteggio_in_mezzo_non_diventa_squadre():
     """#184 M10: il recupero score-come-separatore vale SOLO per le righe 🆚. In testo libero uno
-    score in mezzo è troppo ambiguo e NON deve produrre squadre ("Italy 2 - 1 Serie A")."""
+    score in mezzo è troppo ambiguo e NON deve produrre squadre ("Italy 2 - 1 Serie A").
+    Coperti anche esempi "betting-like" o descrittivi (Sourcery)."""
     assert parse_message("P.Bet. GG\nItaly 2 - 1 Serie A")["teams"] == ""
+    assert parse_message("P.Bet. GG\nItaly 2 - 1 Serie A @1.85")["teams"] == ""
+    assert parse_message("P.Bet. GG\nItaly 2:1 Friendly match")["teams"] == ""
 
 
 def test_competizione_non_scambiata_per_squadre():

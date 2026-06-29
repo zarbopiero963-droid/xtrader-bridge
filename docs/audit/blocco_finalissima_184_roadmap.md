@@ -144,9 +144,12 @@ Su una riga 🆚 col punteggio IN MEZZO (`Real Madrid 2 - 1 Barcelona`) il `_SCO
 (`\s+\d+\s*[-–:]\s*\d+(?:\s.*)?$`) divorava ` 2 - 1 Barcelona` lasciando solo `Real Madrid`:
 nessun separatore → `_teams_from` ritornava `None` → squadre PERSE (fail-closed, ma è un formato
 comune). Fix: aggiunto `_teams_from_score` (con `_SCORE_SEP`) come ULTIMO fallback nella sola
-branch 🆚 (dopo `v/vs` e ` - `): il punteggio fa da separatore, home prima / away dopo. Il lato
-away deve iniziare con una lettera (`_STARTS_ALPHA`), così un tempo/minuto (`46m`) non diventa una
-squadra fasulla (`Home 2 - 1 46m` → nessuna squadra, fail-closed). Vale SOLO per le righe 🆚
+branch 🆚 (dopo `v/vs` e ` - `): il punteggio fa da separatore, home prima / away dopo. ENTRAMBI i
+lati devono iniziare con una lettera (`_STARTS_ALPHA`), così un tempo/minuto (`46m`) su uno
+qualsiasi dei due lati non diventa una squadra fasulla (`Home 2 - 1 46m` e `46m 2 - 1 Away` →
+nessuna squadra, fail-closed; il guard `_HAS_ALPHA` sul lato home era troppo debole — `46m`
+contiene la lettera `m` — Sourcery). La coda quota/@/probabilità sulla stessa riga viene ripulita
+prima dello split. Vale SOLO per le righe 🆚
 (l'emoji conferma la coppia di squadre); in testo libero uno score in mezzo resta ambiguo e non
 produce squadre (`Italy 2 - 1 Serie A` → vuoto). Nessun cambio su CSV/quota/score; la rimozione
 del punteggio a fine riga (`Home v Away 6 - 0 46m`) resta invariata.
