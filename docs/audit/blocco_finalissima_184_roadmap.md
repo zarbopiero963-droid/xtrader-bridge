@@ -31,6 +31,7 @@ branch dedicato off `main` aggiornato, **test hard di resilienza** (fail-first),
 | M10 | m10-score-tail | `parser.py` | merged (#206) |
 | M11 | m11-tls-context | `betfair/catalogue_client.py` | merged (#207) |
 | M12 | m12-viewer-debounce | `betfair/dictionary_viewer_gui.py` | in PR |
+| LOW | low-tracker-nonwrite | `write_path.py` (rollback guardrail su non-WRITE) | in PR |
 | LOW | low-timer-lock | `app.py` (`_schedule_expiry` sotto lock) | da fare |
 | LOW | low-bool-count | `safety_guard.py` (`isinstance` bool) | da fare |
 | LOW | low-parser-emoji | `parser.py:215` (strip trailing emoji) | da fare |
@@ -137,6 +138,33 @@ corruttivo) e il docstring "atomicità della singola riga" sovrastimava la garan
 (un crash kernel→disco può lasciare una coda parziale, dipende da fs/hardware), ma quella è già
 gestita: `read_events` salta la riga troncata e il prossimo append antepone un separatore.
 Output invariato; cambia solo il numero di write (1 invece di 2 nel caso separatore).
+
+## low-tracker-nonwrite — i guardrail riflettono SOLO i WRITE reali
+
+In `write_path.commit_signal`, `live_guard.evaluate` consumava stato dei guardrail anche per esiti
+che NON scrivono: un segnale NEW veniva memorizzato nel `SignalTracker` (dedupe), e `DailyLimiter.
+allow()` **incrementa** il contatore quando ammette. Quindi: `DRY_RUN` registrava l'hash **e**
+consumava il tetto giornaliero reale (N segnali simulati con tetto N esaurivano la quota e poi
+bloccavano i segnali reali); `DAILY_LIMITED` registrava l'hash che restava a sopprimere come
+duplicato un re-send anche dopo il reset del giorno (bet persa). Fix: su `DAILY_LIMITED` e `DRY_RUN`
+si fa **rollback** di tracker (+daily) allo snapshot pre-`evaluate`, lo stesso meccanismo già usato
+per `blocked_by_cap`/write-failure. `DUPLICATE`/`RATE_LIMITED` non vengono toccati (`register` non
+aveva aggiunto nulla). Invariante risultante: *lo stato dei guardrail (dedupe + tetto) riflette SOLO
+i WRITE reali*. **Niente doppia scommessa**: un duplicato reale nasce comunque dall'hash di un WRITE
+ed è ancora soppresso; un segnale mai scritto non blocca più una bet futura.
+
+Refinement (Codex P2): il rollback è **per-esito**, non un `restore_state` cieco del daily.
+`DAILY_LIMITED` → si annulla SOLO l'hash del tracker; il daily NON si tocca, perché `allow()` non
+aveva consumato slot (solo, eventualmente, normalizzato il giorno corrente). Un `restore_state`
+pieno avrebbe riportato un **giorno corrotto** (state file malformato → `_UNKNOWN_DAY`), che non si
+resetta mai → bridge bloccato per sempre. `DRY_RUN` → si annulla l'hash e si **restituisce** la slot
+giornaliera con il nuovo `DailyLimiter.release()` (decremento con floor 0) che MANTIENE il giorno
+normalizzato, invece di ripristinare lo snapshot.
+
+Test (fail-first): DRY_RUN non consuma il tetto giornaliero; DRY_RUN non avvelena il dedupe reale;
+DAILY_LIMITED ritentabile dopo il reset del tetto; DAILY_LIMITED/DRY_RUN con giorno corrotto lo
+**normalizzano** (non si bloccano); `release()` restituisce una slot mantenendo il giorno (floor 0);
++ guardia anti-regressione che un WRITE reale resta deduplicato (no doppia scommessa).
 
 ## M12 — viewer dizionario: debounce della ricerca (no query+rebuild per keystroke)
 
@@ -252,9 +280,13 @@ ancora sfuggire.
 
 ## Decisioni del proprietario (NON implementare senza conferma)
 
-- **low-tracker-nonwrite**: il tracker dedupe trattiene l'hash anche sui path **non-WRITE**
-  (`DAILY_LIMITED`/`DRY_RUN`) senza rollback → un re-send identico nella finestra è soppresso
-  (missed bet, fail-safe). **Intenzionale o committare il tracker solo sul path WRITE?**
+- **low-tracker-nonwrite** — **DECISO** (proprietario ha delegato la scelta): committare i
+  guardrail **solo sul path WRITE**. Su `DAILY_LIMITED` e `DRY_RUN` si fa rollback di tracker+daily.
+  Motivo decisivo: `DailyLimiter.allow()` **incrementa** il contatore, quindi in DRY_RUN la
+  simulazione consumava il tetto giornaliero REALE (oltre ad avvelenare il dedupe); e un
+  `DAILY_LIMITED` trattenuto restava soppresso come duplicato anche dopo il reset del giorno. La
+  nuova invariante — *stato guardrail ⟺ WRITE reale* — fixa entrambi SENZA rischio di doppia
+  scommessa (un duplicato reale nasce comunque da un WRITE). Vedi sezione «low-tracker-nonwrite».
 - Ogni altro LOW marcato «decidere» nel corpo dell'issue.
 
 ## Regole non negoziabili

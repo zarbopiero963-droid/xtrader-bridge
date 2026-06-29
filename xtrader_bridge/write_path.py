@@ -10,7 +10,14 @@ INVARIANTI (non negoziabili):
   interno, e la sequenza «valuta + scrivi» deve restare atomica (audit A2), altrimenti
   due callback interlacciati potrebbero passare entrambi il dedup → doppia scommessa.
 - **Solo WRITE scrive.** Ogni altro esito `live_guard` (DUPLICATE/RATE_LIMITED/
-  DAILY_LIMITED/DRY_RUN) sopprime la scrittura e non tocca la coda.
+  DAILY_LIMITED/DRY_RUN) sopprime la scrittura e non tocca la coda. Inoltre lo stato dei
+  guardrail riflette SOLO i WRITE reali: il consumo fatto da `evaluate` su un esito che NON
+  scrive viene disfatto. DAILY_LIMITED → si annulla solo l'hash del tracker (il tetto non aveva
+  consumato slot, solo normalizzato il giorno: si preserva, altrimenti un giorno corrotto
+  bloccherebbe per sempre). DRY_RUN → si annulla l'hash e si **restituisce** la slot giornaliera
+  con `DailyLimiter.release()` (mantenendo il giorno normalizzato). Così la simulazione non
+  consuma tetto/dedupe reali e un segnale soppresso resta ritentabile, senza rischio di doppia
+  scommessa (#184 low-tracker-nonwrite).
 - **Rollback fail-safe.** Se la scrittura CSV fallisce, coda E guardrail tornano allo
   stato precedente (allineati al CSV ancora su disco): il segnale resta RITENTABILE e in
   OVERWRITE_LAST il precedente non va perso. Stesso rollback dei guardrail quando il
@@ -92,6 +99,21 @@ def commit_signal(tracker, daily, queue, cfg, text, row, path, now, write_rows):
                 tracker.restore_state(tracker_snap)
                 if daily is not None and daily_snap is not None:
                     daily.restore_state(daily_snap)
+    elif tracker is not None and decision == live_guard.DAILY_LIMITED:
+        # `evaluate` aveva registrato l'hash nel tracker (segnale NEW) ma `daily.allow()` ha
+        # RIFIUTATO **senza consumare** una slot — ha solo (eventualmente) normalizzato il giorno
+        # corrente. Si annulla SOLO l'hash del tracker (segnale ritentabile dopo il reset), NON si
+        # tocca il daily: ripristinare il suo snapshot riporterebbe un giorno corrotto (state file
+        # malformato) e lascerebbe il bridge bloccato per sempre (#184 low-tracker-nonwrite, Codex).
+        tracker.restore_state(tracker_snap)
+    elif tracker is not None and decision == live_guard.DRY_RUN:
+        # Simulazione: `evaluate` ha registrato l'hash E consumato una slot giornaliera REALE per un
+        # segnale MAI scritto. Si annulla l'hash e si RESTITUISCE la slot con `release()` (decremento
+        # che MANTIENE il giorno normalizzato): così la simulazione non intacca tetto/dedupe reali
+        # senza scartare la normalizzazione del giorno. DUPLICATE/RATE_LIMITED non aggiungono nulla.
+        tracker.restore_state(tracker_snap)
+        if daily is not None:
+            daily.release()
 
     return CommitResult(decision=decision, blocked_by_cap=blocked_by_cap,
                         rows=rows, write_error=write_error)
