@@ -106,6 +106,64 @@ def test_riga_finale_troncata_viene_saltata(tmp_path):
     assert len(events) == 1 and events[0]["id"] == "1"        # la riga troncata è saltata, no crash
 
 
+def _counting_open(monkeypatch):
+    """Wrappa `event_journal.open` per registrare i `write` sul file (per #184 M6)."""
+    writes = []
+    real_open = open
+
+    class _CountingFile:
+        def __init__(self, f):
+            self._f = f
+
+        def write(self, s):
+            writes.append(s)
+            return self._f.write(s)
+
+        def __getattr__(self, name):
+            return getattr(self._f, name)
+
+        def __enter__(self):
+            self._f.__enter__()
+            return self
+
+        def __exit__(self, *a):
+            return self._f.__exit__(*a)
+
+    monkeypatch.setattr(ej, "open", lambda *a, **k: _CountingFile(real_open(*a, **k)),
+                        raising=False)
+    return writes
+
+
+def test_append_dopo_troncamento_una_sola_write(tmp_path, monkeypatch):
+    """#184 M6: con separatore necessario (ultima riga troncata) il separatore + la riga +
+    `\\n` devono essere scritti in UN SOLO `f.write`, non in due write separati. Due write
+    prima del flush/fsync potevano lasciare, su un crash a metà, solo il separatore senza
+    l'evento (perdita) e l'"atomicità della singola riga" era sovrastimata.
+
+    Fail-first: il vecchio codice faceva `f.write("\\n")` e poi `f.write(line+"\\n")` → 2 write."""
+    p = tmp_path / "journal.jsonl"
+    p.write_text('{"id": "1", "ts": 1.0, "type": "CSV_WR', encoding="utf-8")   # troncata, no \n
+    writes = _counting_open(monkeypatch)
+
+    ej._append_line(str(p), '{"id":"2"}')
+
+    assert writes == ['\n{"id":"2"}\n']      # separatore+riga+newline in UNA write (non due)
+    # e il risultato resta corretto: riga troncata saltata, nuovo evento leggibile
+    assert ej.read_events(str(p)) == [{"id": "2"}]
+
+
+def test_append_senza_troncamento_una_sola_write(tmp_path, monkeypatch):
+    """#184 M6 (controprova): senza separatore (file che termina con `\\n` o vuoto) la riga è
+    comunque una sola write `line+\\n` — comportamento invariato."""
+    p = tmp_path / "journal.jsonl"
+    p.write_text('{"id": "1"}\n', encoding="utf-8")        # termina con newline → niente separatore
+    writes = _counting_open(monkeypatch)
+
+    ej._append_line(str(p), '{"id":"2"}')
+
+    assert writes == ['{"id":"2"}\n']                       # nessun separatore, una sola write
+
+
 def test_coda_utf8_troncata_non_rompe_il_replay(tmp_path):
     # review Codex: un crash a metà di un carattere non-ASCII lascia una coda di byte
     # UTF-8 INVALIDA. read_events deve comunque restituire gli eventi validi precedenti

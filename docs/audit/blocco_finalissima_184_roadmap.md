@@ -23,8 +23,8 @@ branch dedicato off `main` aggiornato, **test hard di resilienza** (fail-first),
 | M2 | m2-chat-strip | `signal_router.py` | merged (#197) |
 | M3 | m3-partial-save | `config_store.py` | merged (#198) |
 | M4 | m4-day-format | `safety_guard.py` | merged (#200) |
-| M5 | m5-retry-errno | `csv_writer.py` | in PR |
-| M6 | m6-journal-atomic | `event_journal.py` | da fare |
+| M5 | m5-retry-errno | `csv_writer.py` | merged (#201) |
+| M6 | m6-journal-atomic | `event_journal.py` | in PR |
 | M7 | m7-token-redact | `event_log.py` | da fare |
 | M8 | m8-privacy-prefix | `log_privacy.py` | da fare |
 | M9 | m9-market-types-get | `dizionario.py` | da fare |
@@ -125,6 +125,16 @@ ritenta solo se l'`errno` non è nel denylist permanente
 (`ENOENT`/`EISDIR`/`ENOTDIR`/`EXDEV`/`EROFS`/`EACCES`/`EPERM`/`ENAMETOOLONG`), così un errore
 SENZA `errno` (lock simulato/edge) resta ritentabile mentre i permanenti escalano. Il budget
 ~1s per il vero lock di lettura di XTrader (audit C3) è invariato.
+
+## M6 — `event_journal._append_line`: separatore + riga in una sola write
+
+Su troncamento rilevato (ultima riga senza `\n`, es. crash a metà append) `_append_line`
+scriveva il separatore `"\n"` e la riga in DUE `f.write` separati prima di `flush`/`fsync`:
+un crash nel mezzo poteva lasciare solo il separatore senza l'evento (evento perso, non
+corruttivo) e il docstring "atomicità della singola riga" sovrastimava la garanzia. Fix:
+`prefix + line + "\n"` in UN SOLO `f.write`, così separatore+riga+newline raggiungono il
+buffer (e poi il disco col fsync) come unità indivisibile. Output invariato; cambia solo il
+numero di write (1 invece di 2 nel caso separatore).
 
 ## Decisioni del proprietario (NON implementare senza conferma)
 
