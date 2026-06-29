@@ -2109,6 +2109,11 @@ class App(ctk.CTk):
             self.after(0, lambda n=len(rows): self._update_active_indicator(n))   # #136 p5
             self.after(0, lambda n=len(expired): self._log(
                 f"🗑️  {n} segnale/i scaduto/i rimosso/i dal CSV"))
+            if empty:
+                # L'ULTIMA riga attiva è scaduta → il CSV è tornato a solo header: il diario
+                # deve registrare il clear, altrimenti resterebbe un CSV_WRITTEN senza il
+                # corrispondente CSV_CLEARED (Codex P2 #233). Best-effort, fuori dal lock.
+                self._journal("CSV_CLEARED", reason="expiry", expired=len(expired))
         if not empty:
             self._schedule_expiry(path)
 

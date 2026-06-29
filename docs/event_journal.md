@@ -27,6 +27,10 @@ finisce silenziosamente nel ledger).
 - `read_events(path) -> list[dict]` rilegge il ledger in ordine; **tollerante**: file
   assente → `[]`; una riga finale **troncata** da un crash a metà append viene **saltata**.
 - `clear(path) -> bool` svuota il ledger in modo **atomico** (manutenzione/retention).
+- `prune_events(path, keep) -> int` mantiene solo gli **ultimi `keep`** eventi (riscrittura
+  atomica tmp+`os.replace`), ritorna quanti ne ha rimossi. **Best-effort, non solleva mai**
+  (errori di I/O o evento storico non codificabile → `0`); `keep<=0` è un **no-op** (per
+  svuotare usa `clear`). Chiamato allo startup (`app.py`) per limitare la crescita del file.
 
 ## Invarianti (testati in `tests/unit/test_event_journal.py`)
 - **Append-only ordinato**, id univoci, `ts` preservato.
@@ -37,10 +41,21 @@ finisce silenziosamente nel ledger).
 - **Crash a metà append**: la riga troncata non rompe il replay.
 - **`clear` atomico** senza temporanei residui.
 
-## Stato (PR scope)
-Questa PR introduce **solo il ledger puro e i suoi test**. L'**aggancio al runtime**
-(chiamare `append_event` da `app._process` / `_process_confirmation` / `_run_bot` /
-`_clear_stale_csv` ai punti CSV_WRITTEN / CSV_CLEARED / XTRADER_* / RECONNECT /
-START/STOP / CRASH_RECOVERY_CSV_CLEARED) tocca la glue GUI di `app.py` ed è volutamente
-lasciato a una **PR separata**, per tenere il cambiamento isolato e rivedibile. Finché
-il wiring non c'è, il ledger esiste e funziona ma non viene ancora popolato dal runtime.
+## Aggancio al runtime (#230)
+Il ledger è **agganciato al runtime** in `app.py`, in modo **best-effort** (un errore del
+journal non blocca mai il trading) tramite l'helper privato `App._journal(...)`:
+
+| Punto in `app.py` | Eventi registrati |
+|---|---|
+| `__init__` | `prune_events(...)` allo startup (retention, prima di qualunque auto-start) |
+| `_start` / `_stop` | `START` (con `dry_run`/`auto`) / `STOP` |
+| `_process` | `SIGNAL_RECEIVED` → `SIGNAL_VALIDATED` → `CSV_WRITTEN` |
+| `_process_confirmation` | `XTRADER_CONFIRMED` / `XTRADER_REJECTED` |
+| `_clear_stale_csv` | `CRASH_RECOVERY_CSV_CLEARED` (all'avvio) / `CSV_CLEARED` (allo stop) |
+| `_expire_tick` | `CSV_CLEARED` (`reason="expiry"`) quando l'ultima riga scade e il CSV torna a solo header |
+| `_run_bot` | `RECONNECT` a ogni tentativo di riconnessione |
+
+Garanzie del wiring: **mai bloccante** (path assente → no-op; qualunque eccezione di
+`append_event` è ingoiata), **redatto** (nessun token), **bounded** (`prune_events` allo
+startup). Test: `tests/unit/test_event_journal.py` (modulo + retention) e
+`tests/integration/test_event_journal_wiring.py` (wiring sui metodi reali di `App`).

@@ -266,3 +266,17 @@ def test_prune_atomico_lascia_il_file_leggibile(tmp_path):
     ej.append_event(p, "STOP", {}, now=2000.0, event_id="z")
     types = [e["type"] for e in ej.read_events(p)]
     assert types == ["RECONNECT", "RECONNECT", "STOP"]
+
+
+def test_prune_non_solleva_su_evento_non_codificabile(tmp_path):
+    # Codex P2 (#233): un evento con stringa NON codificabile in UTF-8 (surrogato spaiato
+    # U+D800, es. da una riga corrotta) non deve far SOLLEVARE prune (chiamata unguarded da
+    # App.__init__ allo startup): best-effort, ritorna 0 senza crashare l'avvio.
+    p = str(tmp_path / "j.jsonl")
+    ej.append_event(p, "START", {"i": 0}, now=1000.0, event_id="a")
+    ej.append_event(p, "START", {"i": 1}, now=1001.0, event_id="b")
+    with open(p, "a", encoding="utf-8") as f:                 # riga "valida JSON" ma con surrogato
+        f.write('{"id":"s","ts":1002.0,"type":"START","data":{"k":"\\ud800"}}\n')
+    # keep=1 → terrebbe l'ultimo evento (surrogato): la riscrittura UTF-8 fallirebbe.
+    assert ej.prune_events(p, keep=1) == 0                    # NON solleva, best-effort
+    assert ej.read_events(p)                                  # ledger ancora leggibile

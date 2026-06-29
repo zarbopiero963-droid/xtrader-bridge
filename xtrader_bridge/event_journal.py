@@ -20,9 +20,9 @@ Proprietà:
   (un refuso non finisce silenziosamente nel ledger).
 - **Modulo puro**: nessuna dipendenza da GUI/Telegram/CSV runtime → testabile headless.
 
-NB: l'AGGANCIO al runtime (chiamare `append_event` da `app._process`/`_run_bot`/…) è
-volutamente fuori da questo modulo e da questa PR: qui c'è solo il ledger e i suoi
-invarianti, testati. Il wiring (che tocca la glue GUI di `app.py`) sarà una PR separata.
+NB: l'AGGANCIO al runtime (chiamare `append_event` da `app._process`/`_process_confirmation`/
+`_run_bot`/`_clear_stale_csv`/`_expire_tick`) è in `app.py` (#230), best-effort e mai
+bloccante; questo modulo resta puro e testabile headless.
 """
 
 import json
@@ -191,10 +191,14 @@ def prune_events(path: str, keep: int) -> int:
     if len(events) <= keep:
         return 0
     kept = events[len(events) - keep:]
-    payload = "".join(
-        event_log.redact_secrets(json.dumps(e, ensure_ascii=False)) + "\n" for e in kept)
     try:
+        payload = "".join(
+            event_log.redact_secrets(json.dumps(e, ensure_ascii=False)) + "\n" for e in kept)
         atomic_io.atomic_write_text(path, payload, prefix=".journal_", suffix=".tmp")
-    except OSError:
+    except (OSError, ValueError):
+        # Best-effort: oltre agli errori di I/O (OSError) cattura anche `UnicodeEncodeError`
+        # (⊂ ValueError) — un evento storico con un carattere non codificabile (es. surrogato
+        # spaiato letto da una riga corrotta) NON deve far esplodere la potatura allo startup
+        # (Codex P2 #233). La retention è una pulizia: meglio saltarla che crashare il boot.
         return 0
     return len(events) - keep

@@ -177,3 +177,35 @@ def test_journal_append_error_non_blocca_la_scrittura(make_app, app_mod, monkeyp
     # il trading prosegue: il CSV è scritto nonostante il journal fallisca
     with open(path, newline="", encoding="utf-8-sig") as f:
         assert [r["EventName"] for r in csv.DictReader(f)] == ["Inter v Milan"]
+
+
+def test_expire_clears_last_row_journals_csv_cleared(make_app, app_mod, monkeypatch, tmp_path):
+    # Codex P2 (#233): se l'ULTIMA riga attiva scade (clear-delay), `_expire_tick` riporta il
+    # CSV a solo header → deve loggare CSV_CLEARED, altrimenti il diario mostra un CSV_WRITTEN
+    # senza il corrispondente clear ("cosa ha fatto" incompleto).
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.QUEUE_UNTIL_CONFIRMED, default_timeout=10)
+    q.add(_row("Inter v Milan"), now=0)                  # scade a now=10
+    a = make_app(csv_path=path, queue=q)
+    jpath = _make(a, tmp_path)
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: 1000.0)   # oltre la scadenza
+
+    app_mod.App._expire_tick(a, path)
+
+    assert "CSV_CLEARED" in _types(jpath)
+
+
+def test_expire_non_svuota_se_restano_righe_non_logga_clear(make_app, app_mod, monkeypatch, tmp_path):
+    # Guard: se scade UNA riga ma ne resta un'altra attiva, il CSV NON è "svuotato" → niente
+    # CSV_CLEARED (il clear è solo quando l'ultima riga sparisce).
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.QUEUE_UNTIL_CONFIRMED, default_timeout=10)
+    q.add(_row("Inter v Milan"), now=0)                  # scade a now=10
+    q.add(_row("Roma v Lazio"), now=995)                 # scade a now=1005 (ancora attiva a 1000)
+    a = make_app(csv_path=path, queue=q)
+    jpath = _make(a, tmp_path)
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: 1000.0)
+
+    app_mod.App._expire_tick(a, path)
+
+    assert "CSV_CLEARED" not in _types(jpath)
