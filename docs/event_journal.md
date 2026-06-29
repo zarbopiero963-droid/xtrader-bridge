@@ -48,19 +48,33 @@ journal non blocca mai il trading) tramite l'helper privato `App._journal(...)`:
 | Punto in `app.py` | Eventi registrati |
 |---|---|
 | `__init__` | `prune_events(...)` allo startup (retention, prima di qualunque auto-start) |
-| `_start` / `_stop` | `START` (con `dry_run`/`auto`) / `STOP` (solo se una sessione era attiva) |
+| `_start` | `CSV_CLEARED` (`reason="start"`) se l'`init_csv` di START rimuove una riga stantia sopravvissuta a un cleanup lockato, poi `START` (con `dry_run`/`auto`) |
+| `_stop` | `STOP` (solo se una sessione era attiva) |
 | `_process` | `SIGNAL_RECEIVED` → `SIGNAL_PARSED` → `SIGNAL_VALIDATED` → `CSV_WRITTEN` (un segnale scartato si ferma a `SIGNAL_PARSED`, `placeable=false`) |
-| `_process_confirmation` | `XTRADER_CONFIRMED` / `XTRADER_REJECTED` (+ `CSV_CLEARED` `reason="confirmation"` se era l'ultima riga) |
+| `_process_confirmation` | `XTRADER_CONFIRMED` / `XTRADER_REJECTED` (registrato anche se la riscrittura CSV fallisce: l'esito è già avvenuto) + `CSV_CLEARED` `reason="confirmation"` se era l'ultima riga |
 | `_clear_stale_csv` | `CRASH_RECOVERY_CSV_CLEARED` (all'avvio) / `CSV_CLEARED` (allo stop) |
-| `_expire_tick` | `CSV_CLEARED` (`reason="expiry"`) quando l'ultima riga scade e il CSV torna a solo header |
+| `_expire_tick` | `CSV_CLEARED` (`reason="expiry"`) quando il CSV torna a solo header (anche su un retry post-write-failure) |
 | `_manual_clear` | `CSV_CLEARED` (`reason="manual"`) sullo svuotamento manuale riuscito («Svuota CSV ora») |
 | `_run_bot` | `RECONNECT` a ogni tentativo di riconnessione |
 
+### Fedeltà dei clear: transizione reale riga→solo-header (#234)
+Gli eventi di clear (`CSV_CLEARED` / `CRASH_RECOVERY_CSV_CLEARED`) sono emessi **solo sulla
+transizione reale** «il CSV operativo aveva una riga attiva → ora è a solo header», non sulle
+riscritture idempotenti. Il meccanismo è un flag `App._csv_had_active_row` (mirror diagnostico
+dello stato su disco): impostato a `True` dopo ogni scrittura che lascia righe, e azzerato
+emettendo il clear (`App._journal_csv_cleared_if_had_row`) quando il CSV torna a solo header.
+Inizializzato all'avvio da `csv_writer.has_active_row(csv_path)`. Questo evita due falsi:
+- **falso positivo:** nessun `CRASH_RECOVERY_CSV_CLEARED` ad ogni avvio pulito con un CSV già a
+  solo header;
+- **falso negativo:** il clear viene registrato anche quando è un **retry** post-write-failure
+  (conferma/scadenza) o l'`init_csv` di **START** a riportare il CSV a solo header.
+
 Garanzie del wiring: **mai bloccante** (path assente → no-op; qualunque eccezione di
-`append_event` è ingoiata), **redatto** (nessun token; il `chat_id` Telegram è registrato come
-impronta `chat:sha256:<12 hex>` via `log_privacy.redact_chat_id`, mai l'ID reale — il diario è
-un log durevole sotto AppData), **bounded** (`prune_events` allo startup). Ogni evento ha un
-timestamp `ts` (epoch) e un `id` univoco, quindi l'ordine reale è ricostruibile ordinando per
-`ts` anche se due append concorrenti finissero sfuori ordine sul file. Test:
-`tests/unit/test_event_journal.py` (modulo + retention) e
-`tests/integration/test_event_journal_wiring.py` (wiring sui metodi reali di `App`).
+`append_event` è ingoiata; il flag è aggiornato fuori dal `_queue_lock`, mai sull'hot-path),
+**redatto** (nessun token; il `chat_id` Telegram è registrato come impronta `chat:sha256:<12 hex>`
+via `log_privacy.redact_chat_id`, mai l'ID reale — il diario è un log durevole sotto AppData),
+**bounded** (`prune_events` allo startup). Ogni evento ha un timestamp `ts` (epoch) e un `id`
+univoco, quindi l'ordine reale è ricostruibile ordinando per `ts` anche se due append concorrenti
+finissero sfuori ordine sul file. Test: `tests/unit/test_event_journal.py` (modulo + retention),
+`tests/integration/test_event_journal_wiring.py` (wiring sui metodi reali di `App`) e
+`tests/safety/test_csv_atomic.py` (`has_active_row`).

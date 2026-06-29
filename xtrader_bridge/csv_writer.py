@@ -338,6 +338,31 @@ def clear_stale_csv(path: str) -> bool:
         return True
 
 
+def has_active_row(path: str) -> bool:
+    """``True`` se ``path`` è un CSV del bridge ESISTENTE con ALMENO una riga dati (oltre
+    l'header). **Read-only e best-effort**: ``path`` vuoto/assente/non-bridge/illeggibile →
+    ``False``.
+
+    Serve a distinguere «riga stantia realmente presente» da «CSV già a solo header» PRIMA di
+    un cleanup, così il diario eventi (#234) non registra un crash-recovery/clear su una
+    riscrittura idempotente a solo-header (falso positivo). Il check è serializzato col
+    ``_write_lock`` come `clear_stale_csv`, così non legge uno stato a metà scrittura."""
+    if not path:
+        return False
+    with _write_lock:
+        if not os.path.exists(path):
+            return False
+        try:
+            with open(path, newline="", encoding="utf-8-sig") as f:
+                reader = csv.reader(f)
+                if next(reader, None) != CSV_HEADER:
+                    return False   # non è un CSV del bridge (o file vuoto): nessuna riga attiva
+                # Una riga dati "attiva" è una riga con almeno una cella non vuota dopo l'header.
+                return any(any((c or "").strip() for c in row) for row in reader)
+        except (OSError, UnicodeDecodeError, csv.Error):
+            return False
+
+
 def write_rows(rows, path: str):
     """Scrive PIÙ segnali nel CSV (header + una riga per ciascuno), sovrascrivendo
     in modo atomico. `rows` vuota → solo header (equivale a `init_csv`). Usato dalla
