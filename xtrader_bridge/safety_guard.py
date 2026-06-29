@@ -170,7 +170,11 @@ class DailyLimiter:
             return False
         day = data.get("day")
         count = data.get("count")
-        if isinstance(count, int) and count >= 0:
+        # `not isinstance(count, bool)` (#184 low-bool-count): `isinstance(True, int)` è True, quindi
+        # un `daily_state.json` corrotto/manomesso con `"count": true/false` verrebbe accettato come
+        # 1/0 invece di essere scartato come malformato. Un conteggio è un intero, non un booleano:
+        # un bool → restore fail-closed (return False, limiter invariato), come gli altri dati invalidi.
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
             # `day` data di calendario reale e canonica → usato così com'è; altrimenti (malformato,
             # data impossibile, non-stringa) → `_UNKNOWN_DAY` (M4 #184). Il conteggio NON viene
             # scartato (sarebbe un cap pieno = overtrading): è attribuito al giorno corrente da

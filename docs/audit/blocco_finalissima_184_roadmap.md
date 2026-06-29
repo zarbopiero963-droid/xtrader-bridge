@@ -33,7 +33,7 @@ branch dedicato off `main` aggiornato, **test hard di resilienza** (fail-first),
 | M12 | m12-viewer-debounce | `betfair/dictionary_viewer_gui.py` | in PR |
 | LOW | low-tracker-nonwrite | `write_path.py` (rollback guardrail su non-WRITE) | in PR |
 | LOW | low-timer-lock | `app.py` (`_schedule_expiry` sotto lock) | in PR |
-| LOW | low-bool-count | `safety_guard.py` (`isinstance` bool) | da fare |
+| LOW | low-bool-count | `safety_guard.py` (`isinstance` bool) | in PR |
 | LOW | low-parser-emoji | `parser.py:215` (strip trailing emoji) | da fare |
 | LOW | low-isodds-inf | `parser.py` (`_is_odds` `math.isfinite`) | da fare |
 | LOW | low-pipeline-comma | `custom_pipeline.py` (replace virgola naive) | da fare |
@@ -138,6 +138,16 @@ corruttivo) e il docstring "atomicità della singola riga" sovrastimava la garan
 (un crash kernel→disco può lasciare una coda parziale, dipende da fs/hardware), ma quella è già
 gestita: `read_events` salta la riga troncata e il prossimo append antepone un separatore.
 Output invariato; cambia solo il numero di write (1 invece di 2 nel caso separatore).
+
+## low-bool-count — `DailyLimiter.restore_state` rifiuta un `count` booleano
+
+`restore_state` validava il conteggio con `isinstance(count, int) and count >= 0`. Ma
+`isinstance(True, int)` è `True`: un `daily_state.json` corrotto/manomesso con `"count": true`
+(o `false`) sarebbe stato accettato come `1` (o `0`) invece di essere scartato come malformato.
+Fix: aggiunto `and not isinstance(count, bool)` — un conteggio è un intero, non un booleano; un
+bool → restore **fail-closed** (`False`, limiter invariato), come gli altri dati invalidi. Round-trip
+normale invariato (`state()` produce sempre un `int` reale). Test fail-first: `count=True/False`
+viene rifiutato e il limiter conserva lo stato valido precedente.
 
 ## low-timer-lock — replace/cancel del timer di scadenza atomico sotto lock
 

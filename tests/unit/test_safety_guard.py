@@ -128,6 +128,20 @@ def test_restore_state_malformato_ignorato():
     assert lim.restore_state({"day": "2026-01-01", "count": 2}) is True
 
 
+def test_restore_state_count_bool_rifiutato_fail_closed():
+    """#184 low-bool-count: un `count` BOOLEANO (da `daily_state.json` corrotto/manomesso con
+    `"count": true/false`) NON deve essere accettato come 1/0 — `isinstance(True, int)` è True, ma un
+    conteggio è un intero, non un bool. Restore fail-closed: False, limiter invariato.
+
+    Fail-first: senza il guard `not isinstance(count, bool)`, `count=True` veniva applicato come 1."""
+    lim = sg.DailyLimiter(max_per_day=5)
+    assert lim.restore_state({"day": "2026-01-01", "count": 3}) is True   # stato valido di partenza
+    for bad_count in (True, False):
+        assert lim.restore_state({"day": "2026-01-02", "count": bad_count}) is False
+    # il limiter NON è stato toccato dal payload bool: resta lo stato valido precedente (count=3).
+    assert lim.state()["count"] == 3
+
+
 def test_restore_state_day_malformato_non_azzera_il_conteggio():
     """#184 M4: uno stato corrotto con `day` MALFORMATO (non `YYYY-MM-DD`) ma `count` valido
     NON deve concedere un cap giornaliero PIENO. Prima `_roll`, vedendo `day` diverso da oggi,
