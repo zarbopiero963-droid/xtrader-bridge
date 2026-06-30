@@ -638,7 +638,7 @@ The final review pass must happen in this order:
 9. run hard truthful local validation;
 10. push if needed;
 11. wait again for all checks to finish;
-12. only then decide `DONE`, `PARTIAL`, `NOT DONE`, `CHECKS_PENDING`, or `NEEDS_MANUAL`.
+12. only then decide `DONE`, `PARTIAL`, `NOT DONE`, `CHECKS_PENDING`, `REVIEW_WINDOW_PENDING`, or `NEEDS_MANUAL`.
 
 A PR is not ready while checks are pending, even if local tests pass.
 
