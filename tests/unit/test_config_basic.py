@@ -1271,9 +1271,7 @@ def test_clear_dopo_load_keyring_illeggibile_non_cancella_il_token(tmp_path, mon
     on_disk = json.loads(p.read_text(encoding="utf-8"))
     assert on_disk["bot_token_storage"] == "keyring"        # niente "none": reidrata ancora
     assert saved["bot_token"] == "LIVE:TOKEN"               # reidratato in memoria (runtime)
-    # Il marker è MANTENUTO in memoria dopo la reidratazione: segnala al consumer GUI che il campo
-    # token va risincronizzato (la GUI lo consuma poi). Su disco non finisce MAI.
-    assert saved.get(config_store.TOKEN_LOAD_INCOMPLETE_KEY) is True
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in saved   # marker consumato (load ora completo)
     assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in on_disk
 
 
@@ -1311,9 +1309,7 @@ def test_load_incompleto_persiste_se_keyring_ancora_giu(tmp_path, monkeypatch):
     assert deleted["n"] == 0
     assert state["token"] == "LIVE:TOKEN"
     assert saved2["bot_token"] == "LIVE:TOKEN"              # reidratato (runtime)
-    # Dopo la reidratazione il marker è MANTENUTO in memoria per il refresh del campo GUI (consumato
-    # poi dalla GUI); resta comunque fuori dal disco.
-    assert saved2.get(config_store.TOKEN_LOAD_INCOMPLETE_KEY) is True
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in saved2   # marker consumato dalla reidratazione
     on_disk2 = json.loads(p.read_text(encoding="utf-8"))
     assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in on_disk2
 
