@@ -235,10 +235,20 @@ class SignalQueue:
     def active_ids(self) -> list:
         return [a.signal_id for a in self._active]
 
-    def active_rows(self) -> list:
+    def active_rows(self, now: float = None) -> list:
         """Righe attualmente attive (copie difensive), in ordine d'arrivo. È ciò
-        che andrebbe scritto nel CSV sotto l'header."""
-        return [dict(a.row) for a in self._active]
+        che andrebbe scritto nel CSV sotto l'header.
+
+        Con `now` (clock monotòno, audit A3) le righe **già scadute** vengono
+        **escluse** dal risultato: così, anche se il chiamante non ha invocato
+        `expire()` subito prima, una riga oltre il suo timeout non può essere
+        ESPOSTA/SCRITTA come attiva (#30, Codex). È una lettura **pura** (non muta la
+        coda — la rimozione effettiva resta a `expire()`); `now=None` → tutte le
+        attive (retro-compatibile)."""
+        if now is None:
+            return [dict(a.row) for a in self._active]
+        now = self._resolve_now(now)
+        return [dict(a.row) for a in self._active if a.expires_at() > now]
 
     def is_empty(self) -> bool:
         return not self._active
