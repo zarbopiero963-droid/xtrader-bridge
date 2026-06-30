@@ -553,7 +553,8 @@ esegue la suite offline.
 **Build personale e sicura.** La pipeline produce **solo** l'EXE personale del bridge
 (nessun «Admin EXE»). L'EXE **non include segreti né certificati**: le credenziali Betfair
 e la config restano **fuori** dall'eseguibile, nella cartella utente
-(`%APPDATA%\XTraderBridge`); il `sessionToken` vive solo in RAM. Un gate automatico
+(`%APPDATA%\XTraderBridge`); il `sessionToken` vive solo in RAM e il **logout lo invalida
+anche lato server Betfair** (non solo in locale). Un gate automatico
 (`tests/safety/test_build_exe_safety.py`) verifica a ogni PR che la build non impacchetti
 `.env`/chiavi/certificati/`config.json`/DB/token (nel bundle è ammesso solo il dizionario
 ufficiale) e che i test girino prima della compilazione.

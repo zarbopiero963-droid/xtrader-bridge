@@ -26,11 +26,19 @@ from .session import BetfairSession
 # Endpoint di login con certificato del dominio italiano.
 CERTLOGIN_URL = "https://identitysso-cert.betfair.it/api/certlogin"
 
+# Endpoint di logout Betfair: invalida la sessione lato SERVER (issue #168). Il logout NON usa
+# il certificato (basta il sessionToken in `X-Authentication` + l'App Key in `X-Application`).
+LOGOUT_URL = "https://identitysso.betfair.it/api/logout"
+
 # Nome "operazione" per il guard read-only (NON è un'operazione di scommessa).
 LOGIN_OPERATION = "certlogin"
 
 # Timeout della richiesta di login (secondi): un login non deve bloccare all'infinito.
 LOGIN_TIMEOUT = 20
+
+# Timeout del logout (secondi): più corto del login — è best-effort e non deve far attendere
+# l'utente/teardown auto-sync a lungo se il server non risponde.
+LOGOUT_TIMEOUT = 10
 
 
 class LoginError(RuntimeError):
@@ -70,6 +78,25 @@ def _default_transport(creds: BetfairCredentials) -> dict:
     return json.loads(raw)
 
 
+def _default_logout_transport(token: str, app_key: str) -> None:
+    """POST al logout endpoint Betfair per invalidare il `sessionToken` lato SERVER (#168).
+
+    Usa solo la stdlib. Non logga nulla e scarta il corpo della risposta (può contenere lo
+    stato della sessione). Importata lazy come `_default_transport`."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        LOGOUT_URL, data=b"", method="POST",
+        headers={
+            "X-Authentication": token,
+            "X-Application": app_key or "",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=LOGOUT_TIMEOUT) as resp:
+        resp.read()   # consuma e scarta: nessun contenuto loggato
+
+
 class BetfairAuthClient:
     """Login/logout Betfair.it con certificato. Custodisce il token in RAM.
 
@@ -77,9 +104,12 @@ class BetfairAuthClient:
     `(BetfairCredentials) -> dict` per iniettare un trasporto finto nei test; se
     ``None`` usa `_default_transport` (rete reale)."""
 
-    def __init__(self, session: BetfairSession = None, transport=None):
+    def __init__(self, session: BetfairSession = None, transport=None, logout_transport=None):
         self.session = session if session is not None else BetfairSession()
         self._transport = transport
+        # Trasporto del logout server-side, iniettabile nei test (callable `(token, app_key)`);
+        # se ``None`` usa `_default_logout_transport` (rete reale).
+        self._logout_transport = logout_transport
 
     @property
     def is_logged_in(self) -> bool:
@@ -112,9 +142,12 @@ class BetfairAuthClient:
         except CertificateError:
             raise
         except Exception as ex:   # noqa: BLE001 — errore safe: niente response/segreti nel messaggio
-            # Solo il TIPO dell'errore, mai il contenuto (può includere body/header).
+            # Solo il TIPO dell'errore, mai il contenuto (può includere body/header). `from None`
+            # SOPPRIME la causa (#168, Codex): con `from ex` l'eccezione originale del trasporto
+            # resterebbe in `__cause__` e un traceback / `logger.exception(exc_info=True)`
+            # stamperebbe il suo messaggio grezzo (potenzialmente body/segreti del login).
             raise LoginError(
-                f"Login Betfair fallito ({type(ex).__name__}).") from ex
+                f"Login Betfair fallito ({type(ex).__name__}).") from None
 
         status = (data or {}).get("loginStatus")
         token = (data or {}).get("sessionToken")
@@ -125,7 +158,25 @@ class BetfairAuthClient:
         self.session.set_token(token)   # solo in RAM + registrato per la redazione log
         return token
 
-    def logout(self) -> None:
-        """Logout: cancella il `sessionToken` dalla RAM (idempotente). Le credenziali
-        salvate non vengono toccate."""
+    def logout(self, creds: BetfairCredentials = None) -> None:
+        """Logout: invalida la sessione **lato server** (best-effort) e poi cancella il
+        `sessionToken` dalla RAM (idempotente). Le credenziali salvate non vengono toccate.
+
+        Senza la chiamata server-side il token resterebbe valido fino alla scadenza naturale
+        anche dopo il logout locale (#168): un token "loggato fuori" ma ancora vivo è un rischio.
+        La chiamata di rete è **best-effort** — un suo fallimento (rete, server) NON deve
+        impedire la pulizia della RAM, altrimenti l'utente resterebbe "connesso" localmente.
+
+        `creds` serve solo per l'`X-Application` (App Key); se ``None`` viene caricato dal keyring
+        (`load_credentials` è già fail-safe e non solleva)."""
+        token = self.session.token
+        if token:
+            if creds is None:
+                creds = credential_store.load_credentials()
+            app_key = creds.app_key.strip() if creds else ""
+            transport = self._logout_transport or _default_logout_transport
+            try:
+                transport(token, app_key)
+            except Exception:   # noqa: BLE001 — logout server best-effort: niente crash/segreti, la RAM si pulisce comunque
+                pass
         self.session.clear()
