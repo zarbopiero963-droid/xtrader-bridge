@@ -115,17 +115,110 @@ def test_login_file_cert_inesistente(tmp_path):
 
 # ── logout ────────────────────────────────────────────────────────────────────
 
+def _login_ok(_c):
+    return {"loginStatus": "SUCCESS", "sessionToken": "tok"}
+
+
 def test_logout_pulisce_il_token(tmp_path):
     sess = BetfairSession()
-    client = BetfairAuthClient(session=sess, transport=lambda c: {
-        "loginStatus": "SUCCESS", "sessionToken": "tok"})
+    seen = []
+    client = BetfairAuthClient(session=sess, transport=_login_ok,
+                               logout_transport=lambda t, k: seen.append((t, k)) or {
+                                   "status": "SUCCESS"})
     client.login(_creds(tmp_path))
     assert client.is_logged_in is True
     client.logout()
     assert client.is_logged_in is False
     assert sess.token is None
-    # idempotente
+    # idempotente: una seconda logout senza sessione NON richiama il transport server-side
     client.logout()
+    assert client.is_logged_in is False
+    assert len(seen) == 1
+
+
+def test_logout_invalida_la_sessione_lato_server(tmp_path):
+    """#168 (Codex P2): il logout deve invalidare la sessione LATO SERVER (POST col
+    sessionToken in `X-Authentication` e l'App Key in `X-Application`) PRIMA del clear locale,
+    così la sessione non resta valida sul server fino alla scadenza.
+
+    Fail-first: sul vecchio `logout()` (solo `session.clear()`) il transport server-side NON
+    veniva mai chiamato."""
+    calls = []
+    client = BetfairAuthClient(session=BetfairSession(), transport=_login_ok,
+                               logout_transport=lambda token, app_key: calls.append(
+                                   {"token": token, "app_key": app_key}) or {"status": "SUCCESS"})
+    client.login(_creds(tmp_path))
+    client.logout()
+    assert len(calls) == 1                          # il logout server-side è stato chiamato
+    assert calls[0]["token"] == "tok"               # col sessionToken corrente
+    assert calls[0]["app_key"] == "DelayedKey"      # e l'App Key dell'ultimo login
+    assert client.is_logged_in is False             # poi il clear locale
+
+
+def test_logout_server_side_fallito_pulisce_comunque_il_token(tmp_path, caplog):
+    """Best-effort: un logout server-side che SOLLEVA (rete/timeout) non deve impedire il
+    clear locale né propagare l'eccezione (la GUI deve risultare disconnessa lo stesso). E il
+    log NON deve contenere né il token né il messaggio grezzo dell'eccezione (solo il TIPO)."""
+    def _boom(token, app_key):
+        raise RuntimeError("connessione fallita " + token)   # incorpora il token!
+
+    sess = BetfairSession()
+    client = BetfairAuthClient(session=sess, transport=_login_ok, logout_transport=_boom)
+    client.login(_creds(tmp_path))
+    with caplog.at_level("WARNING"):
+        client.logout()                             # non solleva
+    assert client.is_logged_in is False
+    assert sess.token is None
+    assert "tok" not in caplog.text                 # il token NON finisce nel log
+    assert "connessione fallita" not in caplog.text # né il messaggio grezzo dell'eccezione
+
+
+def test_logout_status_non_success_non_logga_la_response(tmp_path, caplog):
+    """Ramo `status != SUCCESS`: il clear locale avviene comunque e la RESPONSE (che può
+    riecheggiare il token o portare un body) NON viene loggata — solo lo `status` (codice safe)."""
+    def _fail(_token, _app_key):
+        return {"status": "FAIL", "echo": "tok", "detail": "response body leaked"}
+
+    sess = BetfairSession()
+    client = BetfairAuthClient(session=sess, transport=_login_ok, logout_transport=_fail)
+    client.login(_creds(tmp_path))
+    with caplog.at_level("WARNING"):
+        client.logout()
+    assert client.is_logged_in is False
+    assert sess.token is None
+    assert "tok" not in caplog.text
+    assert "response body leaked" not in caplog.text
+
+
+def test_logout_risposta_non_dict_pulisce_comunque_il_token(tmp_path, caplog):
+    """Resilienza (CodeRabbit): se il transport ritorna un JSON valido ma NON oggetto (lista/
+    stringa, es. proxy malformato), il clear locale deve avvenire COMUNQUE (best-effort), senza
+    che `.get` sollevi e salti la pulizia. E il warning del ramo non-dict NON deve loggare il
+    payload grezzo (che potrebbe portare token/body sensibili) — solo lo `status` generico.
+
+    Fail-first: col vecchio `(data or {}).get(...)` un payload truthy non-dict sollevava
+    AttributeError e la sessione restava 'loggata' (token non cancellato)."""
+    sess = BetfairSession()
+    client = BetfairAuthClient(
+        session=sess, transport=_login_ok,
+        logout_transport=lambda t, k: ["tok", "response body leaked"])  # marker token/body
+    client.login(_creds(tmp_path))
+    with caplog.at_level("WARNING"):
+        client.logout()                             # non solleva
+    assert client.is_logged_in is False
+    assert sess.token is None
+    assert "tok" not in caplog.text                 # il payload grezzo NON finisce nel warning
+    assert "response body leaked" not in caplog.text
+
+
+def test_logout_senza_login_non_chiama_il_server(tmp_path):
+    """Senza un login precedente (nessun token / App Key in RAM) il logout resta locale e
+    non tenta alcuna chiamata server-side (niente token da invalidare)."""
+    calls = []
+    client = BetfairAuthClient(session=BetfairSession(),
+                               logout_transport=lambda t, k: calls.append(1) or {"status": "SUCCESS"})
+    client.logout()
+    assert calls == []
     assert client.is_logged_in is False
 
 
@@ -181,3 +274,77 @@ def test_login_usa_credenziali_dal_keyring(tmp_path, monkeypatch):
                                    "loginStatus": "SUCCESS", "sessionToken": "t"})
     client.login()                            # nessun creds passato → carica dal keyring
     assert got["app_key"] == "DelayedKey"
+
+
+def test_logout_non_cancella_un_token_piu_recente(tmp_path):
+    """Race (Codex P2): se durante la POST di logout un altro path fa un re-login sulla sessione
+    CONDIVISA (token cambiato), il clear locale NON deve cancellare il token NUOVO — altrimenti
+    una sessione fresca verrebbe sloggata silenziosamente.
+
+    Fail-first: col vecchio `self.session.clear()` incondizionato il token nuovo veniva cancellato."""
+    sess = BetfairSession()
+
+    def _slow_logout(token, app_key):
+        # Simula un re-login concorrente avvenuto MENTRE la POST di logout era in volo.
+        sess.set_token("NEW-TOKEN")
+        return {"status": "SUCCESS"}
+
+    creds = _creds(tmp_path)
+    client = BetfairAuthClient(session=sess, transport=_login_ok, logout_transport=_slow_logout)
+    client.login(creds)                             # token "tok"
+    client.logout()
+    assert sess.token == "NEW-TOKEN"                # il token PIÙ RECENTE non è stato cancellato
+    assert client.is_logged_in is True
+    # E nemmeno l'App Key va azzerata se il clear NON è avvenuto (token cambiato): un logout
+    # successivo deve poter ancora invalidare lato server (CodeRabbit #262).
+    assert client._app_key == creds.app_key.strip()
+
+
+def test_default_logout_transport_usa_context_tls_esplicito(monkeypatch):
+    """Sicurezza TLS (Codex P2): il transport reale di logout deve passare un `ssl.SSLContext`
+    ESPLICITO a `urlopen` (come il login), non affidarsi al default globale di processo (che un
+    ambiente potrebbe aver indebolito) mentre porta credenziali.
+
+    Fail-first: senza `context=...` il kwarg catturato sarebbe None."""
+    import ssl
+    import urllib.request
+
+    captured = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"status": "SUCCESS"}'
+
+    def _fake_urlopen(req, *a, **k):
+        captured["context"] = k.get("context")
+        captured["timeout"] = k.get("timeout")
+        captured["url"] = req.full_url
+        captured["x_auth"] = req.headers.get("X-authentication")
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    data = auth_client._default_logout_transport("tok-SECRET", "DelayedKey")
+    assert isinstance(captured["context"], ssl.SSLContext)   # context TLS ESPLICITO
+    assert captured["timeout"] == auth_client.LOGOUT_TIMEOUT  # timeout passato a urlopen
+    assert captured["url"] == auth_client.LOGOUT_URL
+    assert captured["x_auth"] == "tok-SECRET"               # token nell'header, non in URL/body
+    assert data == {"status": "SUCCESS"}
+
+
+def test_session_clear_if_token_e_atomico_sul_match(tmp_path):
+    """#262 (Codex/CodeRabbit): `BetfairSession.clear_if_token` cancella SOLO se il token corrente
+    coincide; se è cambiato (login concorrente) NON tocca la sessione nuova. È il primitivo atomico
+    (sotto lock) che `logout` usa per non sloggare un token più recente."""
+    sess = BetfairSession()
+    sess.set_token("A")
+    assert sess.clear_if_token("B") is False        # token diverso → non cancella
+    assert sess.token == "A"
+    assert sess.clear_if_token("A") is True          # token coincide → cancella
+    assert sess.token is None
+    assert sess.clear_if_token(None) is True         # idempotente: None == None → no-op "riuscito"
