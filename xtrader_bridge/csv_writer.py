@@ -279,13 +279,20 @@ def init_csv(path: str):
     _atomic_write(path, lambda writer: None)
 
 
-def clear_stale_csv(path: str) -> bool:
+def clear_stale_csv(path: str, *, on_mismatch=None) -> bool:
     """Svuota il CSV (solo header) **se il file esiste già**: rimuove una riga
     lasciata da una sessione precedente terminata male (crash, blackout, chiusura).
 
     Ritorna ``True`` se ha ripulito un file esistente, ``False`` se non c'era nulla
     da fare (``path`` vuoto o file assente). **Non crea** il file se manca: all'avvio
     non si tocca un path non ancora usato.
+
+    `on_mismatch` (opzionale): callback ``(msg: str) -> None`` invocato quando il file
+    esiste ma NON è un CSV del bridge (header diverso). Serve a **far emergere** la
+    diagnosi nel log del bridge/GUI: il solo `logging.warning` non è visibile in un EXE
+    Windows ``--windowed`` (niente stdio) e non passa per il sink del bridge (#105 P2,
+    Codex). Il messaggio contiene SOLO metadati strutturali (niente contenuto/segreti),
+    lo stesso del warning. Deve essere **best-effort** (non deve sollevare).
 
     Difesa anti-segnale-stantio: se il processo muore mentre nel CSV c'è una riga
     attiva, il timer di auto-clear non può girare. Richiamando questa funzione
@@ -329,9 +336,15 @@ def clear_stale_csv(path: str) -> bool:
             # colonne e lunghezza), che bastano a capire che è il file sbagliato.
             n_cols = len(first_row or [])
             n_chars = sum(len(str(c)) for c in (first_row or []))
-            logger.warning("CSV non ripulito: %s non è un CSV del bridge (header atteso %d "
-                           "colonne; rilevate %d colonne, %d caratteri — contenuto non loggato). "
-                           "Controlla csv_path.", path, len(CSV_HEADER), n_cols, n_chars)
+            msg = ("CSV non ripulito: %s non è un CSV del bridge (header atteso %d colonne; "
+                   "rilevate %d colonne, %d caratteri — contenuto non loggato). "
+                   "Controlla csv_path." % (path, len(CSV_HEADER), n_cols, n_chars))
+            logger.warning("%s", msg)
+            # Fa emergere la diagnosi anche nel log del bridge/GUI (visibile in EXE --windowed,
+            # dove lo stderr del logging non c'è): #105 P2, Codex. Best-effort: il callback NON
+            # deve impedire il return (il file resta comunque intatto).
+            if on_mismatch is not None:
+                on_mismatch(msg)
             return False   # non è un CSV del bridge → non sovrascrivere
         # svuotamento SOTTO lo stesso lock (no init_csv: riacquisirebbe _write_lock → deadlock)
         _atomic_write_locked(path, lambda writer: None)
