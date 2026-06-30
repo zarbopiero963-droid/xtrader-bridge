@@ -466,10 +466,20 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
     # save successivi tornano normali). Il suo valore guida solo il ramo CLEAR qui sotto.
     post_corruption = bool(in_memory.pop(POST_CORRUPTION_KEY, False))
     to_save.pop(POST_CORRUPTION_KEY, None)
-    # Marker load-incompleto (#140): SOLO-IN-RAM, consumato qui come `post_corruption`. Segnala che
-    # un `bot_token` vuoto deriva da un load in cui il keyring era illeggibile (token NON reidratato),
-    # non da un clear voluto → il ramo CLEAR PRESERVA invece di cancellare.
-    load_incomplete = bool(in_memory.pop(TOKEN_LOAD_INCOMPLETE_KEY, False))
+    # `bot_token` PRESENTE in questo save? Determina la modalità (set/clear/partial) e va valutato
+    # PRIMA di consumare il marker load-incompleto.
+    token_present = "bot_token" in in_memory
+    # Marker load-incompleto (#140): SOLO-IN-RAM. Segnala che un `bot_token` vuoto deriva da un load
+    # in cui il keyring era illeggibile (token NON reidratato), non da un clear voluto → il ramo CLEAR
+    # PRESERVA invece di cancellare. Lo si CONSUMA (pop da `in_memory`) solo quando questo save
+    # include la chiave `bot_token` (set/clear): allora il ramo del token gira e decide l'esito. Su un
+    # save PARZIALE (chiave assente) il ramo del token NON gira: NON si deve rimuovere il marker da
+    # `in_memory` (lascerebbe il bridge senza la guardia per un clear successivo, CodeRabbit) — lo si
+    # LEGGE soltanto. In ogni caso il marker è sempre tolto da `to_save` (mai su disco né nei profili).
+    if token_present:
+        load_incomplete = bool(in_memory.pop(TOKEN_LOAD_INCOMPLETE_KEY, False))
+    else:
+        load_incomplete = bool(in_memory.get(TOKEN_LOAD_INCOMPLETE_KEY, False))
     to_save.pop(TOKEN_LOAD_INCOMPLETE_KEY, None)
 
     # ── Routing del bot_token (audit #105 P1) ─────────────────────────────────────
@@ -483,7 +493,6 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
     # quando il disco dice "keyring"; (b) un disco fallito non lascia keyring e disco
     # incoerenti. Il sentinel `bot_token_storage` (`keyring`/`plaintext`/`none`, CodeRabbit)
     # disambigua `bot_token == ""`: `load_config` reidrata SOLO se vale "keyring".
-    token_present = "bot_token" in in_memory
     token = str(in_memory.get("bot_token") or "")
     prior_sentinel = str(in_memory.get("bot_token_storage") or "")
     keyring_changed = False        # se True, su disco-fallito va eseguito il rollback

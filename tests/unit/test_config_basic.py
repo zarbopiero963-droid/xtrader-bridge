@@ -1350,9 +1350,30 @@ def test_load_incompleto_keyring_leggibile_vuoto_non_lascia_puntatore_stantio(tm
     assert deleted["n"] == 0                                 # niente da cancellare (keyring già vuoto)
     on_disk = json.loads(p.read_text(encoding="utf-8"))
     assert on_disk["bot_token_storage"] == "none"           # sentinel "none": nessun puntatore stantio
+    assert saved["bot_token_storage"] == "none"             # runtime coerente col disco (no "keyring" stantio)
     assert on_disk["bot_token"] == ""
     assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in on_disk   # marker MAI su disco
     assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in saved     # consumato in memoria
     # load successivo: sentinel "none" → niente reidratazione anche se un orphan comparisse nel keyring
     monkeypatch.setattr(config_store.token_store, "load_token_status", lambda: ("ORPHAN:TOKEN", True))
     assert config_store.load_config(str(p))["bot_token"] == ""     # NON resuscita l'orphan
+
+
+def test_save_parziale_non_consuma_il_marker_load_incompleto(tmp_path, monkeypatch):
+    """#256 (CodeRabbit Major): un save PARZIALE (chiave `bot_token` ASSENTE) non deve consumare il
+    marker `_token_load_incomplete` da `in_memory`: il ramo del token non gira, quindi la guardia
+    deve sopravvivere per il clear successivo. Su disco/profilo il marker non finisce comunque mai.
+
+    Fail-first: prima il marker veniva `pop`-ato incondizionatamente → un save parziale lo perdeva e
+    un clear successivo sarebbe stato scambiato per un clear reale."""
+    _fake_keyring(monkeypatch, {"t": "LIVE:TOKEN"})
+    p = tmp_path / "config.json"
+    # config esistente keyring-backed su disco (così il save parziale ha cosa preservare)
+    p.write_text(json.dumps({"bot_token": "", "bot_token_storage": "keyring"}), encoding="utf-8")
+    cfg = {"provider": "X", "chat_id": "1",                  # NIENTE chiave bot_token → save PARZIALE
+           config_store.TOKEN_LOAD_INCOMPLETE_KEY: True}
+    saved, ok = config_store.save_config(cfg, str(p))
+    assert ok is True
+    assert saved.get(config_store.TOKEN_LOAD_INCOMPLETE_KEY) is True   # marker PRESERVATO in memoria
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in on_disk       # ma MAI su disco
