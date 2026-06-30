@@ -412,60 +412,16 @@ class App(ctk.CTk):
         presentazione). Estratto per essere testabile headless (la closure `_profiles_loaded`
         non lo è)."""
         old_cfg = self._config if isinstance(self._config, dict) else {}
-        had_incomplete = self._had_incomplete_token_load()   # PRIMA del save (lo consuma)
         cfg = self._gate_dangerous_transitions(old_cfg, dict(new_cfg))
         saved, ok = save_config(cfg, CONFIG_FILE)
         self._config = saved
-        # Se il save ha reidratato il token (load-incompleto risolto) ripopola il campo GUI, così un
-        # save successivo non vede un campo vuoto e cancella il token (#140/#256).
-        self._refill_token_entry_after_rehydrate(had_incomplete)
         self._save_ok = ok
         # Banner rosso persistente se il profilo ha attivato il REALE: senza questo il reale
         # resterebbe attivo senza warning visibile fino al successivo save/start/riavvio.
         self._update_real_mode_banner(saved)
         return saved, ok
 
-    def _had_incomplete_token_load(self) -> bool:
-        """`True` se la config viva porta il marker `_token_load_incomplete` (#140): il campo token è
-        vuoto perché il keyring era ILLEGGIBILE al load, NON per un clear deliberato. Va letto PRIMA
-        di un `save_config` (che consuma il marker) per poi poter risincronizzare il campo GUI."""
-        cfg = self._config if isinstance(self._config, dict) else {}
-        return bool(cfg.get(config_store.TOKEN_LOAD_INCOMPLETE_KEY))
-
-    def _refill_token_entry_after_rehydrate(self, had_incomplete_load: bool) -> None:
-        """Ripopola il campo password del bot token quando un load-incompleto (keyring illeggibile al
-        load, #140) è stato/può essere risolto. `had_incomplete_load` = il marker era presente PRIMA
-        del save/avvio (catturato dal chiamante con `_had_incomplete_token_load`, perché `save_config`
-        lo consuma). Senza, il save/AVVIO successivo leggerebbe il campo vuoto e ricostruirebbe la
-        config azzerando il token → `save_config` lo cancellerebbe dal keyring (Codex/CodeRabbit #256).
-
-        GATE su `had_incomplete_load`: agisce SOLO dopo un load-incompleto, MAI per un campo svuotato a
-        mano (clear DELIBERATO: nessun marker → `had_incomplete_load` False). Non sovrascrive mai un
-        valore digitato dall'utente (campo già pieno). Reidrata il token preferendo la config (già
-        reidratata dal save) e, in mancanza, leggendolo ORA dal keyring (caso START a outage appena
-        rientrato, prima di qualsiasi save)."""
-        if not had_incomplete_load:
-            return
-        entry = getattr(self, "_e_token", None)
-        if entry is None or entry.get().strip():
-            return                                  # campo già pieno (utente) → non toccare
-        cfg = self._config if isinstance(self._config, dict) else {}
-        tok = str(cfg.get("bot_token") or "")
-        if not tok:
-            # Non ancora in config (es. START prima di un save): leggilo ORA dal keyring, che può
-            # essere tornato leggibile dopo l'outage.
-            tok = str(config_store.token_store.load_token() or "")
-            if tok and isinstance(self._config, dict):
-                self._config["bot_token"] = tok     # reidrata anche in config per il runtime
-        if tok:
-            entry.delete(0, "end")
-            entry.insert(0, tok)
-
     def _save_config(self) -> dict:
-        # Prima di leggere il campo token, risincronizzalo se il load era incompleto (keyring
-        # illeggibile al load, #140/Codex #256): reidrata dal keyring e ripopola il campo, così questo
-        # save non lo ricostruisce vuoto cancellando il token.
-        self._refill_token_entry_after_rehydrate(self._had_incomplete_token_load())
         # Timeout robusto: un valore non numerico non deve crashare il salvataggio
         # (PR-13/#10). Se invalido, si tiene il default e si avvisa nel log.
         delay, delay_err = settings_validation.parse_timeout(self._e_delay.get())
@@ -993,12 +949,9 @@ class App(ctk.CTk):
     def _on_retention_change(self, label: str):
         """Imposta i giorni di conservazione log, persiste e pulisce subito (PR-3)."""
         days = _RETENTION_LABELS.get(label, 0)
-        had_incomplete = self._had_incomplete_token_load()   # PRIMA del save (lo consuma)
         self._config["log_retention_days"] = days
         saved, ok = save_config(self._config, CONFIG_FILE)
         self._config = saved
-        # Reidratazione load-incompleto risolta da questo save → ripopola il campo token (#140/#256).
-        self._refill_token_entry_after_rehydrate(had_incomplete)
         if not ok:
             self._log("❌ Salvataggio impostazione retention FALLITO su disco.")
             return
@@ -1020,12 +973,9 @@ class App(ctk.CTk):
     def _on_debug_toggle(self):
         """Attiva/disattiva la modalità Debug (log dettagliato del percorso) e persiste."""
         on = bool(self._debug_var.get())
-        had_incomplete = self._had_incomplete_token_load()   # PRIMA del save (lo consuma)
         self._config["debug_log"] = on
         saved, ok = save_config(self._config, CONFIG_FILE)
         self._config = saved
-        # Reidratazione load-incompleto risolta da questo save → ripopola il campo token (#140/#256).
-        self._refill_token_entry_after_rehydrate(had_incomplete)
         self._log(f"🐞 Modalità Debug log: {'ON' if on else 'OFF'}"
                   f"{'' if ok else ' (salvataggio fallito su disco)'}.")
 
@@ -1417,10 +1367,6 @@ class App(ctk.CTk):
             # silenzioso nel thread del bot (PR-11, #11).
             self._log("❌ python-telegram-bot non disponibile: impossibile avviare il listener.")
             return
-        # Se il load era incompleto (keyring illeggibile al load, #140/Codex #256), reidrata il token
-        # dal keyring e ripopola il campo PRIMA della validazione: senza, l'AVVIO leggerebbe un token
-        # vuoto e bloccherebbe ("inserisci il Bot Token") anche se il keyring è tornato leggibile.
-        self._refill_token_entry_after_rehydrate(self._had_incomplete_token_load())
         # Validazione sui valori GREZZI dei campi PRIMA del salvataggio
         # (PR-13/#10): _save_config normalizza il timeout invalido al default,
         # quindi validare la cfg dopo il save non vedrebbe più l'errore e il
@@ -2506,15 +2452,12 @@ class App(ctk.CTk):
             # impostazioni attive (source_chats/dry_run/…) sovrascrivendo `self._config`
             # con uno snapshot vecchio. Sovrapponi SOLO le chiavi auto-sync (Codex).
             cfg = dict(self._config) if isinstance(self._config, dict) else self._load_config()
-            had_incomplete = self._had_incomplete_token_load()   # PRIMA del save (lo consuma)
             cfg["betfair_auto_sync"] = bool(enabled)
             cfg["betfair_auto_sync_hour"] = int(hour)
             if sports is not None:
                 cfg["betfair_sync_sports"] = list(sports)
             saved, ok = save_config(cfg, CONFIG_FILE)
             self._config = saved
-            # Reidratazione load-incompleto risolta da questo save → ripopola il campo token (#140/#256).
-            self._refill_token_entry_after_rehydrate(had_incomplete)
             self._save_ok = ok
             if ok:
                 self._log(f"🔵 Auto-sync Betfair {'ON' if enabled else 'OFF'} (orario {hour:02d}).")

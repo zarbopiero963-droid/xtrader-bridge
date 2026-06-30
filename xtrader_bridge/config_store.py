@@ -592,9 +592,8 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
             to_save["bot_token"] = ""
             if stored:
                 # Keyring leggibile e col valore → reidrata: il load è ora completo, il token reale
-                # torna in `in_memory` per il runtime e i save successivi sono normali. Si PRESERVA.
-                # Il marker è consumato (il chiamante GUI, che ha catturato il suo valore PRIMA del
-                # save, risincronizza poi il campo token col valore reidratato).
+                # torna in `in_memory` per il runtime e i save successivi sono normali. Si PRESERVA;
+                # il marker è consumato (load risolto).
                 in_memory["bot_token"] = stored
                 to_save["bot_token_storage"] = "keyring"
                 logger.warning("Bot token NON cancellato: il campo vuoto deriva da un load incompleto "

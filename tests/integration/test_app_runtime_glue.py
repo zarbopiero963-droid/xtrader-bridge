@@ -24,7 +24,7 @@ import csv
 
 import pytest
 
-from xtrader_bridge import config_store, safety_guard, signal_dedupe, signal_queue
+from xtrader_bridge import safety_guard, signal_dedupe, signal_queue
 
 
 # ── helper ────────────────────────────────────────────────────────────────────
@@ -657,86 +657,3 @@ def test_schedule_expiry_concorrente_non_lascia_timer_orfani(make_app, app_mod, 
     # Il cancel di teardown (sotto lock) lo ferma: nessun timer vivo residuo.
     a._cancel_expiry_timer()
     assert [t for t in started if t not in cancelled] == []
-
-
-# ── #140/#256: refresh del campo token GUI dopo reidratazione dal keyring ──────────
-
-class _FakeTokenEntry:
-    """Stand-in del campo password del bot token (`_e_token`): get/delete/insert minimi."""
-
-    def __init__(self, value=""):
-        self._v = value
-
-    def get(self):
-        return self._v
-
-    def delete(self, *a):
-        self._v = ""
-
-    def insert(self, idx, text):
-        self._v = text
-
-
-_MARK = config_store.TOKEN_LOAD_INCOMPLETE_KEY
-
-
-def test_had_incomplete_token_load(make_app):
-    """`_had_incomplete_token_load` riflette la presenza del marker in `self._config` (va letto
-    PRIMA del save, che lo consuma)."""
-    assert make_app(config={_MARK: True})._had_incomplete_token_load() is True
-    assert make_app(config={"bot_token": "X"})._had_incomplete_token_load() is False
-
-
-def test_refill_token_entry_dopo_reidratazione(make_app):
-    """#140/#256 (Codex/CodeRabbit): se il load era incompleto (`had_incomplete_load=True`, marker
-    catturato prima del save) e il save ha reidratato il token in `self._config` ma il campo GUI è
-    rimasto vuoto, `_refill_token_entry_after_rehydrate` lo ripopola. Senza, il save/AVVIO successivo
-    ricostruirebbe un token vuoto e `save_config` lo cancellerebbe (perdita al 2° save)."""
-    a = make_app(config={"bot_token": "LIVE:TOKEN", "bot_token_storage": "keyring"})
-    a._e_token = _FakeTokenEntry("")                 # campo vuoto dopo l'outage al load
-    a._refill_token_entry_after_rehydrate(True)      # had_incomplete=True
-    assert a._e_token.get() == "LIVE:TOKEN"          # ripopolato dal token reidratato in config
-
-
-def test_refill_reidrata_dal_keyring_se_config_vuota(make_app, monkeypatch):
-    """#256 (Codex line 1405, START): se al refill la config NON ha ancora il token (es. START dopo
-    un outage appena rientrato, prima di qualsiasi save), si legge il token ORA dal keyring e si
-    popola campo + config. Così START non blocca con 'inserisci il Bot Token'."""
-    monkeypatch.setattr(config_store.token_store, "load_token", lambda: "KR:TOKEN")
-    a = make_app(config={"bot_token": "", "bot_token_storage": "keyring"})
-    a._e_token = _FakeTokenEntry("")
-    a._refill_token_entry_after_rehydrate(True)
-    assert a._e_token.get() == "KR:TOKEN"            # letto dal keyring
-    assert a._config["bot_token"] == "KR:TOKEN"      # reidratato anche in config (runtime)
-
-
-def test_refill_non_sovrascrive_campo_gia_pieno(make_app):
-    """Contro-prova: col load-incompleto ma il campo già pieno (token digitato dall'utente) NON
-    viene sovrascritto — l'input dell'utente vince."""
-    a = make_app(config={"bot_token": "OLD:CONFIG:TOKEN", "bot_token_storage": "keyring"})
-    a._e_token = _FakeTokenEntry("USER:TYPED:TOKEN")
-    a._refill_token_entry_after_rehydrate(True)
-    assert a._e_token.get() == "USER:TYPED:TOKEN"    # input utente preservato
-
-
-def test_refill_no_op_clear_deliberato(make_app):
-    """#256 (CodeRabbit Major / Codex P2): clear DELIBERATO — la config ha ancora il vecchio token
-    ma il load NON era incompleto (`had_incomplete_load=False`) e l'utente ha svuotato il campo a
-    mano → il refill NON deve ripopolare. Senza il gate, il vecchio token sarebbe resuscitato e il
-    clear/delete non verrebbe mai eseguito.
-
-    Fail-first: prima (refill incondizionato) il campo veniva ripopolato con 'ABC'."""
-    a = make_app(config={"bot_token": "ABC", "bot_token_storage": "keyring"})
-    a._e_token = _FakeTokenEntry("")                 # campo svuotato a mano per cancellare
-    a._refill_token_entry_after_rehydrate(False)     # NON load-incompleto
-    assert a._e_token.get() == ""                    # resta vuoto: clear deliberato preservato
-
-
-def test_refill_no_op_se_token_non_reidratabile(make_app, monkeypatch):
-    """Load-incompleto ma il token NON è reidratabile (config vuota e keyring ancora giù): il refill
-    non fa nulla, il campo resta vuoto (START bloccherà legittimamente chiedendo il token)."""
-    monkeypatch.setattr(config_store.token_store, "load_token", lambda: None)
-    a = make_app(config={"bot_token": "", "bot_token_storage": "keyring"})
-    a._e_token = _FakeTokenEntry("")
-    a._refill_token_entry_after_rehydrate(True)
-    assert a._e_token.get() == ""                    # niente da ripopolare
