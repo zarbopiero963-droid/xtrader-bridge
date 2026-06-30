@@ -190,20 +190,25 @@ def test_logout_status_non_success_non_logga_la_response(tmp_path, caplog):
     assert "response body leaked" not in caplog.text
 
 
-def test_logout_risposta_non_dict_pulisce_comunque_il_token(tmp_path):
+def test_logout_risposta_non_dict_pulisce_comunque_il_token(tmp_path, caplog):
     """Resilienza (CodeRabbit): se il transport ritorna un JSON valido ma NON oggetto (lista/
     stringa, es. proxy malformato), il clear locale deve avvenire COMUNQUE (best-effort), senza
-    che `.get` sollevi e salti la pulizia.
+    che `.get` sollevi e salti la pulizia. E il warning del ramo non-dict NON deve loggare il
+    payload grezzo (che potrebbe portare token/body sensibili) — solo lo `status` generico.
 
     Fail-first: col vecchio `(data or {}).get(...)` un payload truthy non-dict sollevava
     AttributeError e la sessione restava 'loggata' (token non cancellato)."""
     sess = BetfairSession()
-    client = BetfairAuthClient(session=sess, transport=_login_ok,
-                               logout_transport=lambda t, k: ["risposta", "inattesa"])
+    client = BetfairAuthClient(
+        session=sess, transport=_login_ok,
+        logout_transport=lambda t, k: ["tok", "response body leaked"])  # marker token/body
     client.login(_creds(tmp_path))
-    client.logout()                                 # non solleva
+    with caplog.at_level("WARNING"):
+        client.logout()                             # non solleva
     assert client.is_logged_in is False
     assert sess.token is None
+    assert "tok" not in caplog.text                 # il payload grezzo NON finisce nel warning
+    assert "response body leaked" not in caplog.text
 
 
 def test_logout_senza_login_non_chiama_il_server(tmp_path):
