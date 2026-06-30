@@ -485,7 +485,7 @@ class App(ctk.CTk):
         non lo è)."""
         old_cfg = self._config if isinstance(self._config, dict) else {}
         cfg = self._gate_dangerous_transitions(old_cfg, dict(new_cfg))
-        saved, ok = save_config(cfg, CONFIG_FILE)
+        saved, ok = result = save_config(cfg, CONFIG_FILE)
         self._config = saved
         # PR-08c: se il save ha reidratato il token dal keyring (load era incompleto), registralo
         # nel redattore log. Il campo password lo ripopola già `_populate_form(saved)` nel chiamante
@@ -496,7 +496,9 @@ class App(ctk.CTk):
         # Banner rosso persistente se il profilo ha attivato il REALE: senza questo il reale
         # resterebbe attivo senza warning visibile fino al successivo save/start/riavvio.
         self._update_real_mode_banner(saved)
-        return saved, ok
+        # Ritorna il SaveResult (si spacchetta come `(saved, ok)` per i chiamali storici, ma porta
+        # anche `.status` per il messaggio specifico in `_profiles_loaded`) — contratto #255 line-647.
+        return result
 
     def _save_config(self) -> dict:
         # Cattura il marker PRIMA di qualsiasi consumo (sia il refill pre-lettura qui sotto sia
@@ -541,7 +543,7 @@ class App(ctk.CTk):
         # `_gate_dangerous_transitions`.
         old_cfg = self._config if isinstance(self._config, dict) else {}
         cfg = self._gate_dangerous_transitions(old_cfg, cfg)
-        saved, ok = save_config(cfg, CONFIG_FILE)
+        saved, ok = result = save_config(cfg, CONFIG_FILE)
         self._config = saved
         # Refill POST-save (Codex #257): se il refill pre-lettura aveva MANCATO (keyring giù in quel
         # momento) ma `save_config` ha poi reidratato il token (keyring rientrato a metà chiamata)
@@ -558,8 +560,9 @@ class App(ctk.CTk):
         # `_save_ok` lascia decidere al bottone se loggare il "salvato" di conferma.
         self._save_ok = ok
         if not ok:
-            self._log("❌ Salvataggio config FALLITO su disco: le impostazioni sono attive "
-                      "solo in memoria. Controlla permessi/spazio del percorso config.")
+            # Messaggio SPECIFICO della causa (#255 line-647): disco vs keyring (token rimandato)
+            # vs config corrotto. Niente più "FALLITO su disco" quando il problema è il keyring.
+            self._log("❌ " + config_store.save_status_message(result.status))
         # Mantiene il pannello "Chat ascoltate" allineato alla config salvata: unico
         # punto, così non va ripetuto a ogni call site (bottone Salva, AVVIA, ...).
         self._refresh_listened_chats()
@@ -1043,14 +1046,15 @@ class App(ctk.CTk):
         days = _RETENTION_LABELS.get(label, 0)
         self._config["log_retention_days"] = days
         had = self._had_incomplete_token_load()   # PR-08c: il save consuma il marker
-        saved, ok = save_config(self._config, CONFIG_FILE)
+        saved, ok = result = save_config(self._config, CONFIG_FILE)
         self._config = saved
         # Reidratazione del campo token (PR-08c): un save non-GUI può aver reidratato il token
         # dal keyring e consumato il marker lasciando il campo password vuoto → il save normale
         # successivo lo scambierebbe per un clear. Risincronizza il campo col token reidratato.
         self._resync_token_field(had)
         if not ok:
-            self._log("❌ Salvataggio impostazione retention FALLITO su disco.")
+            # Causa SPECIFICA (#255 line-647): disco vs keyring vs config corrotto.
+            self._log("❌ Retention log NON salvata. " + config_store.save_status_message(result.status))
             return
         if days:
             removed = event_log.purge_old_logs(days)
@@ -1072,12 +1076,14 @@ class App(ctk.CTk):
         on = bool(self._debug_var.get())
         self._config["debug_log"] = on
         had = self._had_incomplete_token_load()   # PR-08c: il save consuma il marker
-        saved, ok = save_config(self._config, CONFIG_FILE)
+        saved, ok = result = save_config(self._config, CONFIG_FILE)
         self._config = saved
         # Reidratazione del campo token dopo un save non-GUI (PR-08c): vedi _on_retention_change.
         self._resync_token_field(had)
-        self._log(f"🐞 Modalità Debug log: {'ON' if on else 'OFF'}"
-                  f"{'' if ok else ' (salvataggio fallito su disco)'}.")
+        self._log(f"🐞 Modalità Debug log: {'ON' if on else 'OFF'}.")
+        if not ok:
+            # Causa SPECIFICA (#255 line-647): disco vs keyring vs config corrotto.
+            self._log("⚠️ Impostazione Debug NON salvata. " + config_store.save_status_message(result.status))
 
     def _dbg(self, msg: str):
         """Log di percorso dettagliato, scritto SOLO se la modalità Debug è attiva
@@ -2454,7 +2460,7 @@ class App(ctk.CTk):
 
         def _profiles_loaded(new_cfg):
             """Profilo caricato: persiste (con gate sicurezza + banner), aggiorna form/chat."""
-            saved, ok = self._persist_loaded_profile(new_cfg)
+            saved, ok = result = self._persist_loaded_profile(new_cfg)
             self._populate_form(saved)
             self._refresh_listened_chats()
             # Un profilo applicato cambia config.json: TUTTI i pannelli editabili già
@@ -2486,8 +2492,9 @@ class App(ctk.CTk):
             if ok:
                 self._log("📁 Profilo caricato e applicato (token invariato).")
             else:
-                self._log("⚠️ Profilo applicato in memoria, ma salvataggio su disco "
-                          "FALLITO (token invariato). Controlla permessi/spazio.")
+                # Causa SPECIFICA (#255 line-647): disco vs keyring vs config corrotto.
+                self._log("⚠️ Profilo applicato in memoria (token invariato), ma NON persistito. "
+                          + config_store.save_status_message(result.status))
 
         def _sources_saved(new_cfg):
             """Sorgenti salvate: aggiorna config in memoria + chat ascoltate (START usa
@@ -2574,7 +2581,7 @@ class App(ctk.CTk):
             if sports is not None:
                 cfg["betfair_sync_sports"] = list(sports)
             had = self._had_incomplete_token_load()   # PR-08c: il save consuma il marker
-            saved, ok = save_config(cfg, CONFIG_FILE)
+            saved, ok = result = save_config(cfg, CONFIG_FILE)
             self._config = saved
             # Reidratazione del campo token dopo un save non-GUI (PR-08c): vedi _on_retention_change.
             self._resync_token_field(had)
@@ -2595,8 +2602,9 @@ class App(ctk.CTk):
                             pass
                     self._autosync_after_id = self.after(0, self._betfair_autosync_tick)
             else:
-                self._log("⚠️ Auto-sync Betfair: salvataggio config FALLITO "
-                          "(impostazione NON persistita). Controlla permessi/spazio.")
+                # Causa SPECIFICA (#255 line-647): disco vs keyring vs config corrotto.
+                self._log("⚠️ Auto-sync Betfair NON persistito. "
+                          + config_store.save_status_message(result.status))
 
         def _make_betfair(parent):
             """Crea la tab Betfair Sync (credenziali locali + stato login/sync + auto).
