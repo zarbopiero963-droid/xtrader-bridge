@@ -356,6 +356,55 @@ class App(ctk.CTk):
         self._register_secret_token(cfg)   # #184 M7: token noto → mascherato nei log
         return cfg
 
+    def _gate_dangerous_transitions(self, old_cfg, cfg):
+        """Applica le conferme di sicurezza alle transizioni PERICOLOSE di `cfg` rispetto a
+        `old_cfg`, e ritorna `cfg` (eventualmente corretto). Due gate:
+
+        - **modalità REALE** (#136 p4): attivare il reale (sim→reale) è la transizione più
+          pericolosa → doppia conferma (`_confirm_real_mode`). Se annullata, si ripristina la
+          simulazione (`dry_run=True`) sia nella cfg sia nella spunta del form.
+        - **coda MULTI-segnale** (#136 p5): passare a una coda multi-riga (più scommesse
+          simultanee) richiede conferma (`_confirm_multi_signal`). Se rifiutata, si torna a
+          `OVERWRITE_LAST` (un solo segnale attivo) nella cfg e nel form.
+
+        Centralizzato qui perché va applicato a OGNI punto che cambia la config in modo
+        persistente: il bottone Salva **e** il CARICAMENTO PROFILO — altrimenti un profilo con
+        `dry_run:false`/coda multi attiverebbe reale/multi senza conferma (#141/#142)."""
+        if real_mode.requires_confirmation(old_cfg, cfg):
+            if self._confirm_real_mode():
+                # Evento di AUDIT nel log persistente (tracciabilità dell'attivazione).
+                self._log("⚠️ " + real_mode.enabled_message())
+            else:
+                cfg["dry_run"] = True
+                if "dry_run" in self._adv:
+                    self._adv["dry_run"].set(True)   # ri-spunta "🧪 Simulazione (DRY_RUN)"
+                self._log("↩️ Attivazione modalità REALE ANNULLATA: il bridge resta in simulazione.")
+        if multi_signal.requires_warning(old_cfg, cfg):
+            if not self._confirm_multi_signal(
+                    cfg.get("max_active_signals", DEFAULTS["max_active_signals"])):
+                cfg["queue_mode"] = signal_queue.OVERWRITE_LAST
+                if "queue_mode" in self._adv:
+                    self._adv["queue_mode"].set(signal_queue.OVERWRITE_LAST)
+                self._log("↩️ Modalità coda multi-segnale ANNULLATA: resto a un solo segnale "
+                          "attivo (OVERWRITE_LAST).")
+        return cfg
+
+    def _persist_loaded_profile(self, new_cfg):
+        """Persiste un profilo CARICATO applicando gli STESSI gate di sicurezza del bottone
+        Salva (#141/#142) e aggiornando il banner reale (#141, Codex review), poi ritorna
+        `(saved, ok)`. La parte di refresh dei pannelli/form resta nel chiamante (è solo
+        presentazione). Estratto per essere testabile headless (la closure `_profiles_loaded`
+        non lo è)."""
+        old_cfg = self._config if isinstance(self._config, dict) else {}
+        cfg = self._gate_dangerous_transitions(old_cfg, dict(new_cfg))
+        saved, ok = save_config(cfg, CONFIG_FILE)
+        self._config = saved
+        self._save_ok = ok
+        # Banner rosso persistente se il profilo ha attivato il REALE: senza questo il reale
+        # resterebbe attivo senza warning visibile fino al successivo save/start/riavvio.
+        self._update_real_mode_banner(saved)
+        return saved, ok
+
     def _save_config(self) -> dict:
         # Timeout robusto: un valore non numerico non deve crashare il salvataggio
         # (PR-13/#10). Se invalido, si tiene il default e si avvisa nel log.
@@ -384,30 +433,12 @@ class App(ctk.CTk):
         cfg, self._adv_errors = settings_controller.apply_advanced(cfg, adv_form)
         for err in self._adv_errors:
             self._log(f"⚠️ Impostazioni avanzate: {err}")
-        # UX modalità reale (#136 punto 4): attivare la modalità REALE (disattivare DRY_RUN)
-        # è la transizione più pericolosa → DOPPIA CONFERMA. Solo sulla transizione sim→reale
-        # si chiede di digitare la frase di conferma; se non confermata si ripristina la
-        # simulazione (sia nella cfg sia nella spunta GUI) e non si attiva nulla per sbaglio.
+        # Transizioni pericolose (attivazione REALE / coda multi-segnale): doppia conferma.
+        # STESSA logica usata dal CARICAMENTO PROFILO, così un profilo con dry_run:false o
+        # coda multi-riga NON bypassa i gate (#141/#142) — estratta in
+        # `_gate_dangerous_transitions`.
         old_cfg = self._config if isinstance(self._config, dict) else {}
-        if real_mode.requires_confirmation(old_cfg, cfg):
-            if self._confirm_real_mode():
-                # Evento di AUDIT nel log persistente (tracciabilità dell'attivazione).
-                self._log("⚠️ " + real_mode.enabled_message())
-            else:
-                cfg["dry_run"] = True
-                if "dry_run" in self._adv:
-                    self._adv["dry_run"].set(True)   # ri-spunta "🧪 Simulazione (DRY_RUN)"
-                self._log("↩️ Attivazione modalità REALE ANNULLATA: il bridge resta in simulazione.")
-        # UX multi-signal (#136 punto 5): attivare una modalità coda MULTI-riga (più scommesse
-        # simultanee) richiede una conferma; se rifiutata si torna a un solo segnale attivo.
-        if multi_signal.requires_warning(old_cfg, cfg):
-            if not self._confirm_multi_signal(
-                    cfg.get("max_active_signals", DEFAULTS["max_active_signals"])):
-                cfg["queue_mode"] = signal_queue.OVERWRITE_LAST
-                if "queue_mode" in self._adv:
-                    self._adv["queue_mode"].set(signal_queue.OVERWRITE_LAST)
-                self._log("↩️ Modalità coda multi-segnale ANNULLATA: resto a un solo segnale "
-                          "attivo (OVERWRITE_LAST).")
+        cfg = self._gate_dangerous_transitions(old_cfg, cfg)
         saved, ok = save_config(cfg, CONFIG_FILE)
         self._config = saved
         self._register_secret_token(saved)     # #184 M7: aggiorna il token mascherato nei log
@@ -2276,10 +2307,8 @@ class App(ctk.CTk):
             self._config = new_cfg
 
         def _profiles_loaded(new_cfg):
-            """Profilo caricato: persiste su disco, aggiorna config+form e le chat."""
-            saved, ok = save_config(new_cfg, CONFIG_FILE)
-            self._config = saved
-            self._save_ok = ok
+            """Profilo caricato: persiste (con gate sicurezza + banner), aggiorna form/chat."""
+            saved, ok = self._persist_loaded_profile(new_cfg)
             self._populate_form(saved)
             self._refresh_listened_chats()
             # Un profilo applicato cambia config.json: TUTTI i pannelli editabili già
