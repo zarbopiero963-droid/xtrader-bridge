@@ -1460,6 +1460,13 @@ class App(ctk.CTk):
         # prima del START, altrimenti il diario avrebbe un CSV_WRITTEN senza il clear corrispondente.
         self._journal_csv_cleared_if_had_row("CSV_CLEARED", reason="start")
 
+        # Nuovo epoch PRIMA di marcare la sessione attiva (#53): un vecchio supervisor in backoff
+        # (sessione precedente) valuta `_is_current()` = `_running and _listener_epoch == epoch`.
+        # Se incrementiamo l'epoch DOPO `_running=True`, nella finestra tra i due un vecchio
+        # supervisor troverebbe `_running` True ed epoch ancora vecchio → si riconnetterebbe con
+        # la cfg precedente. Bumpando qui, l'epoch differisce subito → il vecchio loop non è più
+        # current e non riparte.
+        self._listener_epoch += 1
         self._running = True
         # Nuova sessione: azzera il contatore CSV-lock così i fallimenti di una sessione
         # precedente non "colano" in questa e non causano una falsa escalation (Codex #156).
@@ -1506,8 +1513,8 @@ class App(ctk.CTk):
             self._log("⚠️ Modalità REALE: i segnali validi verranno scritti nel CSV.")
         self._log("👂 In ascolto su Telegram...")
 
-        # Nuovo epoch: invalida un eventuale vecchio supervisor ancora in backoff.
-        self._listener_epoch += 1
+        # Epoch di QUESTA sessione (già incrementato sopra, PRIMA di `_running=True`, #53):
+        # passato al thread del listener per il gate `_is_current()`/`_epoch_current()`.
         epoch = self._listener_epoch
         self._bot_thread = threading.Thread(
             target=self._run_bot, args=(cfg, epoch), daemon=True)
@@ -1647,7 +1654,15 @@ class App(ctk.CTk):
                 # un segnale "live" ma un arretrato dell'outage.
                 msg_date = getattr(msg, "date", None)
                 msg_epoch = msg_date.timestamp() if msg_date is not None else None
-                max_age = cfg.get("max_signal_age", message_freshness.DEFAULT_MAX_AGE)
+                # #53: il max_age effettivo non supera la vita della riga CSV per la modalità
+                # coda attiva — `signal_queue.timeout_from_config(cfg)`, cioè `confirmation_timeout`
+                # in QUEUE_UNTIL_CONFIRMED, altrimenti `clear_delay` (Codex): usare la STESSA
+                # sorgente di timeout della coda evita di clampare a `clear_delay` quando la riga
+                # vive in realtà più a lungo (default 120s conferma vs 90s clear). Un messaggio già
+                # più vecchio della vita CSV è trattato come stantio, non scritto.
+                max_age = message_freshness.effective_max_age(
+                    cfg.get("max_signal_age", message_freshness.DEFAULT_MAX_AGE),
+                    signal_queue.timeout_from_config(cfg))
                 text = msg.text or msg.caption or ''
                 runtime_chat = str(msg.chat_id)
                 # Live-reload del routing (issue #82): INSTRADAMENTO e PARSING (chat ammesse,
@@ -1658,9 +1673,13 @@ class App(ctk.CTk):
                 # invece legata alla sessione (`cfg`): DRY_RUN/limiti, path CSV e token NON
                 # cambiano a metà sessione, per non far scattare una bet reale o un CSV stantio.
                 route = self._config if isinstance(self._config, dict) else cfg
-                # Decisione di instradamento ESTRATTA e testabile in CI (#108): freschezza →
-                # filtro chat (fail-closed) → chat-notifiche (conferma o conflitto) →
-                # should_process. La glue qui resta solo dispatch + log.
+                # Decisione di instradamento ESTRATTA e testabile in CI (#108): filtro chat
+                # (fail-closed) → chat-notifiche (conferma o conflitto) → freschezza →
+                # should_process. Il guard "nessun filtro" è PRIMO (Codex): se la config viva
+                # azzera i filtri sorgente ma resta la notif-chat, l'instradamento conferma non
+                # deve partire da uno stato prima fail-closed. La chat-notifiche resta PRIMA della
+                # freschezza così una conferma ritardata non è scartata come stantia (#53). La
+                # glue qui resta solo dispatch + log.
                 decision = telegram_dispatch.decide(
                     route, runtime_chat, text, msg_epoch, time.time(), max_age)
                 if decision == telegram_dispatch.IGNORE_STALE:
