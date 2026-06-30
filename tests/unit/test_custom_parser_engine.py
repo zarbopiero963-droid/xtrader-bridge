@@ -272,6 +272,24 @@ def test_matches_message_set_riconoscimento_fisso_completo_blocca_estrazione_opz
     assert eng.matches_message(defn, "Promo non pertinente\n") is False
 
 
+def test_matches_message_id_fissi_con_mappatura_mercati_non_e_fisso_completo():
+    # #74 review (Codex): una mappatura MERCATI può azzerare MarketId/SelectionId fissi (stale-ID)
+    # e validare la riga sui nomi mappati. Quindi ID fissi + `market_mapping_profiles` NON sono
+    # "fisso-completi": un parser BOTH che estrae EventName (setup normale) deve continuare a
+    # fare match, altrimenti il path supportato verrebbe scartato come NO_CONTENT_MATCH.
+    defn = cp.CustomParserDef(name="Both", mode="BOTH",
+                              market_mapping_profiles=["mercati"], rules=[
+        cp.FieldRule(target="MarketId", fixed_value="1.234"),
+        cp.FieldRule(target="SelectionId", fixed_value="5678"),
+        cp.FieldRule(target="EventName", start_after="🆚", end_before="\n", required=False),
+    ])
+    assert eng.matches_message(defn, "🆚Inter v Milan\n") is True
+    # Senza mappatura mercati gli stessi ID fissi tornano "fisso-completi": l'estrazione
+    # opzionale non basta più (comportamento #74).
+    defn.market_mapping_profiles = []
+    assert eng.matches_message(defn, "🆚Inter v Milan\n") is False
+
+
 def test_apply_parser_target_duplicato_ultimo_vince_senza_doppioni():
     # Difesa: due regole stesso target (vietate da validate, ma il motore non
     # deve produrre stati incoerenti). L'ultima vince; missing_required dedup.

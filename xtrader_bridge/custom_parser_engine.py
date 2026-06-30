@@ -169,6 +169,13 @@ def matches_message(defn: CustomParserDef, text: str, mode: str = None) -> bool:
     relevant = recognition.recognition_fields_for_mode(mode)
     # I soli FISSI completano già un set di riconoscimento? → riga piazzabile per ogni messaggio.
     fixed_targets = {r.target for r in defn.rules if r.is_fixed() and str(r.fixed_value).strip()}
+    # Una mappatura MERCATI selezionata può AZZERARE `MarketId`/`SelectionId` fissi (stale-ID,
+    # #192) e validare la riga sui nomi mappati: in quel caso gli ID fissi NON rendono il
+    # riconoscimento "completo a prescindere dal messaggio", quindi non vanno contati — altrimenti
+    # si bloccherebbe il path supportato «ID fissi + mappatura mercati + EventName estratto»
+    # restituendo NO_CONTENT_MATCH per una riga mappata valida (#74 review Codex).
+    if defn.market_mapping_profiles:
+        fixed_targets -= {"MarketId", "SelectionId"}
     fixed_complete = recognition.is_valid({t: "x" for t in fixed_targets}, mode)
     for rule in defn.rules:
         if not rule.has_extraction() or rule.is_fixed() or extract_value(text, rule) == "":
