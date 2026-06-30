@@ -229,6 +229,18 @@ Non verificato in automatico: la chiamata di rete reale a navigation/catalogue.
   pendente, chain unica), così abilitarla a cavallo dell'ora non perde la finestra; il
   callback parte dalla config **live** e sovrappone solo le chiavi auto-sync, senza
   riscrivere impostazioni in memoria con uno snapshot di disco stantio (Codex).
+- Hardening audit #241 (finding Codex P2 non risolti su PR #172):
+  - `auto_sync.py`: `_ensure_loaded()` (carica lo stato persistito dell'ultima run) ora gira
+    **sotto il gate**, atomico con la decisione: due tick worker concorrenti non possono più
+    vedere `_loaded=True` con `_last_run_key` ancora `None` e rieseguire l'auto-sync nella
+    stessa ora ignorando una run già su disco.
+  - `app.py`: il **login manuale** (`_betfair_login_work`) **prenota il lock del motore**
+    prima del login (come `_cycle`); se è già preso (sync/auto-sync in corso) il login è
+    **rimandato** — così un «Accedi» durante il ciclo auto-sync non viene sloggato dal suo
+    `logout()` finale. La tab Betfair viene **seminata dalla config live** (`_betfair_autosync_seed`),
+    non da una rilettura del disco stantia dopo un save fallito.
+  - `README.md`: documentate le chiavi `betfair_auto_sync` / `betfair_auto_sync_hour` /
+    `betfair_sync_sports` nella tabella di configurazione.
 
 #### Smoke test manuale PR-P8 (Windows)
 1. Attiva «Auto sincronizza dizionario», imposta l'orario all'ora corrente: entro un

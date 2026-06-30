@@ -32,6 +32,23 @@ class _FakeEngine:
         self.app_key = key
 
 
+class _FakeEngineReserve(_FakeEngine):
+    """Engine finto che espone reserve()/release() (come `SyncEngine`), per i test della
+    serializzazione login manuale ↔ auto-sync (#172 audit)."""
+
+    def __init__(self, reserve_ok=True):
+        super().__init__()
+        self._reserve_ok = reserve_ok
+        self.events = []
+
+    def reserve(self, blocking=False):
+        self.events.append("reserve")
+        return self._reserve_ok
+
+    def release(self):
+        self.events.append("release")
+
+
 # ── _betfair_login_work: logica bloccante isolata (no Tk) ─────────────────────
 
 def test_betfair_login_work_successo_porta_appkey_nell_engine(make_app):
@@ -54,6 +71,51 @@ def test_betfair_login_work_fallito_e_safe(make_app):
     msg = a._betfair_login_work(creds)
     assert "fallito" in msg.lower()
     assert "SEGRETISSIMO" not in msg                          # nessun segreto nel messaggio
+
+
+def test_betfair_login_work_prenota_il_motore_e_rilascia(make_app):
+    # #172 audit (Codex): il login manuale PRENOTA il lock del motore prima del login e lo
+    # rilascia dopo, serializzandosi con l'auto-sync sulla sessione condivisa (così il
+    # logout finale dell'auto-sync non slogga una sessione appena creata a mano).
+    a = make_app(running=True)
+    a._betfair_auth_obj = _FakeAuth()
+    eng = _FakeEngineReserve(reserve_ok=True)
+    a._betfair_engine_obj = eng
+    creds = types.SimpleNamespace(app_key="K")
+    msg = a._betfair_login_work(creds)
+    assert "riuscito" in msg.lower()
+    assert a._betfair_auth_obj.calls == [creds]          # login eseguito
+    assert eng.app_key == "K"                            # app key portata nell'engine
+    assert eng.events[0] == "reserve"                    # prenotato PRIMA del login
+    assert eng.events[-1] == "release"                   # e rilasciato dopo
+
+
+def test_betfair_login_work_motore_occupato_rimanda_il_login(make_app):
+    # Se il motore è già prenotato (sync manuale o auto-sync in corso), il login manuale è
+    # RIMANDATO: non chiama login (non tocca la sessione condivisa) e non rilascia un lock
+    # che non ha preso.
+    a = make_app(running=True)
+    a._betfair_auth_obj = _FakeAuth()
+    eng = _FakeEngineReserve(reserve_ok=False)
+    a._betfair_engine_obj = eng
+    msg = a._betfair_login_work(types.SimpleNamespace(app_key="K"))
+    assert "rimandato" in msg.lower()
+    assert a._betfair_auth_obj.calls == []               # NESSUN login sulla sessione condivisa
+    assert eng.events == ["reserve"]                     # niente release (lock non preso da noi)
+
+
+def test_betfair_autosync_seed_usa_config_live_non_disco(make_app):
+    # #172 audit (Codex): il pannello Betfair va seminato dalla config LIVE in memoria, non
+    # da una rilettura del disco (stantia dopo un save fallito), altrimenti un edit
+    # successivo riscriverebbe valori vecchi sopra la config viva.
+    a = make_app(running=True, config={"betfair_auto_sync": True,
+                                       "betfair_auto_sync_hour": 9,
+                                       "betfair_sync_sports": ["Tennis"]})
+    # Se per errore leggesse il disco, otterrebbe valori DIVERSI: il test lo smaschera.
+    a._load_config = lambda: {"betfair_auto_sync": False, "betfair_auto_sync_hour": 23,
+                              "betfair_sync_sports": ["Calcio"]}
+    seed = a._betfair_autosync_seed()
+    assert seed == {"enabled": True, "hour": 9, "sports": ["Tennis"]}
 
 
 def test_betfair_login_work_engine_assente_non_crasha(make_app):

@@ -124,7 +124,6 @@ class AutoSyncScheduler:
         finestra, così i tick successivi della stessa ora **ritentano** (Codex)."""
         if not self.is_bridge_open():
             return None
-        self._ensure_loaded()
         # SOLO config leggera qui (enabled/hour/sports): le credenziali (keyring) NON
         # vanno lette a ogni tick (anche fuori orario o a run già fatta), né prima del
         # gate _running, altrimenti un keyring lento accatasta worker thread (CodeRabbit).
@@ -137,6 +136,12 @@ class AutoSyncScheduler:
         normalized_hour = normalize_hour(hour)
         # Check-and-set atomico: niente cicli sovrapposti (gate) + decisione pura.
         with self._gate:
+            # Carica lo stato persistito (ultima run) SOTTO il gate, così load+check sono
+            # atomici: due tick worker concorrenti (avvio + kick immediato su AppData lenta)
+            # non possono più vedere `_loaded=True` con `_last_run_key` ancora None mentre
+            # l'altro sta ancora leggendo il file di stato, e quindi rieseguire l'auto-sync
+            # nella stessa ora ignorando una run già registrata su disco (Codex).
+            self._ensure_loaded()
             if self._running:
                 return None
             if not should_run(now, enabled=enabled, hour=normalized_hour,

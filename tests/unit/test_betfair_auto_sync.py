@@ -422,6 +422,46 @@ def test_release_che_solleva_non_propaga_e_non_maschera_il_risultato():
     assert store["key"] == run_key(_NOW_23, 23)        # e persistita
 
 
+def test_load_state_atomico_sotto_gate_no_doppia_run():
+    # #172 audit (Codex): il caricamento dello stato persistito (`_ensure_loaded`) deve
+    # avvenire SOTTO il gate, atomico con la decisione. Se due tick worker concorrenti
+    # (startup tick + kick immediato all'enable, su AppData lenta) corrono mentre load_state
+    # è lento, senza atomicità il secondo vedrebbe `_loaded=True` ma `_last_run_key=None` e
+    # rieseguirebbe l'auto-sync (login/sync/logout) ignorando una run GIÀ registrata su disco.
+    import threading as _t
+
+    load_started = _t.Event()
+    release_load = _t.Event()
+
+    def _slow_load():
+        load_started.set()
+        release_load.wait(3)
+        return run_key(_NOW_23, 23)            # il disco dice: GIÀ eseguito oggi alle 23
+
+    auth, eng = _Auth(), _Engine()
+    sched = AutoSyncScheduler(auth=auth, engine=eng, get_config=_cfg(),
+                              load_state=_slow_load, save_state=lambda k: None)
+
+    results = {}
+
+    def _call(tag, now):
+        results[tag] = sched.maybe_run(now)
+
+    tA = _t.Thread(target=_call, args=("A", _NOW_23), name="tickA")
+    tA.start()
+    assert load_started.wait(2)               # A è dentro _slow_load (tiene il gate col fix)
+    tB = _t.Thread(target=_call, args=("B", datetime(2026, 7, 1, 23, 30, 0)), name="tickB")
+    tB.start()
+    release_load.set()                        # sblocca il load: A registra lo stato del disco
+    tA.join(3)
+    tB.join(3)
+
+    # Col fix entrambi vedono lo stato persistito (già eseguito oggi) → nessuna run.
+    assert results["A"] is None
+    assert results["B"] is None
+    assert auth.calls == []                   # NESSUN login/logout: niente doppia run
+
+
 def test_logout_che_solleva_non_impedisce_il_release():
     # Logout e release sono indipendenti: un logout che solleva (già best-effort) non deve
     # impedire il release del lock del motore. Regressione: il lock va sempre rilasciato.
