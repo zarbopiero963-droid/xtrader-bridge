@@ -460,19 +460,25 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
     keyring_changed = False        # se True, su disco-fallito va eseguito il rollback
     prior_keyring = None           # valore del keyring PRIMA della modifica (per il rollback)
     token_not_persisted = False    # il token NON è stato persistito → il save va segnalato non riuscito
+    # Dopo una corruzione recuperata (#199) il sentinel `bot_token_storage` è andato perso col file:
+    # lo stato di storage precedente è SCONOSCIUTO. NON va trattato come "prima installazione
+    # plaintext" (Codex P2) — il keyring potrebbe ancora contenere la credenziale migrata e un
+    # fallback in chiaro la declasserebbe silenziosamente. Si protegge come il caso "keyring":
+    # ogni ramo che altrimenti scriverebbe il token in chiaro lo DIFFERISCE invece (mai plaintext).
+    prior_is_keyring_or_unknown = prior_sentinel == "keyring" or post_corruption
     if token_present:
         if token:
             if token_store.available():
                 # Snapshot del valore PRECEDENTE distinguendo "assente" da "lettura fallita"
                 # (#140): serve come base per il rollback su disco-fallito.
                 prior_keyring, prior_read_ok = token_store.load_token_status()
-                if not prior_read_ok and prior_sentinel == "keyring":
-                    # Pre-lettura del keyring FALLITA con stato precedente "keyring" (Codex): non
-                    # conosciamo il valore migrato, quindi un rollback dopo disco-fallito non potrebbe
-                    # ripristinarlo. NON sovrascrivere il keyring (un save fallito cambierebbe la
-                    # credenziale in modo IRREVERSIBILE) e NON esporre il segreto in chiaro. Si
-                    # DIFFERISCE l'aggiornamento del token e il save è segnalato come NON riuscito (il
-                    # token già nel keyring resta valido e verrà reidratato).
+                if not prior_read_ok and prior_is_keyring_or_unknown:
+                    # Pre-lettura del keyring FALLITA con stato precedente "keyring" — o SCONOSCIUTO
+                    # post-corruzione (Codex): non conosciamo il valore migrato, quindi un rollback
+                    # dopo disco-fallito non potrebbe ripristinarlo. NON sovrascrivere il keyring (un
+                    # save fallito cambierebbe la credenziale in modo IRREVERSIBILE) e NON esporre il
+                    # segreto in chiaro. Si DIFFERISCE l'aggiornamento del token e il save è segnalato
+                    # come NON riuscito (il token eventualmente già nel keyring resta valido).
                     to_save["bot_token"] = ""
                     to_save["bot_token_storage"] = "keyring"
                     token_not_persisted = True
@@ -480,13 +486,13 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
                                    "(impossibile garantire un rollback sicuro né esporlo in chiaro). "
                                    "Riprova quando il keyring è stabile; il token memorizzato resta valido.")
                 elif not prior_read_ok:
-                    # Pre-lettura fallita ma lo stato precedente NON è "keyring" (install in chiaro o
-                    # prima installazione): NON c'è alcuna credenziale migrata nel keyring da proteggere
-                    # e il token è già/sta per essere su disco in chiaro. Azzerarlo CANCELLEREBBE il
-                    # token in chiaro esistente — una GUI re-invia SEMPRE il campo token, quindi anche
-                    # cambiare un'altra impostazione durante questo guasto transitorio perderebbe la
-                    # credenziale (Codex P2). Si PRESERVA il comportamento storico: token in chiaro su
-                    # disco, sentinel "plaintext", save RIUSCITO (il token resta persistito).
+                    # Pre-lettura fallita, stato precedente NON "keyring" e NESSUNA corruzione recente
+                    # (install in chiaro / prima installazione): NON c'è credenziale migrata nel keyring
+                    # da proteggere e il token è già/sta per essere su disco in chiaro. Azzerarlo
+                    # CANCELLEREBBE il token in chiaro esistente — una GUI re-invia SEMPRE il campo
+                    # token, quindi anche cambiare un'altra impostazione durante questo guasto
+                    # transitorio perderebbe la credenziale (Codex P2). Si PRESERVA il comportamento
+                    # storico: token in chiaro su disco, sentinel "plaintext", save RIUSCITO.
                     to_save["bot_token_storage"] = "plaintext"
                     logger.warning("Keyring illeggibile ora: il bot token resta in chiaro in %s "
                                    "(nessuna credenziale migrata da proteggere).", path)
@@ -494,12 +500,13 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
                     keyring_changed = True
                     to_save["bot_token"] = ""                # niente segreto in chiaro su disco
                     to_save["bot_token_storage"] = "keyring"
-                elif prior_sentinel == "keyring":
-                    # `available()` True ma set fallito (raro) e lo stato precedente era "keyring"
-                    # (#140 Codex): NON declassare a plaintext — scriverebbe in chiaro un segreto
-                    # prima protetto. Preserva "keyring" (il valore già memorizzato resta valido),
-                    # NON aggiornare il token ora e segnala il save come NON riuscito: il token NUOVO
-                    # non è persistito, la GUI non deve mostrare "salvato".
+                elif prior_is_keyring_or_unknown:
+                    # `available()` True ma set fallito (raro) e lo stato precedente era "keyring" —
+                    # o SCONOSCIUTO post-corruzione (#140 Codex): NON declassare a plaintext —
+                    # scriverebbe in chiaro un segreto forse prima protetto. Preserva "keyring" (il
+                    # valore eventualmente già memorizzato resta valido), NON aggiornare il token ora
+                    # e segnala il save come NON riuscito: il token NUOVO non è persistito, la GUI non
+                    # deve mostrare "salvato".
                     to_save["bot_token"] = ""
                     to_save["bot_token_storage"] = "keyring"
                     token_not_persisted = True
@@ -511,13 +518,14 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
                     # fallback storico al token in chiaro (prima installazione/plaintext).
                     to_save["bot_token_storage"] = "plaintext"
                     logger.warning("Keyring non scrivibile: il bot token resta in chiaro in %s.", path)
-            elif prior_sentinel == "keyring":
-                # Stato precedente "keyring" + keyring NON disponibile ORA = outage TRANSIENTE
-                # (Codex P2). NON declassare a plaintext: esporrebbe il segreto su disco per un
-                # guasto temporaneo. Preserva "keyring" e NON scrivere il token in chiaro; il
-                # keyring conserva (ancora) il valore. Un eventuale token NUOVO non può essere
-                # salvato ora → save DIFFERITO e segnalato NON riuscito (Codex/CodeRabbit): la GUI
-                # non deve mostrare "salvato" mentre il token nuovo è fuori sia da keyring sia da disco.
+            elif prior_is_keyring_or_unknown:
+                # Stato precedente "keyring" — o SCONOSCIUTO post-corruzione — + keyring NON
+                # disponibile ORA = outage TRANSIENTE (Codex P2). NON declassare a plaintext:
+                # esporrebbe il segreto su disco per un guasto temporaneo e declasserebbe una
+                # credenziale forse keyring-backed. Preserva "keyring" e NON scrivere il token in
+                # chiaro; il keyring conserva (eventualmente ancora) il valore. Un token NUOVO non
+                # può essere salvato ora → save DIFFERITO e segnalato NON riuscito (Codex/CodeRabbit):
+                # la GUI non deve mostrare "salvato" mentre il token nuovo è fuori sia da keyring sia da disco.
                 to_save["bot_token"] = ""
                 to_save["bot_token_storage"] = "keyring"
                 token_not_persisted = True

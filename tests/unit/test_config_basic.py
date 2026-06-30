@@ -1149,3 +1149,35 @@ def test_post_corruzione_con_token_reinserito_lo_salva_normalmente(tmp_path, mon
     on_disk = json.loads(p.read_text(encoding="utf-8"))
     assert on_disk["bot_token"] == ""                                  # non in chiaro
     assert on_disk["bot_token_storage"] == "keyring"
+
+
+def test_post_corruzione_pre_read_fallita_non_declassa_a_plaintext(tmp_path, monkeypatch):
+    """#140 (PR-08a, Codex P2 line 482): dopo una corruzione recuperata il sentinel è perso
+    (stato di storage SCONOSCIUTO). Se l'utente re-inserisce un token e `load_token_status`
+    fallisce (read_ok False) col keyring disponibile, NON si deve declassare a plaintext una
+    credenziale forse keyring-backed: si tratta il marker post-corruzione come stato ignoto e si
+    DIFFERISCE (ok=False, abort atomico, niente token in chiaro su disco).
+
+    Fail-first: prima il ramo `not prior_read_ok` (sentinel vuoto, post-corruzione ignorato)
+    cadeva nel fallback plaintext, scrivendo il token in chiaro e tornando ok=True."""
+    saved_calls = {"n": 0}
+    monkeypatch.setattr(config_store.token_store, "available", lambda: True)
+
+    def _save(t):
+        saved_calls["n"] += 1
+        return True
+    monkeypatch.setattr(config_store.token_store, "save_token", _save)
+    monkeypatch.setattr(config_store.token_store, "load_token", lambda: None)
+    monkeypatch.setattr(config_store.token_store, "load_token_status", lambda: (None, False))  # read FALLITA
+    monkeypatch.setattr(config_store.token_store, "delete_token", lambda: True)
+    p = tmp_path / "config.json"
+    p.write_text("xxx non json", encoding="utf-8")
+    loaded = config_store.load_config(str(p))               # corrotto → marker, sentinel perso, p→.bak
+    assert loaded.get(config_store.POST_CORRUPTION_KEY) is True
+    assert not loaded.get("bot_token_storage")              # sentinel SCONOSCIUTO (vuoto)
+    loaded["bot_token"] = "NEW:TOKEN"                        # l'utente re-inserisce il token
+    saved, ok = config_store.save_config(loaded, str(p))
+    assert ok is False                                      # stato ignoto + read fallita → differito
+    assert saved_calls["n"] == 0                            # keyring NON sovrascritto (nessun downgrade)
+    assert not p.exists()                                   # abort atomico: nessuna scrittura su disco
+    assert saved["bot_token"] == "NEW:TOKEN"                # in memoria resta (runtime), ma non persistito
