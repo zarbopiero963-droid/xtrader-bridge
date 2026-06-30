@@ -252,6 +252,30 @@ def test_negazione_in_clausola_separata_resta_conferma():
     assert cr.classify_outcome("scommessa non è stata piazzata") == cr.REJECTED
 
 
+# ── #31 review (Codex/CodeRabbit su PR-01): chiusura buchi del fail-safe ──────
+
+def test_errore_reale_non_mascherato_da_errore_negato():
+    # Review finding: un errore NEGATO non deve sopprimere un errore REALE più avanti.
+    # "no error but error occurred" / "nessun errore iniziale, errore piazzamento" → REJECTED.
+    assert cr.classify_outcome("no error but error occurred") == cr.REJECTED
+    assert cr.classify_outcome(
+        "Nessun errore iniziale, errore piazzamento scommessa piazzata") == cr.REJECTED
+
+
+def test_negazione_conferma_oltre_quattro_parole_resta_rifiuto():
+    # Review finding: una negazione adiacente nella STESSA clausola, anche distante >4 parole,
+    # resta un rifiuto (fail-safe). Prima la finestra fissa a 4 la lasciava passare.
+    assert cr.classify_outcome(
+        "scommessa non risulta essere stata ancora piazzata") == cr.REJECTED
+
+
+def test_senza_errori_e_conferma_non_rifiuto():
+    # Review finding: "senza"/"without" è un qualificatore di SUCCESSO, non una negazione del
+    # piazzamento: "senza errori scommessa piazzata" → CONFIRMED (non REJECTED).
+    assert cr.classify_outcome("senza errori scommessa piazzata") == cr.CONFIRMED
+    assert cr.classify_outcome("senza problemi scommessa piazzata") == cr.CONFIRMED
+
+
 def test_fallback_selezione_dentro_evento_non_basta():
     # Selection "Inter" è dentro EventName "Inter v Milan": la notifica non nomina
     # la selezione separatamente → niente match (porzioni distinte).

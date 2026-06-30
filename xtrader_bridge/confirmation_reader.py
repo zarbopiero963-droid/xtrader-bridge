@@ -68,18 +68,21 @@ def _norm(s) -> str:
     return str(s or "").lower()
 
 
-# Negatori che, ADIACENTI a una keyword di conferma, la ribaltano in rifiuto
-# ("non/not ... piazzata"). E negatori che, davanti a un termine d'errore generico,
-# lo rendono un esito POSITIVO ("no error"/"nessun errore" = successo). Tenuti distinti
-# perché "no" nega "error" ma non è una negazione di conferma sensata da sola.
-_CONFIRM_NEGATORS = ("non", "not", "nessun", "nessuna", "nessuno", "mai", "senza", "without")
+# Negatori che, nella stessa proposizione, ribaltano una keyword di conferma in rifiuto
+# ("non/not ... piazzata"). NON includono `senza`/`without`: quelle sono qualificatori di
+# SUCCESSO ("senza errori ... piazzata" = piazzata bene), non negazioni del piazzamento (#31
+# review). E negatori che, IMMEDIATAMENTE davanti a un termine d'errore generico, lo rendono
+# un esito POSITIVO ("no error"/"nessun errore"/"senza errori" = successo).
+_CONFIRM_NEGATORS = ("non", "not", "nessun", "nessuna", "nessuno", "mai")
 _ERROR_NEGATORS = ("no", "non", "not", "nessun", "nessuna", "nessuno", "senza", "without", "zero")
 # Reject keyword generiche la cui negazione indica successo (vedi `classify_outcome`, #31).
 _NEGATABLE_REJECTS = ("error", "errore")
 # Confini di clausola: una negazione oltre uno di questi NON si riferisce alla keyword.
 _CLAUSE_SPLIT = re.compile(r"[,.;:!?]")
-# Parole prima della keyword entro cui una negazione la riguarda (stessa proposizione).
-_NEG_WINDOW = 4
+# Finestra (parole prima) per la negazione di un TERMINE D'ERRORE: deve essere ADIACENTE
+# ("no error"), così "no error but error occurred" non maschera il secondo errore reale
+# (#31 review). La negazione di CONFERMA usa invece l'intera clausola (vedi `_occ_negation`).
+_ERROR_NEG_WINDOW = 2
 
 
 def _kw_pattern(keyword: str) -> str:
@@ -100,21 +103,29 @@ def _has_keyword(text: str, keyword: str) -> bool:
     return bool(pat) and re.search(pat, text) is not None
 
 
-def _negation_near(text: str, keyword: str, negators) -> bool:
-    """True se una parola di `negators` precede `keyword` entro `_NEG_WINDOW` parole SENZA
-    un confine di clausola in mezzo. Così una negazione in una proposizione **separata**
-    ("non serve altro, scommessa piazzata") NON nega la keyword, mentre una **adiacente**
-    ("non è stata piazzata") sì. Sostituisce la vecchia negazione GLOBALE che rifiutava la
-    conferma per una negazione ovunque nel testo, anche fuori contesto (#31)."""
+def _occ_negation(text: str, keyword: str, negators, window=None):
+    """Esamina OGNI occorrenza di `keyword` e dice se è negata da una parola di `negators`
+    che la precede nella STESSA clausola (oltre un confine `,.;:!?` la negazione non conta).
+
+    `window` = numero di parole-prima da guardare (None = intera clausola). Ritorna la coppia
+    ``(qualcuna_non_negata, qualcuna_negata)``. Serve a distinguere:
+    - negazione di CONFERMA su tutta la clausola ("non ... piazzata", a qualunque distanza);
+    - negazione di ERRORE solo ADIACENTE (window piccola), così un errore reale NON negato
+      più avanti nel testo non viene mascherato da un "no error" precedente (#31 review)."""
     pat = _kw_pattern(keyword)
+    any_unneg = any_neg = False
     if not pat:
-        return False
+        return (False, False)
     for m in re.finditer(pat, text):
         clause = _CLAUSE_SPLIT.split(text[:m.start()])[-1]
-        words = re.findall(r"\w+", clause)[-_NEG_WINDOW:]
+        words = re.findall(r"\w+", clause)
+        if window is not None:
+            words = words[-window:]
         if any(w in negators for w in words):
-            return True
-    return False
+            any_neg = True
+        else:
+            any_unneg = True
+    return (any_unneg, any_neg)
 
 
 # Ref ETICHETTATO nel testo: "Ref ABC123", "Rif: 123", "ID-9", "#ABC". Serve a
@@ -165,24 +176,31 @@ def classify_outcome(text: str, confirm_keywords=None, reject_keywords=None):
     t = _norm(text)
     rej = reject_keywords or DEFAULT_REJECT_KEYWORDS
     con = confirm_keywords or DEFAULT_CONFIRM_KEYWORDS
-    # I reject hanno la precedenza, MA un termine d'errore generico NEGATO ("no error",
-    # "nessun errore") indica SUCCESSO, non rifiuto: non conta come reject (#31). Gli altri
-    # reject (incl. le frasi negate esplicite come "non piazzata") restano hard-reject.
+    # I reject hanno la precedenza, MA un termine d'errore generico si ignora SOLO se TUTTE
+    # le sue occorrenze sono negate adiacenti ("no error"/"nessun errore" = successo). Se ne
+    # resta anche una NON negata (es. "no error but error occurred"), è un rifiuto reale:
+    # fail-safe, non si maschera un errore (#31 review). Gli altri reject (incl. le frasi
+    # negate esplicite come "non piazzata") restano hard-reject.
     for k in rej:
-        if _has_keyword(t, k):
-            if _norm(k).strip() in _NEGATABLE_REJECTS and _negation_near(t, k, _ERROR_NEGATORS):
+        if not _has_keyword(t, k):
+            continue
+        if _norm(k).strip() in _NEGATABLE_REJECTS:
+            unneg, _ = _occ_negation(t, k, _ERROR_NEGATORS, window=_ERROR_NEG_WINDOW)
+            if not unneg:
                 continue
-            return REJECTED
-    # Conferma: una keyword positiva conferma, salvo una negazione ADIACENTE (stessa
-    # proposizione) che la ribalta in rifiuto (fail-safe). Una negazione in una clausola
-    # SEPARATA non conta più (#31): "non serve altro, scommessa piazzata" è una conferma.
+        return REJECTED
+    # Conferma: una keyword positiva conferma, salvo una negazione nella STESSA clausola che
+    # la ribalta in rifiuto (fail-safe, a qualunque distanza nella clausola). Una negazione in
+    # una clausola SEPARATA non conta (#31): "non serve altro, scommessa piazzata" è conferma.
     confirmed = negated = False
     for k in con:
-        if _has_keyword(t, k):
-            if _negation_near(t, k, _CONFIRM_NEGATORS):
-                negated = True
-            else:
-                confirmed = True
+        if not _has_keyword(t, k):
+            continue
+        unneg, neg = _occ_negation(t, k, _CONFIRM_NEGATORS)
+        if unneg:
+            confirmed = True
+        elif neg:
+            negated = True
     if confirmed:
         return CONFIRMED
     if negated:
