@@ -1207,3 +1207,179 @@ def test_post_corruzione_retry_keyring_giu_non_declassa_a_plaintext(tmp_path, mo
     raw = p.read_text(encoding="utf-8") if p.exists() else ""
     assert "NEW:TOKEN" not in raw                           # token MAI in chiaro su disco
     assert "plaintext" not in raw
+
+
+# ── PR-08b #140: clear vs miss-transiente — keyring illeggibile al load ────────────
+
+def test_load_config_keyring_illeggibile_segna_load_incompleto(tmp_path, monkeypatch):
+    """#140 (PR-08b): `load_config` marca `_token_load_incomplete` SOLO quando sentinel "keyring",
+    token su disco vuoto e keyring ILLEGGIBILE (read_ok False). Con keyring leggibile e
+    genuinamente vuoto NON marca (campo vuoto = stato reale); col token presente reidrata."""
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"bot_token": "", "bot_token_storage": "keyring"}), encoding="utf-8")
+    # keyring ILLEGGIBILE → marker
+    monkeypatch.setattr(config_store.token_store, "load_token_status", lambda: (None, False))
+    loaded = config_store.load_config(str(p))
+    assert loaded.get(config_store.TOKEN_LOAD_INCOMPLETE_KEY) is True
+    assert loaded["bot_token"] == ""
+    # keyring leggibile e GENUINAMENTE vuoto → nessun marker
+    monkeypatch.setattr(config_store.token_store, "load_token_status", lambda: (None, True))
+    loaded2 = config_store.load_config(str(p))
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in loaded2
+    # keyring leggibile col token → reidrata, nessun marker
+    monkeypatch.setattr(config_store.token_store, "load_token_status", lambda: ("LIVE:TOKEN", True))
+    loaded3 = config_store.load_config(str(p))
+    assert loaded3["bot_token"] == "LIVE:TOKEN"
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in loaded3
+
+
+def test_clear_dopo_load_keyring_illeggibile_non_cancella_il_token(tmp_path, monkeypatch):
+    """#140 (PR-08b): se il keyring era ILLEGGIBILE al load (sentinel "keyring", token non
+    reidratato), `load_config` marca `_token_load_incomplete`. Un save successivo NON deve
+    trattare il `bot_token` vuoto come un clear voluto: deve PRESERVARE il token (ancora nel
+    keyring), non cancellarlo.
+
+    Fail-first: prima `load_config` usava `load_token()` (None su lettura fallita, nessun marker)
+    e il save trattava il campo vuoto come clear REALE → `delete_token` cancellava il token."""
+    state = {"token": "LIVE:TOKEN", "readable": False}     # token c'è ma keyring illeggibile ORA
+    deleted = {"n": 0}
+    monkeypatch.setattr(config_store.token_store, "available", lambda: state["readable"])
+    monkeypatch.setattr(config_store.token_store, "load_token_status",
+                        lambda: ((state["token"], True) if state["readable"] else (None, False)))
+    monkeypatch.setattr(config_store.token_store, "load_token",
+                        lambda: state["token"] if state["readable"] else None)
+    monkeypatch.setattr(config_store.token_store, "save_token",
+                        lambda t: state.__setitem__("token", t) or True)
+
+    def _del():
+        deleted["n"] += 1
+        state["token"] = None
+        return True
+    monkeypatch.setattr(config_store.token_store, "delete_token", _del)
+
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"bot_token": "", "bot_token_storage": "keyring", "provider": "X"}),
+                 encoding="utf-8")
+    loaded = config_store.load_config(str(p))               # LOAD col keyring illeggibile → marker
+    assert loaded.get(config_store.TOKEN_LOAD_INCOMPLETE_KEY) is True
+    assert loaded["bot_token"] == ""
+    state["readable"] = True                                # keyring TORNA leggibile
+    saved, ok = config_store.save_config(loaded, str(p))    # save (campo token ancora vuoto)
+    assert ok is True                                       # save riuscito (esito GUI-visibile coperto)
+    assert deleted["n"] == 0                                # il token NON è stato cancellato
+    assert state["token"] == "LIVE:TOKEN"                   # ancora nel keyring
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token_storage"] == "keyring"        # niente "none": reidrata ancora
+    assert saved["bot_token"] == "LIVE:TOKEN"               # reidratato in memoria (runtime)
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in saved   # marker consumato (load ora completo)
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in on_disk
+
+
+def test_load_incompleto_persiste_se_keyring_ancora_giu(tmp_path, monkeypatch):
+    """#140 (PR-08b): se al save il keyring è ANCORA illeggibile, il marker load-incompleto va
+    RE-MANTENUTO in memoria, così la protezione "non cancellare" sopravvive al save successivo
+    (stesso principio del mirror sentinel di 08a). Un 2° save col keyring tornato leggibile non
+    deve cancellare il token."""
+    state = {"token": "LIVE:TOKEN", "readable": False}
+    deleted = {"n": 0}
+    monkeypatch.setattr(config_store.token_store, "available", lambda: state["readable"])
+    monkeypatch.setattr(config_store.token_store, "load_token_status",
+                        lambda: ((state["token"], True) if state["readable"] else (None, False)))
+    monkeypatch.setattr(config_store.token_store, "load_token",
+                        lambda: state["token"] if state["readable"] else None)
+    monkeypatch.setattr(config_store.token_store, "save_token", lambda t: True)
+
+    def _del():
+        deleted["n"] += 1
+        state["token"] = None
+        return True
+    monkeypatch.setattr(config_store.token_store, "delete_token", _del)
+
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"bot_token": "", "bot_token_storage": "keyring"}), encoding="utf-8")
+    loaded = config_store.load_config(str(p))               # keyring giù → marker
+    assert loaded.get(config_store.TOKEN_LOAD_INCOMPLETE_KEY) is True
+    saved1, ok1 = config_store.save_config(loaded, str(p))  # keyring ANCORA giù
+    assert ok1 is True                                      # save riuscito (clear differito, non un fallimento)
+    assert deleted["n"] == 0
+    assert saved1.get(config_store.TOKEN_LOAD_INCOMPLETE_KEY) is True   # marker RE-MANTENUTO
+    state["readable"] = True                                # keyring torna leggibile
+    saved2, ok2 = config_store.save_config(saved1, str(p))  # 2° save non deve cancellare
+    assert ok2 is True
+    assert deleted["n"] == 0
+    assert state["token"] == "LIVE:TOKEN"
+    assert saved2["bot_token"] == "LIVE:TOKEN"              # reidratato (runtime)
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in saved2   # marker consumato dalla reidratazione
+    on_disk2 = json.loads(p.read_text(encoding="utf-8"))
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in on_disk2
+
+
+def test_clear_reale_con_keyring_leggibile_cancella(tmp_path, monkeypatch):
+    """#140 (PR-08b) contro-prova: un clear REALE (load completo, keyring leggibile, nessun marker)
+    cancella ancora il token e mette sentinel "none" — il comportamento di clear non regredisce."""
+    store = {"t": "OLD:TOKEN"}
+    _fake_keyring(monkeypatch, store)
+    p = tmp_path / "config.json"
+    saved, ok = config_store.save_config({"bot_token": "", "bot_token_storage": "keyring"}, str(p))
+    assert ok is True
+    assert "t" not in store                                 # token cancellato (clear reale)
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token_storage"] == "none"           # niente reidratazione futura
+
+
+def test_load_incompleto_keyring_leggibile_vuoto_non_lascia_puntatore_stantio(tmp_path, monkeypatch):
+    """#140 (PR-08b, CodeRabbit Major): col marker load-incompleto attivo, se al save il keyring è
+    leggibile e GENUINAMENTE vuoto (load_token_status → (None, True)), NON c'è token da preservare:
+    il sentinel deve diventare "none", non "keyring". Un puntatore "keyring" stantio resusciterebbe
+    un eventuale orphan token futuro.
+
+    Fail-first: prima il ramo scriveva sempre "keyring", lasciando un puntatore di reidratazione."""
+    deleted = {"n": 0}
+    monkeypatch.setattr(config_store.token_store, "available", lambda: True)
+    monkeypatch.setattr(config_store.token_store, "load_token_status", lambda: (None, True))  # leggibile, VUOTO
+    monkeypatch.setattr(config_store.token_store, "load_token", lambda: None)
+    monkeypatch.setattr(config_store.token_store, "save_token", lambda t: True)
+
+    def _del():
+        deleted["n"] += 1
+        return True
+    monkeypatch.setattr(config_store.token_store, "delete_token", _del)
+
+    p = tmp_path / "config.json"
+    cfg = {"bot_token": "", "bot_token_storage": "keyring",
+           config_store.TOKEN_LOAD_INCOMPLETE_KEY: True}     # marker load-incompleto attivo
+    saved, ok = config_store.save_config(cfg, str(p))
+    assert ok is True
+    assert deleted["n"] == 0                                 # niente da cancellare (keyring già vuoto)
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token_storage"] == "none"           # sentinel "none": nessun puntatore stantio
+    assert saved["bot_token_storage"] == "none"             # runtime coerente col disco (no "keyring" stantio)
+    assert on_disk["bot_token"] == ""
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in on_disk   # marker MAI su disco
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in saved     # consumato in memoria
+    # load successivo: sentinel "none" → niente reidratazione anche se un orphan comparisse nel keyring
+    monkeypatch.setattr(config_store.token_store, "load_token_status", lambda: ("ORPHAN:TOKEN", True))
+    assert config_store.load_config(str(p))["bot_token"] == ""     # NON resuscita l'orphan
+
+
+def test_save_parziale_non_consuma_il_marker_load_incompleto(tmp_path, monkeypatch):
+    """#256 (CodeRabbit Major): un save PARZIALE (chiave `bot_token` ASSENTE) non deve consumare il
+    marker `_token_load_incomplete` da `in_memory`: il ramo del token non gira, quindi la guardia
+    deve sopravvivere per il clear successivo. Su disco/profilo il marker non finisce comunque mai.
+
+    Fail-first: prima il marker veniva `pop`-ato incondizionatamente → un save parziale lo perdeva e
+    un clear successivo sarebbe stato scambiato per un clear reale."""
+    _fake_keyring(monkeypatch, {"t": "LIVE:TOKEN"})
+    p = tmp_path / "config.json"
+    # config esistente keyring-backed su disco (così il save parziale ha cosa preservare)
+    p.write_text(json.dumps({"bot_token": "", "bot_token_storage": "keyring"}), encoding="utf-8")
+    cfg = {"provider": "X", "chat_id": "1",                  # NIENTE chiave bot_token → save PARZIALE
+           config_store.TOKEN_LOAD_INCOMPLETE_KEY: True}
+    saved, ok = config_store.save_config(cfg, str(p))
+    assert ok is True
+    assert saved.get(config_store.TOKEN_LOAD_INCOMPLETE_KEY) is True   # marker PRESERVATO in memoria
+    assert saved["bot_token_storage"] == "keyring"                    # puntatore keyring preservato (runtime)
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["bot_token"] == ""                                 # token migrato resta fuori dal disco
+    assert on_disk["bot_token_storage"] == "keyring"                  # ...ma il puntatore keyring è preservato
+    assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in on_disk       # ma MAI su disco
