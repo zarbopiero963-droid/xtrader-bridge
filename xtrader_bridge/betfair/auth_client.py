@@ -200,11 +200,15 @@ class BetfairAuthClient:
                                "cancellato comunque.", type(ex).__name__)
             else:
                 # `status` è un codice safe (SUCCESS/FAIL); la response NON va loggata (il suo
-                # campo `token` riecheggia il sessionToken).
-                status = (data or {}).get("status")
+                # campo `token` riecheggia il sessionToken). `isinstance(data, dict)` PRIMA di
+                # `.get`: un endpoint/proxy che ritorna un JSON valido ma NON oggetto (lista/stringa)
+                # farebbe sollevare `.get` QUI (fuori dal try) saltando il clear locale e rompendo il
+                # contratto best-effort (CodeRabbit). Un payload non-dict è trattato come logout
+                # server-side non confermato, ma il clear locale avviene comunque.
+                status = data.get("status") if isinstance(data, dict) else None
                 if status != "SUCCESS":
                     logger.warning("Logout Betfair lato server: stato %s. La sessione potrebbe "
                                    "restare valida fino alla scadenza. Token locale cancellato.",
-                                   status or "sconosciuto")
+                                   status or "risposta non valida")
         self.session.clear()
         self._app_key = None

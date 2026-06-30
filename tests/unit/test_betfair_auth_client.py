@@ -155,14 +155,51 @@ def test_logout_invalida_la_sessione_lato_server(tmp_path):
     assert client.is_logged_in is False             # poi il clear locale
 
 
-def test_logout_server_side_fallito_pulisce_comunque_il_token(tmp_path):
+def test_logout_server_side_fallito_pulisce_comunque_il_token(tmp_path, caplog):
     """Best-effort: un logout server-side che SOLLEVA (rete/timeout) non deve impedire il
-    clear locale né propagare l'eccezione (la GUI deve risultare disconnessa lo stesso)."""
+    clear locale né propagare l'eccezione (la GUI deve risultare disconnessa lo stesso). E il
+    log NON deve contenere né il token né il messaggio grezzo dell'eccezione (solo il TIPO)."""
     def _boom(token, app_key):
         raise RuntimeError("connessione fallita " + token)   # incorpora il token!
 
     sess = BetfairSession()
     client = BetfairAuthClient(session=sess, transport=_login_ok, logout_transport=_boom)
+    client.login(_creds(tmp_path))
+    with caplog.at_level("WARNING"):
+        client.logout()                             # non solleva
+    assert client.is_logged_in is False
+    assert sess.token is None
+    assert "tok" not in caplog.text                 # il token NON finisce nel log
+    assert "connessione fallita" not in caplog.text # né il messaggio grezzo dell'eccezione
+
+
+def test_logout_status_non_success_non_logga_la_response(tmp_path, caplog):
+    """Ramo `status != SUCCESS`: il clear locale avviene comunque e la RESPONSE (che può
+    riecheggiare il token o portare un body) NON viene loggata — solo lo `status` (codice safe)."""
+    def _fail(_token, _app_key):
+        return {"status": "FAIL", "echo": "tok", "detail": "response body leaked"}
+
+    sess = BetfairSession()
+    client = BetfairAuthClient(session=sess, transport=_login_ok, logout_transport=_fail)
+    client.login(_creds(tmp_path))
+    with caplog.at_level("WARNING"):
+        client.logout()
+    assert client.is_logged_in is False
+    assert sess.token is None
+    assert "tok" not in caplog.text
+    assert "response body leaked" not in caplog.text
+
+
+def test_logout_risposta_non_dict_pulisce_comunque_il_token(tmp_path):
+    """Resilienza (CodeRabbit): se il transport ritorna un JSON valido ma NON oggetto (lista/
+    stringa, es. proxy malformato), il clear locale deve avvenire COMUNQUE (best-effort), senza
+    che `.get` sollevi e salti la pulizia.
+
+    Fail-first: col vecchio `(data or {}).get(...)` un payload truthy non-dict sollevava
+    AttributeError e la sessione restava 'loggata' (token non cancellato)."""
+    sess = BetfairSession()
+    client = BetfairAuthClient(session=sess, transport=_login_ok,
+                               logout_transport=lambda t, k: ["risposta", "inattesa"])
     client.login(_creds(tmp_path))
     client.logout()                                 # non solleva
     assert client.is_logged_in is False
