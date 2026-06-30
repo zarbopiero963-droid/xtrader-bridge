@@ -349,9 +349,16 @@ class App(ctk.CTk):
         registered = self.__dict__.setdefault("_registered_tokens", set())
         if new_token and event_log.register_secret(new_token):
             registered.add(new_token)
-        # Cleanup SOLO a listener fermo (#203): se è attivo, il vecchio token può essere ancora
-        # in uso dal poller della sessione → tenerlo registrato (over-masking sicuro).
-        if not self.__dict__.get("_running"):
+        # Cleanup SOLO a listener COMPLETAMENTE fermo (#203, Codex + CodeRabbit): non basta
+        # `_running=False`, perché `_stop` lo azzera PRIMA che il thread del poller sia davvero
+        # uscito (può essere in backoff o a metà di un handler) e in quella finestra il vecchio
+        # token è ancora in uso → de-registrarlo lo scriverebbe in chiaro. Si controlla quindi
+        # anche `_bot_thread.is_alive()` (lo stesso segnale di teardown usato da `_is_current`).
+        # Letture via __dict__: niente `__getattr__` recursion su widget Tk (regressione #184 M7).
+        bot_thread = self.__dict__.get("_bot_thread")
+        listener_alive = bool(self.__dict__.get("_running")) or (
+            bot_thread is not None and bot_thread.is_alive())
+        if not listener_alive:
             for tok in list(registered):
                 if tok != new_token:
                     event_log.unregister_secret(tok)

@@ -518,6 +518,40 @@ def test_register_secret_token_non_deregistra_il_vecchio_mentre_attivo(make_app,
         event_log.clear_secrets()
 
 
+def test_register_secret_token_aspetta_il_thread_del_poller(make_app, app_mod):
+    """#203 (CodeRabbit): `_stop` azzera `_running` PRIMA che il thread del poller sia uscito. In
+    quella finestra (`_running=False` ma `_bot_thread.is_alive()` True) il vecchio token è ancora
+    in uso: la de-registrazione deve attendere che il thread sia davvero terminato.
+
+    Fail-first: gating solo su `_running`, durante il teardown il vecchio token veniva
+    de-registrato e sarebbe tornato in chiaro in un eventuale log del poller in chiusura."""
+    from xtrader_bridge import event_log
+
+    class _LiveThread:
+        def is_alive(self):
+            return True
+
+    event_log.clear_secrets()
+    try:
+        a = make_app(running=True)
+        old = "111:oldSecret_nonCanonico"
+        new = "222:newSecret_nonCanonico"
+        app_mod.App._register_secret_token(a, {"bot_token": old})
+        # STOP in corso: _running già False MA il thread del poller è ancora vivo
+        a._running = False
+        a._bot_thread = _LiveThread()
+        app_mod.App._register_secret_token(a, {"bot_token": new})
+        assert old not in event_log.redact_secrets(f"x {old} y")    # vecchio ancora mascherato
+        assert new not in event_log.redact_secrets(f"x {new} y")
+        # thread del poller uscito → ora la pulizia procede
+        a._bot_thread = None
+        app_mod.App._register_secret_token(a, {"bot_token": new})
+        assert old in event_log.redact_secrets(f"x {old} y")        # de-registrato
+        assert new not in event_log.redact_secrets(f"x {new} y")    # il corrente resta mascherato
+    finally:
+        event_log.clear_secrets()
+
+
 def test_stop_sveglia_attesa_in_loop_via_call_soon_threadsafe(make_app, app_mod, tmp_path):
     """#184 H5 / Codex #191: con una sessione viva `_stop` sveglia SUBITO l'attesa in-loop di
     `_async_run` settando `_async_stop_event` tramite `call_soon_threadsafe` (dal thread GUI).
