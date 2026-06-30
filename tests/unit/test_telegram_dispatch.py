@@ -84,3 +84,13 @@ def test_ordine_freschezza_prima_del_filtro_chat():
     # Un messaggio stantio è ignorato PRIMA di valutare il filtro chat: anche con config
     # senza filtro, lo stale vince (stesso ordine di _handle).
     assert _decide({}, "42", epoch=STALE) == td.IGNORE_STALE
+
+
+def test_conferma_xtrader_ritardata_non_filtrata_per_eta():
+    # #53: una conferma XTrader sulla chat notifiche, anche RITARDATA (oltre max_age), deve
+    # comunque andare a CONFIRM (rimuove il segnale attivo), non essere scartata come stantia.
+    assert _decide(ROUTE, "99", epoch=STALE) == td.CONFIRM
+    # una notif-chat che coincide con una sorgente resta CONFLICT anche se stantia.
+    route = {"provider": "TG", "chat_id": "42", "active_parser": "P",
+             "xtrader_notification_chat_id": "42"}
+    assert _decide(route, "42", epoch=STALE) == td.IGNORE_CONFLICT

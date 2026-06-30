@@ -73,3 +73,31 @@ def test_timestamp_overflow_non_crasha():
     # max_age illeggibile → default 120s attivo: vecchio = stantio, recente = no.
     assert mf.is_stale(now - 200, now, max_age=huge) is True
     assert mf.is_stale(now - 5, now, max_age=huge) is False
+
+
+# ── #53: max_age effettivo non supera clear_delay (clamp) ────────────────────
+
+def test_effective_max_age_clampa_a_clear_delay():
+    assert mf.effective_max_age(120, 90) == 90          # 120 > 90 → clamp a 90
+    assert mf.effective_max_age(60, 90) == 60           # già sotto → invariato
+    assert mf.effective_max_age("120", "90") == 90      # stringhe numeriche editate a mano
+
+
+def test_effective_max_age_filtro_disattivato_resta_disattivato():
+    # max_signal_age <= 0 = filtro spento dall'utente: il clamp NON deve ri-attivarlo.
+    assert mf.effective_max_age(0, 90) == 0
+    assert mf.effective_max_age(-1, 90) == -1
+
+
+def test_effective_max_age_clear_delay_invalido_nessun_clamp():
+    # clear_delay inservibile (assente/malformato/non positivo/bool) → nessun clamp.
+    assert mf.effective_max_age(120, None) == 120
+    assert mf.effective_max_age(120, "abc") == 120
+    assert mf.effective_max_age(120, 0) == 120
+    assert mf.effective_max_age(120, True) == 120
+
+
+def test_effective_max_age_integrazione_con_is_stale():
+    # Con clamp a 90, un messaggio vecchio 100s È stantio; senza clamp (max_age 120) non lo era.
+    assert mf.is_stale(0, 100, mf.effective_max_age(120, 90)) is True
+    assert mf.is_stale(0, 100, 120) is False

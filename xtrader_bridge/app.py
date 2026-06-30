@@ -1460,6 +1460,13 @@ class App(ctk.CTk):
         # prima del START, altrimenti il diario avrebbe un CSV_WRITTEN senza il clear corrispondente.
         self._journal_csv_cleared_if_had_row("CSV_CLEARED", reason="start")
 
+        # Nuovo epoch PRIMA di marcare la sessione attiva (#53): un vecchio supervisor in backoff
+        # (sessione precedente) valuta `_is_current()` = `_running and _listener_epoch == epoch`.
+        # Se incrementiamo l'epoch DOPO `_running=True`, nella finestra tra i due un vecchio
+        # supervisor troverebbe `_running` True ed epoch ancora vecchio → si riconnetterebbe con
+        # la cfg precedente. Bumpando qui, l'epoch differisce subito → il vecchio loop non è più
+        # current e non riparte.
+        self._listener_epoch += 1
         self._running = True
         # Nuova sessione: azzera il contatore CSV-lock così i fallimenti di una sessione
         # precedente non "colano" in questa e non causano una falsa escalation (Codex #156).
@@ -1506,8 +1513,8 @@ class App(ctk.CTk):
             self._log("⚠️ Modalità REALE: i segnali validi verranno scritti nel CSV.")
         self._log("👂 In ascolto su Telegram...")
 
-        # Nuovo epoch: invalida un eventuale vecchio supervisor ancora in backoff.
-        self._listener_epoch += 1
+        # Epoch di QUESTA sessione (già incrementato sopra, PRIMA di `_running=True`, #53):
+        # passato al thread del listener per il gate `_is_current()`/`_epoch_current()`.
         epoch = self._listener_epoch
         self._bot_thread = threading.Thread(
             target=self._run_bot, args=(cfg, epoch), daemon=True)
@@ -1647,7 +1654,11 @@ class App(ctk.CTk):
                 # un segnale "live" ma un arretrato dell'outage.
                 msg_date = getattr(msg, "date", None)
                 msg_epoch = msg_date.timestamp() if msg_date is not None else None
-                max_age = cfg.get("max_signal_age", message_freshness.DEFAULT_MAX_AGE)
+                # #53: il max_age effettivo non supera `clear_delay` (vita della riga CSV): un
+                # messaggio già più vecchio della vita CSV è trattato come stantio, non scritto.
+                max_age = message_freshness.effective_max_age(
+                    cfg.get("max_signal_age", message_freshness.DEFAULT_MAX_AGE),
+                    cfg.get("clear_delay"))
                 text = msg.text or msg.caption or ''
                 runtime_chat = str(msg.chat_id)
                 # Live-reload del routing (issue #82): INSTRADAMENTO e PARSING (chat ammesse,
