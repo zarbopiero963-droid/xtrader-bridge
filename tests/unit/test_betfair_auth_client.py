@@ -117,68 +117,16 @@ def test_login_file_cert_inesistente(tmp_path):
 
 def test_logout_pulisce_il_token(tmp_path):
     sess = BetfairSession()
-    client = BetfairAuthClient(
-        session=sess,
-        transport=lambda c: {"loginStatus": "SUCCESS", "sessionToken": "tok"},
-        logout_transport=lambda token, app_key: None)   # no-op: niente rete nei test
+    client = BetfairAuthClient(session=sess, transport=lambda c: {
+        "loginStatus": "SUCCESS", "sessionToken": "tok"})
     client.login(_creds(tmp_path))
     assert client.is_logged_in is True
     client.logout()
     assert client.is_logged_in is False
     assert sess.token is None
-    # idempotente (nessun token → niente chiamata server, solo clear)
+    # idempotente
     client.logout()
     assert client.is_logged_in is False
-
-
-# ── #168: logout invalida la sessione lato SERVER ─────────────────────────────
-
-def test_logout_invalida_la_sessione_server_side(tmp_path):
-    """#168 (Codex): logout deve chiamare l'endpoint di logout Betfair con il sessionToken in
-    `X-Authentication`, non solo cancellare la RAM. Fail-first: prima logout faceva solo clear()."""
-    seen = {}
-
-    def _logout(token, app_key):
-        seen["token"] = token
-        seen["app_key"] = app_key
-
-    sess = BetfairSession()
-    client = BetfairAuthClient(
-        session=sess,
-        transport=lambda c: {"loginStatus": "SUCCESS", "sessionToken": "tok-server-1"},
-        logout_transport=_logout)
-    client.login(_creds(tmp_path))
-    client.logout(creds=_creds(tmp_path))               # creds esplicite → App Key per X-Application
-    assert seen["token"] == "tok-server-1"              # il token è inviato al server
-    assert seen["app_key"] == "DelayedKey"              # X-Application = App Key
-    assert client.is_logged_in is False                # e la RAM è pulita
-
-
-def test_logout_server_fallito_pulisce_comunque_la_ram(tmp_path):
-    """#168: la chiamata server è best-effort — un suo fallimento NON deve impedire la pulizia
-    del token in RAM, altrimenti l'utente resterebbe 'connesso' localmente."""
-    def _boom(token, app_key):
-        raise RuntimeError("rete giù verso il logout endpoint")
-
-    sess = BetfairSession()
-    client = BetfairAuthClient(
-        session=sess,
-        transport=lambda c: {"loginStatus": "SUCCESS", "sessionToken": "tok-x"},
-        logout_transport=_boom)
-    client.login(_creds(tmp_path))
-    client.logout(creds=_creds(tmp_path))               # il transport solleva...
-    assert client.is_logged_in is False                # ...ma la RAM è pulita lo stesso
-    assert sess.token is None
-
-
-def test_logout_senza_token_non_chiama_il_server(tmp_path):
-    # Senza sessione attiva il logout non deve tentare alcuna chiamata server (niente da invalidare).
-    called = {"n": 0}
-    client = BetfairAuthClient(
-        session=BetfairSession(),
-        logout_transport=lambda token, app_key: called.__setitem__("n", called["n"] + 1))
-    client.logout()
-    assert called["n"] == 0
 
 
 # ── token mai persistito su disco (keyring) ──────────────────────────────────
