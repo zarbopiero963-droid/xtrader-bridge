@@ -31,6 +31,14 @@ TMP_SUFFIX = ".tmp"
 # voluto: il ramo CLEAR allora PRESERVA il token nel keyring invece di cancellarlo.
 POST_CORRUPTION_KEY = "_post_corruption"
 
+# Marker SOLO-IN-RAM (mai su disco) che `load_config` mette quando il sentinel dice "keyring"
+# ma il token NON è stato reidratato perché il keyring era ILLEGGIBILE al load (outage transitorio,
+# #140). In quel caso il `bot_token` resta "" pur potendo esistere ancora una credenziale nel
+# keyring: un `bot_token` vuoto al save successivo NON è un clear voluto, ma il RESIDUO di un load
+# incompleto. `save_config` lo legge e, nel ramo CLEAR, PRESERVA il token invece di cancellarlo
+# (un delete distruggerebbe un token che l'utente non ha mai chiesto di rimuovere).
+TOKEN_LOAD_INCOMPLETE_KEY = "_token_load_incomplete"
+
 # Logger di modulo: un salvataggio/migrazione config fallito NON deve restare
 # silenzioso (prima era `except: pass`). Resta comunque best-effort — l'app non
 # crasha e prosegue dai default — ma l'errore diventa visibile per la diagnosi.
@@ -382,9 +390,19 @@ def load_config(path: str = CONFIG_FILE) -> dict:
     # — NON viene fatto risorgere. Una config vecchia con token in chiaro (nessun sentinel
     # o "plaintext") si usa com'è e viene migrata nel keyring al prossimo salvataggio.
     if cfg.get("bot_token_storage") == "keyring" and not str(cfg.get("bot_token") or ""):
-        stored = token_store.load_token()
-        if stored:
-            cfg["bot_token"] = stored
+        # `load_token_status` distingue "assente" da "lettura fallita" (#140, introdotto in PR-08a):
+        # - read_ok + valore → reidrata il token;
+        # - read_ok + None → keyring leggibile e GENUINAMENTE vuoto: il campo vuoto è uno stato reale
+        #   (eventuale clear al save successivo è legittimo) → nessun marker;
+        # - NON read_ok → keyring ILLEGGIBILE ora (outage): il token reale potrebbe esistere ancora ma
+        #   non l'abbiamo letto. Si marca `_token_load_incomplete` così `save_config` NON tratta il
+        #   `bot_token` vuoto come un clear voluto (evita di cancellare un token mai rimosso dall'utente).
+        stored, read_ok = token_store.load_token_status()
+        if read_ok:
+            if stored:
+                cfg["bot_token"] = stored
+        else:
+            cfg[TOKEN_LOAD_INCOMPLETE_KEY] = True
     # Marker SOLO-IN-RAM (issue #199): se il file era corrotto, il sentinel del token è andato
     # perso col `.bak` e un eventuale `bot_token=""` al save successivo NON è un clear voluto.
     # `save_config` lo legge e, nel ramo CLEAR, preserva il token keyring invece di cancellarlo.
@@ -442,6 +460,11 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
     # save successivi tornano normali). Il suo valore guida solo il ramo CLEAR qui sotto.
     post_corruption = bool(in_memory.pop(POST_CORRUPTION_KEY, False))
     to_save.pop(POST_CORRUPTION_KEY, None)
+    # Marker load-incompleto (#140): SOLO-IN-RAM, consumato qui come `post_corruption`. Segnala che
+    # un `bot_token` vuoto deriva da un load in cui il keyring era illeggibile (token NON reidratato),
+    # non da un clear voluto → il ramo CLEAR PRESERVA invece di cancellare.
+    load_incomplete = bool(in_memory.pop(TOKEN_LOAD_INCOMPLETE_KEY, False))
+    to_save.pop(TOKEN_LOAD_INCOMPLETE_KEY, None)
 
     # ── Routing del bot_token (audit #105 P1) ─────────────────────────────────────
     # Casi DISTINTI: chiave `bot_token` ASSENTE = save PARZIALE → keyring e sentinel NON
@@ -538,28 +561,42 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
                 to_save["bot_token_storage"] = "plaintext"
                 logger.warning("Keyring non disponibile: il bot token resta in chiaro in %s. "
                                "Installa un backend keyring per cifrarlo.", path)
-        elif post_corruption:
-            # #199: `bot_token` vuoto che NON è un clear voluto, ma il RESIDUO di un load
-            # POST-CORRUZIONE (config illeggibile → backup `.bak` → default con `bot_token=""`
-            # e sentinel perso). Cancellare ora il token keyring distruggerebbe una credenziale
-            # VALIDA per una corruzione recuperabile (perdita definitiva). Si PRESERVA, fail-safe:
-            # niente `delete_token`. Sentinel "keyring" così `load_config` reidrata; il token reale
-            # torna in `in_memory` per il runtime. Trade-off accettato (issue #199): si privilegia
-            # NON perdere un token valido rispetto al rischio raro di "resuscitare" un token già
-            # cancellato il cui sentinel "none" è andato perso con la corruzione. Un clear
-            # DELIBERATO resta possibile rifacendolo a config integro (marker consumato).
-            stored = token_store.load_token() if token_store.available() else None
+        elif post_corruption or load_incomplete:
+            # `bot_token` vuoto che NON è un clear voluto, ma il RESIDUO di un load in cui il token
+            # reale non è stato reidratato. Due cause:
+            # - #199 POST-CORRUZIONE: config illeggibile → backup `.bak` → default con `bot_token=""`
+            #   e sentinel perso;
+            # - #140 LOAD-INCOMPLETO: sentinel "keyring" ma keyring ILLEGGIBILE al load (outage), quindi
+            #   `bot_token` è rimasto "" pur potendo esistere ancora una credenziale nel keyring.
+            # In entrambi i casi cancellare ora il token keyring distruggerebbe una credenziale VALIDA
+            # che l'utente non ha mai chiesto di rimuovere. Si PRESERVA, fail-safe: niente `delete_token`.
+            # Sentinel "keyring" così `load_config` reidrata; il token reale (se ora leggibile) torna in
+            # `in_memory` per il runtime. Trade-off accettato: si privilegia NON perdere un token valido
+            # rispetto al rischio raro di "resuscitare" un token il cui clear è andato perso. Un clear
+            # DELIBERATO resta possibile rifacendolo a stato integro/keyring leggibile (marker consumato).
+            stored, read_ok = token_store.load_token_status()
             if stored:
+                # Keyring leggibile e col valore → reidrata: il load è ora completo, il token reale
+                # torna in `in_memory` per il runtime e i save successivi sono normali.
                 in_memory["bot_token"] = stored
+            elif not read_ok:
+                # Keyring ANCORA illeggibile → il load resta incompleto: RE-MANTIENI il marker (RAM)
+                # così la protezione "non cancellare" sopravvive al prossimo save (stesso principio del
+                # mirror sentinel di PR-08a). Senza, un secondo save col keyring tornato leggibile
+                # tratterebbe il campo vuoto come clear reale e cancellerebbe il token.
+                in_memory[TOKEN_LOAD_INCOMPLETE_KEY] = True
+            # read_ok + None → keyring leggibile e GENUINAMENTE vuoto: niente da preservare, il marker
+            # resta consumato (un clear futuro è legittimo).
             to_save["bot_token"] = ""
             to_save["bot_token_storage"] = "keyring"
-            logger.warning("Bot token NON cancellato: il campo vuoto deriva da un config corrotto "
-                           "appena ripristinato, non da un clear voluto. Il token nel keyring è "
-                           "stato preservato; per cancellarlo davvero rifallo a config integro.")
+            logger.warning("Bot token NON cancellato: il campo vuoto deriva da un load incompleto "
+                           "(config corrotto o keyring illeggibile al caricamento), non da un clear "
+                           "voluto. Il token nel keyring è stato preservato; per cancellarlo davvero "
+                           "rifallo a stato integro col keyring leggibile.")
         elif token_store.available():
-            # Clear (chiave presente e vuota) col keyring LEGGIBILE: l'ambiguità
-            # "clear vs miss transiente" non c'è (se ci fosse un token, al load sarebbe
-            # stato reidratato e il campo non sarebbe vuoto). È un clear REALE.
+            # Clear (chiave presente e vuota) col keyring LEGGIBILE e load COMPLETO (nessun marker
+            # post-corruzione/load-incompleto): l'ambiguità "clear vs miss transiente" non c'è (se ci
+            # fosse un token, al load sarebbe stato reidratato e il campo non sarebbe vuoto). Clear REALE.
             stored = token_store.load_token()
             if stored is not None:
                 # C'è ancora un token nel keyring → rimuovilo.
