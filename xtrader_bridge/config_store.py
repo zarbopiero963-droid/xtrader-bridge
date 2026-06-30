@@ -45,6 +45,73 @@ TOKEN_LOAD_INCOMPLETE_KEY = "_token_load_incomplete"
 # del token (es. preservare/resuscitare un token che lo stato corrente teneva cancellato).
 RAM_ONLY_KEYS = (POST_CORRUPTION_KEY, TOKEN_LOAD_INCOMPLETE_KEY)
 
+# ── Contratto a STATI ESPLICITI di save_config (#255 line-647) ─────────────────────────────
+# Prima `save_config` tornava `(config, ok: bool)` e `ok=False` ACCORPAVA cause diverse: disco
+# fallito (permessi/spazio), token non persistibile per un outage del keyring (niente scritto,
+# riprova), config su disco corrotto su un save parziale. La GUI mostrava un unico messaggio
+# "FALLITO su disco / controlla permessi" anche quando il disco era a posto (es. keyring giù),
+# fuorviando l'utente. Ora ogni esito ha uno `status` esplicito così la GUI può dare il messaggio
+# GIUSTO. I valori sono stringhe stabili (usabili anche in test/log).
+SAVE_OK = "ok"                       # scritto su disco con successo
+SAVE_DISK_ERROR = "disk_error"       # scrittura atomica fallita (OSError: permessi/spazio/IO)
+SAVE_TOKEN_DEFERRED = "token_deferred"   # bot token non persistibile ora (keyring giù/illeggibile/
+                                         # non scrivibile): NIENTE scritto su disco, riprova
+SAVE_CONFIG_CORRUPT = "config_corrupt"   # save parziale abortito: config su disco corrotto e
+                                         # puntatore keyring non in memoria → non si sovrascrive
+
+# Messaggi utente per ciascuno stato NON-ok (single source of truth: GUI e test pescano da qui,
+# niente stringhe divergenti per-call-site). Niente segreti nel testo (mai il token).
+_SAVE_STATUS_MESSAGES = {
+    SAVE_DISK_ERROR: ("Salvataggio FALLITO su disco: le impostazioni sono attive solo in "
+                      "memoria. Controlla permessi/spazio del percorso di configurazione."),
+    SAVE_TOKEN_DEFERRED: ("Salvataggio RIMANDATO: il bot token non è memorizzabile ora "
+                          "(keyring di sistema non disponibile/illeggibile). NIENTE è stato "
+                          "scritto su disco; le impostazioni restano attive in memoria. "
+                          "Riprova quando il keyring è di nuovo disponibile."),
+    SAVE_CONFIG_CORRUPT: ("Salvataggio ANNULLATO: il config.json su disco è corrotto/illeggibile "
+                          "e il puntatore al keyring del token non è in memoria. Non si "
+                          "sovrascrive per non orfanare il token. Ripristina o rimuovi il "
+                          "config.json corrotto e riprova."),
+}
+
+
+def save_status_message(status) -> str:
+    """Messaggio utente per uno `status` di `save_config` (vuoto per `SAVE_OK`/sconosciuto).
+
+    Fonte UNICA dei testi degli esiti NON riusciti, così ogni call-site GUI mostra lo stesso
+    messaggio coerente con la causa reale (disco vs keyring vs config corrotto) — niente più
+    "FALLITO su disco" quando il problema è il keyring (#255 line-647)."""
+    return _SAVE_STATUS_MESSAGES.get(status, "")
+
+
+class SaveResult(tuple):
+    """Esito di `save_config`. È RETRO-COMPATIBILE con la vecchia tupla `(config, ok)` — quindi
+    `saved, ok = save_config(...)` continua a funzionare invariato — ma porta anche `.status`
+    (uno dei `SAVE_*`) per messaggi GUI specifici della causa (#255 line-647). Modellata come
+    `os.stat_result`/`urlsplit`: una sottoclasse di `tuple` con campi nominati in più. (Niente
+    `__slots__`: una sottoclasse di `tuple` non lo supporta non-vuoto; `_status` vive nel
+    `__dict__` d'istanza, irrilevante per la retro-compatibilità di unpacking/indexing.)"""
+
+    def __new__(cls, config, ok, status):
+        self = super().__new__(cls, (config, ok))
+        self._status = status
+        return self
+
+    @property
+    def config(self):
+        """La config tenuta in memoria (elemento 0 della tupla)."""
+        return self[0]
+
+    @property
+    def ok(self) -> bool:
+        """True se scritto su disco (elemento 1 della tupla); equivalente al vecchio `ok`."""
+        return self[1]
+
+    @property
+    def status(self) -> str:
+        """Esito granulare: uno dei `SAVE_*`."""
+        return self._status
+
 # Logger di modulo: un salvataggio/migrazione config fallito NON deve restare
 # silenzioso (prima era `except: pass`). Resta comunque best-effort — l'app non
 # crasha e prosegue dai default — ma l'errore diventa visibile per la diagnosi.
@@ -420,12 +487,18 @@ def load_config(path: str = CONFIG_FILE) -> dict:
 def save_config(cfg: dict, path: str = CONFIG_FILE):
     """Salva la configurazione su file (best-effort) in modo **atomico**.
 
-    Ritorna una tupla ``(config_salvata, ok)``:
-    - ``config_salvata``: la config tenuta IN MEMORIA (con `config_version` e, se presente,
-      il `bot_token` per il runtime), sempre restituita così il chiamante può tenerla anche
-      se il disco fallisce;
-    - ``ok``: ``True`` se la scrittura su disco è riuscita, ``False`` altrimenti — così la
-      GUI non può più segnalare "salvato" quando in realtà non lo è (finding A1).
+    Ritorna un ``SaveResult``, RETRO-COMPATIBILE con la vecchia tupla ``(config_salvata, ok)``
+    (l'unpacking ``saved, ok = save_config(...)`` resta invariato), che porta anche ``.status``:
+    - ``config_salvata`` (elem. 0): la config tenuta IN MEMORIA (con `config_version` e, se
+      presente, il `bot_token` per il runtime), sempre restituita così il chiamante può tenerla
+      anche se il disco fallisce;
+    - ``ok`` (elem. 1): ``True`` se la scrittura su disco è riuscita, ``False`` altrimenti — così
+      la GUI non può più segnalare "salvato" quando in realtà non lo è (finding A1);
+    - ``status``: esito GRANULARE (#255 line-647) che DISAMBIGUA un ``ok=False`` prima accorpato:
+      ``SAVE_OK`` (scritto), ``SAVE_DISK_ERROR`` (scrittura atomica fallita: permessi/spazio),
+      ``SAVE_TOKEN_DEFERRED`` (token non persistibile per un outage del keyring: niente scritto,
+      riprova), ``SAVE_CONFIG_CORRUPT`` (save parziale abortito: config su disco corrotto). La GUI
+      usa ``save_status_message(status)`` per il messaggio giusto (disco vs keyring vs corrotto).
 
     **Token storage sicuro (audit #105 P1).** Il `bot_token` è una credenziale: se è
     presente e c'è un keyring di sistema, viene salvato lì (`token_store`) e su disco la
@@ -679,7 +752,7 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
                            "sovrascrive (eviterebbe di orfanare il token, ma il keyring da solo è "
                            "ambiguo e potrebbe resuscitare un token già cancellato). Ripristina o "
                            "rimuovi il config.json corrotto e riprova.")
-            return in_memory, False
+            return SaveResult(in_memory, False, SAVE_CONFIG_CORRUPT)
     if token_not_persisted:
         # Il token NUOVO non è persistibile ora (keyring illeggibile / non scrivibile / non
         # disponibile, #140). Per evitare un esito AMBIGUO non si scrive NULLA su disco: i
@@ -703,7 +776,7 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
         logger.warning("Salvataggio NON eseguito su disco: il bot token non è persistibile ora "
                        "(keyring non disponibile/illeggibile). Per non dare un esito ambiguo non è "
                        "stata scritta alcuna impostazione; riprova quando il keyring è stabile.")
-        return in_memory, False
+        return SaveResult(in_memory, False, SAVE_TOKEN_DEFERRED)
     try:
         _ensure_dir(path)
         # Scrittura atomica condivisa (tmp + flush/fsync + os.replace, cleanup su errore).
@@ -735,7 +808,7 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
                              "credenziale potrebbe essere incoerente col config su disco. "
                              "Verifica il Credential Manager di sistema.", path)
         logger.error("Salvataggio config fallito (%s): %s", path, exc, exc_info=True)
-        return in_memory, False
+        return SaveResult(in_memory, False, SAVE_DISK_ERROR)
     # Disco OK → mantieni la config IN MEMORIA coerente col disco per il sentinel (Codex P2):
     # il chiamante fa `self._config = saved`, quindi un sentinel stantio rifarebbe scrivere uno
     # stato sbagliato al save successivo. `bot_token` in memoria resta il token reale (runtime).
@@ -747,7 +820,7 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
     # (keyring illeggibile/non scrivibile/non disponibile, #140) abortiscono PRIMA della scrittura
     # su disco e tornano `False` (vedi sopra), così `ok=False` significa uniformemente "niente su
     # disco". Disco scritto con successo → `ok=True`.
-    return in_memory, True
+    return SaveResult(in_memory, True, SAVE_OK)
 
 
 def _backup_corrupted(path: str) -> None:

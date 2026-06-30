@@ -970,3 +970,35 @@ def test_save_config_refill_post_save_se_keyring_torna_durante_il_save(
         assert fake.deleted == 0
     finally:
         event_log.clear_secrets()
+
+
+def test_on_debug_toggle_messaggio_specifico_per_stato_save(make_app, app_mod, monkeypatch):
+    """Contratto 3-stati (#255 line-647): un save non-GUI fallito deve loggare il messaggio
+    SPECIFICO della causa. `token_deferred` (keyring giù) → messaggio "keyring", NON "disco";
+    `disk_error` → messaggio "disco". Prima entrambi davano lo stesso "FALLITO su disco".
+
+    Fail-first: sul vecchio contratto `_on_debug_toggle` loggava sempre "(salvataggio fallito su
+    disco)" a prescindere dalla causa."""
+    from xtrader_bridge import config_store
+
+    a = make_app(config={"debug_log": False})
+    a._debug_var = _FakeTokenEntry(True)
+
+    # Caso 1: token differito (keyring giù) → il messaggio parla di keyring, non di disco.
+    monkeypatch.setattr(app_mod, "save_config",
+                        lambda cfg, path: config_store.SaveResult(cfg, False,
+                                                                  config_store.SAVE_TOKEN_DEFERRED))
+    a.logs.clear()
+    app_mod.App._on_debug_toggle(a)
+    deferred_msgs = [m for m in a.logs if "keyring" in m.lower()]
+    assert deferred_msgs                                   # messaggio specifico keyring presente
+    assert not any("FALLITO su disco" in m for m in a.logs)   # NON il messaggio disco
+
+    # Caso 2: errore disco → il messaggio parla di disco/permessi.
+    monkeypatch.setattr(app_mod, "save_config",
+                        lambda cfg, path: config_store.SaveResult(cfg, False,
+                                                                  config_store.SAVE_DISK_ERROR))
+    a.logs.clear()
+    app_mod.App._on_debug_toggle(a)
+    assert any("disco" in m.lower() for m in a.logs)       # messaggio disco presente
+    assert not any("keyring" in m.lower() for m in a.logs) # NON il messaggio keyring

@@ -1383,3 +1383,91 @@ def test_save_parziale_non_consuma_il_marker_load_incompleto(tmp_path, monkeypat
     assert on_disk["bot_token"] == ""                                 # token migrato resta fuori dal disco
     assert on_disk["bot_token_storage"] == "keyring"                  # ...ma il puntatore keyring è preservato
     assert config_store.TOKEN_LOAD_INCOMPLETE_KEY not in on_disk       # ma MAI su disco
+
+
+# ── Contratto a STATI ESPLICITI di save_config (#255 line-647) ──────────────────────────────
+#
+# `save_config` ora torna un `SaveResult` (retro-compatibile con `(config, ok)`) che porta anche
+# `.status`, così la GUI dà il messaggio GIUSTO invece di un generico "FALLITO su disco" anche
+# quando la causa è il keyring o un config corrotto.
+
+def test_save_result_retrocompatibile_unpacking_indexing_ed_uguaglianza():
+    """`SaveResult` si comporta come la tupla storica `(config, ok)`: unpacking, indexing,
+    `len`, e uguaglianza con una tupla semplice (così i test/chiamanti esistenti restano validi)."""
+    r = config_store.SaveResult({"k": 1}, True, config_store.SAVE_OK)
+    saved, ok = r                                   # unpacking storico
+    assert saved == {"k": 1} and ok is True
+    assert r[0] == {"k": 1} and r[1] is True        # indexing
+    assert len(r) == 2 and isinstance(r, tuple)
+    assert r == ({"k": 1}, True)                    # uguaglianza con tupla semplice
+    assert r.config == {"k": 1} and r.ok is True and r.status == config_store.SAVE_OK
+
+
+def test_save_status_message_per_stato():
+    """`save_status_message` mappa ogni stato NON-ok al suo messaggio; "" per OK/sconosciuto.
+    Niente segreti nei messaggi."""
+    assert config_store.save_status_message(config_store.SAVE_OK) == ""
+    assert config_store.save_status_message("stato_inesistente") == ""
+    assert "disco" in config_store.save_status_message(config_store.SAVE_DISK_ERROR).lower()
+    assert "keyring" in config_store.save_status_message(config_store.SAVE_TOKEN_DEFERRED).lower()
+    assert "corrotto" in config_store.save_status_message(config_store.SAVE_CONFIG_CORRUPT).lower()
+
+
+def test_save_config_status_ok_su_successo(tmp_path, monkeypatch):
+    """Save riuscito → `status == SAVE_OK`, `ok True`, messaggio vuoto."""
+    _fake_keyring(monkeypatch, {})
+    p = tmp_path / "config.json"
+    result = config_store.save_config({"bot_token": "NEW:TOKEN", "provider": "X"}, str(p))
+    assert result.ok is True
+    assert result.status == config_store.SAVE_OK
+    assert config_store.save_status_message(result.status) == ""
+
+
+def test_save_config_status_disk_error_su_oserror(tmp_path, monkeypatch):
+    """Scrittura atomica fallita (OSError) → `status == SAVE_DISK_ERROR` (non più accorpato).
+
+    Fail-first: sul vecchio contratto `save_config` tornava una tupla senza `.status`."""
+    _fake_keyring(monkeypatch, {"t": "OLD:TOKEN"})
+
+    def _boom(*a, **k):
+        raise OSError("disco pieno (simulato)")
+    monkeypatch.setattr(config_store.atomic_io, "atomic_write_json", _boom)
+    p = tmp_path / "config.json"
+    result = config_store.save_config({"bot_token": "NEW:TOKEN", "provider": "X"}, str(p))
+    assert result.ok is False
+    assert result.status == config_store.SAVE_DISK_ERROR
+    assert "disco" in config_store.save_status_message(result.status).lower()
+
+
+def test_save_config_status_token_deferred_su_keyring_giu(tmp_path, monkeypatch):
+    """Token non persistibile per keyring giù (stato precedente "keyring") → niente scritto e
+    `status == SAVE_TOKEN_DEFERRED`: la GUI mostra il messaggio "keyring", non "disco".
+
+    Fail-first: prima `ok=False` non distingueva il differimento dal fallimento disco."""
+    _fake_keyring(monkeypatch, {"t": "OLD:KEYRING:TOKEN"}, available=False)   # keyring giù ORA
+    p = tmp_path / "config.json"
+    before = json.dumps({"bot_token": "", "bot_token_storage": "keyring", "provider": "OLD"}, indent=2)
+    p.write_text(before, encoding="utf-8")
+    result = config_store.save_config(
+        {"bot_token": "NEW:TOKEN", "bot_token_storage": "keyring", "provider": "NEW"}, str(p))
+    assert result.ok is False
+    assert result.status == config_store.SAVE_TOKEN_DEFERRED
+    assert p.read_text(encoding="utf-8") == before               # disco invariato (abort atomico)
+    assert "keyring" in config_store.save_status_message(result.status).lower()
+
+
+def test_save_config_status_config_corrupt_su_parziale_su_disco_corrotto(tmp_path, monkeypatch):
+    """Save PARZIALE (senza bot_token/sentinel) su `config.json` corrotto → fail-closed con
+    `status == SAVE_CONFIG_CORRUPT` (messaggio dedicato), non un generico errore disco.
+
+    Fail-first: prima questo path tornava `ok=False` indistinguibile dagli altri."""
+    store = {"t": "123:SECRET"}
+    _fake_keyring(monkeypatch, store, available=True)
+    p = tmp_path / "config.json"
+    corrotto = "{ questo non e' json valido ,,, "
+    p.write_text(corrotto, encoding="utf-8")
+    result = config_store.save_config({"provider": "X"}, str(p))   # parziale: niente bot_token/sentinel
+    assert result.ok is False
+    assert result.status == config_store.SAVE_CONFIG_CORRUPT
+    assert p.read_text(encoding="utf-8") == corrotto               # disco corrotto NON sovrascritto
+    assert "corrotto" in config_store.save_status_message(result.status).lower()
