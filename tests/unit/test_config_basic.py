@@ -144,18 +144,21 @@ def test_save_config_pre_read_keyring_fallita_non_sovrascrive_ne_perde(tmp_path,
         return True
     monkeypatch.setattr(config_store.token_store, "delete_token", _del)
 
+    # Config GIÀ su disco (install keyring-backed): provider "OLD". Il save differito NON deve
+    # toccarla — né il token né il provider cambiato (Codex P2: `ok=False` = niente su disco).
     p = tmp_path / "config.json"
+    before = json.dumps({"bot_token": "", "bot_token_storage": "keyring", "provider": "OLD"}, indent=2)
+    p.write_text(before, encoding="utf-8")
     saved, ok = config_store.save_config(
-        {"bot_token": "NEW:TOKEN", "bot_token_storage": "keyring", "provider": "X"}, str(p))
+        {"bot_token": "NEW:TOKEN", "bot_token_storage": "keyring", "provider": "NEW"}, str(p))
     assert ok is False                          # token non persistito → save NON riuscito
     assert saved_calls["n"] == 0                # keyring NON sovrascritto (nessun rollback possibile)
     assert deleted["n"] == 0                    # né cancellato
     assert store["t"] == "PREEXISTING:TOKEN"    # token preesistente intatto
     raw = p.read_text(encoding="utf-8")
-    on_disk = json.loads(raw)
-    assert on_disk["bot_token"] == ""           # niente segreto in chiaro su disco
-    assert on_disk["bot_token_storage"] == "keyring"   # preservato per la reidratazione
+    assert raw == before                        # disco INVARIATO: né token né provider "NEW" scritti
     assert "NEW:TOKEN" not in raw
+    assert json.loads(raw)["provider"] == "OLD"   # il cambio non-token NON è atterrato su disco
 
 
 def test_save_token_fallito_con_stato_keyring_non_declassa_a_plaintext(tmp_path, monkeypatch):
@@ -172,14 +175,15 @@ def test_save_token_fallito_con_stato_keyring_non_declassa_a_plaintext(tmp_path,
     monkeypatch.setattr(config_store.token_store, "load_token", lambda: store.get("t"))
     monkeypatch.setattr(config_store.token_store, "load_token_status", lambda: (store.get("t"), True))
     p = tmp_path / "config.json"
+    before = json.dumps({"bot_token": "", "bot_token_storage": "keyring", "provider": "OLD"}, indent=2)
+    p.write_text(before, encoding="utf-8")
     saved, ok = config_store.save_config(
-        {"bot_token": "NEW:TOKEN", "bot_token_storage": "keyring", "provider": "X"}, str(p))
+        {"bot_token": "NEW:TOKEN", "bot_token_storage": "keyring", "provider": "NEW"}, str(p))
     raw = p.read_text(encoding="utf-8")
-    on_disk = json.loads(raw)
     assert ok is False                                      # token non persistito → save NON riuscito
-    assert on_disk["bot_token_storage"] == "keyring"        # NON declassato a plaintext
-    assert on_disk["bot_token"] == ""                       # nessun segreto in chiaro su disco
+    assert raw == before                                    # disco INVARIATO (abort atomico)
     assert "NEW:TOKEN" not in raw                           # il token nuovo non finisce in chiaro
+    assert json.loads(raw)["provider"] == "OLD"             # cambio non-token NON persistito
     assert store["t"] == "OLD:KEYRING:TOKEN"                # vecchio token keyring intatto
 
 
@@ -209,14 +213,15 @@ def test_keyring_non_disponibile_con_stato_keyring_segnala_save_non_riuscito(tmp
     pur avendo scartato il token nuovo."""
     _fake_keyring(monkeypatch, {"t": "OLD:KEYRING:TOKEN"}, available=False)   # keyring giù ORA
     p = tmp_path / "config.json"
+    before = json.dumps({"bot_token": "", "bot_token_storage": "keyring", "provider": "OLD"}, indent=2)
+    p.write_text(before, encoding="utf-8")
     saved, ok = config_store.save_config(
-        {"bot_token": "NEW:TOKEN", "bot_token_storage": "keyring", "provider": "X"}, str(p))
+        {"bot_token": "NEW:TOKEN", "bot_token_storage": "keyring", "provider": "NEW"}, str(p))
     raw = p.read_text(encoding="utf-8")
-    on_disk = json.loads(raw)
     assert ok is False                                      # token non persistito → save NON riuscito
-    assert on_disk["bot_token_storage"] == "keyring"        # NON declassato a plaintext
-    assert on_disk["bot_token"] == ""                       # nessun segreto in chiaro su disco
+    assert raw == before                                    # disco INVARIATO (abort atomico)
     assert "NEW:TOKEN" not in raw                           # il token nuovo non finisce in chiaro
+    assert json.loads(raw)["provider"] == "OLD"             # cambio non-token NON persistito
     assert saved["bot_token"] == "NEW:TOKEN"                # in memoria resta (runtime), ma non persistito
 
 
@@ -242,6 +247,27 @@ def test_pre_read_fallita_su_install_plaintext_non_perde_il_token_in_chiaro(tmp_
     assert on_disk["bot_token"] == "PLAIN:TOKEN"            # token in chiaro PRESERVATO (non cancellato)
     assert on_disk["bot_token_storage"] == "plaintext"     # resta plaintext (nessun "none")
     assert config_store.load_config(str(p))["bot_token"] == "PLAIN:TOKEN"   # riavvio: ancora presente
+
+
+def test_token_differito_non_persiste_parzialmente_impostazioni_non_token(tmp_path, monkeypatch):
+    """#140 (PR-08a, Codex P2 line 658): quando il token è DIFFERITO (`token_not_persisted`) il
+    save ritorna `ok=False`, e i chiamanti lo interpretano come "niente persistito su disco". Se
+    `save_config` avesse comunque scritto le ALTRE impostazioni e poi tornato `ok=False`, un cambio
+    safety-critical come `dry_run` (reale↔test) sopravvivrebbe al riavvio pur essendo segnalato come
+    fallito. L'esito deve essere ATOMICO: disco INVARIATO, `ok=False`.
+
+    Fail-first: prima dell'abort il ramo differito scriveva `to_save` su disco (incluso il nuovo
+    `dry_run`) e tornava `ok=False` → l'impostazione non-token persisteva di nascosto."""
+    _fake_keyring(monkeypatch, {"t": "OLD:KEYRING:TOKEN"}, available=False)   # keyring giù → token differito
+    p = tmp_path / "config.json"
+    before = json.dumps({"bot_token": "", "bot_token_storage": "keyring", "dry_run": True}, indent=2)
+    p.write_text(before, encoding="utf-8")
+    saved, ok = config_store.save_config(
+        {"bot_token": "NEW:TOKEN", "bot_token_storage": "keyring", "dry_run": False}, str(p))
+    assert ok is False                                      # token differito → save NON riuscito
+    assert p.read_text(encoding="utf-8") == before         # disco INVARIATO
+    assert json.loads(p.read_text(encoding="utf-8"))["dry_run"] is True   # dry_run NON declassato su disco
+    assert saved["dry_run"] is False                       # in memoria la modifica c'è (runtime), ma non su disco
 
 
 def test_save_config_keyring_first_token_nel_keyring_prima_del_disco(tmp_path, monkeypatch):
@@ -296,13 +322,17 @@ def test_save_config_mirror_sentinel_in_memoria(tmp_path, monkeypatch):
 def test_save_config_outage_transiente_non_declassa_a_plaintext(tmp_path, monkeypatch):
     # Codex P2: token in memoria + stato precedente "keyring" + keyring NON disponibile ORA
     # (outage transiente) NON deve riscrivere il token in chiaro su disco (downgrade silenzioso).
+    # Con l'abort del path differito (Codex P2 line 658) il disco resta INVARIATO e `ok=False`.
     _fake_keyring(monkeypatch, {}, available=False)
     p = tmp_path / "config.json"
+    before = json.dumps({"bot_token": "", "bot_token_storage": "keyring", "provider": "OLD"}, indent=2)
+    p.write_text(before, encoding="utf-8")
     saved, ok = config_store.save_config(
         {"bot_token": "REHYDRATED:TOKEN", "bot_token_storage": "keyring", "provider": "X"}, str(p))
-    on_disk = json.loads(p.read_text(encoding="utf-8"))
-    assert on_disk["bot_token"] == ""                      # NON in chiaro su disco
-    assert on_disk["bot_token_storage"] == "keyring"       # niente downgrade a plaintext
+    raw = p.read_text(encoding="utf-8")
+    assert ok is False                                     # token differito → save NON riuscito
+    assert raw == before                                   # disco INVARIATO (niente downgrade a plaintext)
+    assert "REHYDRATED:TOKEN" not in raw                   # mai in chiaro su disco
 
 
 def test_save_config_rollback_fallito_logga_errore(tmp_path, monkeypatch, caplog):

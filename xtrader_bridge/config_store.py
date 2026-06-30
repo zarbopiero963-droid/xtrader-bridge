@@ -613,6 +613,21 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
                            "ambiguo e potrebbe resuscitare un token già cancellato). Ripristina o "
                            "rimuovi il config.json corrotto e riprova.")
             return in_memory, False
+    if token_not_persisted:
+        # Il token NUOVO non è persistibile ora (keyring illeggibile / non scrivibile / non
+        # disponibile, #140). Per evitare un esito AMBIGUO non si scrive NULLA su disco: i
+        # chiamanti interpretano `ok=False` come "niente persistito su disco — impostazioni
+        # attive solo in memoria" (es. `_save_config` lo logga così). Se scrivessimo le altre
+        # impostazioni e poi tornassimo `ok=False`, un cambio non-token (es. `dry_run`, auto-sync)
+        # sopravvivrebbe al riavvio pur essendo segnalato come fallito (Codex P2). Si aborta in
+        # modo ATOMICO: la config su disco resta intatta (sentinel "keyring" già presente → il
+        # vecchio token reidrata), le modifiche restano in memoria, l'utente riprova quando il
+        # keyring è stabile. Nessun `keyring_changed` qui (i rami differiti non toccano il keyring),
+        # quindi non serve rollback.
+        logger.warning("Salvataggio NON eseguito su disco: il bot token non è persistibile ora "
+                       "(keyring non disponibile/illeggibile). Per non dare un esito ambiguo non è "
+                       "stata scritta alcuna impostazione; riprova quando il keyring è stabile.")
+        return in_memory, False
     try:
         _ensure_dir(path)
         # Scrittura atomica condivisa (tmp + flush/fsync + os.replace, cleanup su errore).
@@ -650,12 +665,13 @@ def save_config(cfg: dict, path: str = CONFIG_FILE):
     # stato sbagliato al save successivo. `bot_token` in memoria resta il token reale (runtime).
     if "bot_token_storage" in to_save:
         in_memory["bot_token_storage"] = to_save["bot_token_storage"]
-    if token and not token_not_persisted and to_save.get("bot_token_storage") == "keyring":
+    if token and to_save.get("bot_token_storage") == "keyring":
         logger.info("Bot token salvato nel keyring di sistema (non in chiaro nel config).")
-    # Il disco è stato scritto, ma se il TOKEN non è stato persistito (keyring illeggibile o set
-    # fallito, #140 Codex) il save NON è realmente riuscito per la credenziale: si ritorna `False`
-    # così la GUI non mostra "salvato" per un token non persistito (l'utente riprova).
-    return in_memory, not token_not_persisted
+    # Si arriva qui solo con `token_not_persisted` False: i rami che NON persistono il token
+    # (keyring illeggibile/non scrivibile/non disponibile, #140) abortiscono PRIMA della scrittura
+    # su disco e tornano `False` (vedi sopra), così `ok=False` significa uniformemente "niente su
+    # disco". Disco scritto con successo → `ok=True`.
+    return in_memory, True
 
 
 def _backup_corrupted(path: str) -> None:
