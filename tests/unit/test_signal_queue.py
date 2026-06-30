@@ -34,6 +34,24 @@ def test_default_mode_overwrite_last():
     assert rows[0]["EventName"] == "C"
 
 
+def test_active_rows_now_esclude_scaduti():
+    # #30 (Codex): active_rows(now=...) NON deve esporre righe già oltre il loro timeout, così
+    # una scrittura che non ha chiamato expire() subito prima (es. il flusso conferme) non
+    # riscrive nel CSV un segnale scaduto. Lettura PURA: la coda NON viene mutata.
+    q = sq.SignalQueue(mode=sq.APPEND_ACTIVE, default_timeout=10)
+    q.add(_row("A"), signal_id="A", now=0)                 # scade a 10
+    q.add(_row("B"), signal_id="B", now=5, timeout=100)    # scade a 105
+    # now=15: A è scaduto, B ancora valido → solo B esposto
+    assert [r["EventName"] for r in q.active_rows(now=15)] == ["B"]
+    # back-compat: senza `now` ritorna TUTTE le attive (anche la scaduta non ancora rimossa)
+    assert [r["EventName"] for r in q.active_rows()] == ["A", "B"]
+    # active_rows(now=...) è una lettura pura: non muta la coda (la rimozione resta a expire())
+    assert q.active_ids() == ["A", "B"]
+    # un `now` non finito è rifiutato come altrove nella coda (fail-fast)
+    with pytest.raises(ValueError):
+        q.active_rows(now=float("nan"))
+
+
 def test_append_active_tre_segnali_tre_righe():
     q = sq.SignalQueue(mode=sq.APPEND_ACTIVE)
     q.add(_row("A"), now=1000)

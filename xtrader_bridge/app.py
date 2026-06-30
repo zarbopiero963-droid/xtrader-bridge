@@ -2265,7 +2265,10 @@ class App(ctk.CTk):
                 if not self._epoch_current(epoch):
                     return
                 self._queue.confirm(result.signal_id)   # rimuove il segnale dalla coda
-                rows = self._queue.active_rows()
+                # `now=` esclude dalle righe scritte un eventuale FRATELLO già scaduto ma non
+                # ancora rimosso dal tick: una conferma non deve ri-scrivere nel CSV un segnale
+                # oltre il suo timeout (#30, Codex). La sua rimozione dalla coda resta al tick.
+                rows = self._queue.active_rows(now=time.monotonic())
                 try:
                     write_rows(rows, path)
                 except Exception as ex:   # noqa: BLE001 — esito a log, no crash
