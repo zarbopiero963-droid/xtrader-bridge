@@ -196,8 +196,13 @@ def install_global_log_redaction() -> SecretRedactionFilter:
     flt = existing or SecretRedactionFilter()
     if existing is None:
         root.addFilter(flt)
+    # Installa l'hook PRIMA dello sweep (Codex #251): se lo sweep girasse per primo, un handler
+    # aggiunto nella finestra tra la fine del loop e l'install dell'hook passerebbe per
+    # l'`addHandler` originale, non sarebbe nella lista già spazzata e non verrebbe mai
+    # ri-visitato → scoperto. Con l'hook attivo prima, ogni handler aggiunto durante/dopo lo
+    # sweep è coperto; lo sweep copre quelli pre-esistenti (l'attach è idempotente).
+    _install_addhandler_hook(flt)
     for handler in root.handlers:
         _ensure_filter_on_handler(handler, flt)
-    _install_addhandler_hook(flt)
     quiet_http_libraries()
     return flt

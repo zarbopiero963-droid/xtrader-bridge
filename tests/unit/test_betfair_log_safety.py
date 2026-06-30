@@ -170,6 +170,31 @@ def test_handler_aggiunto_dopo_install_viene_redatto():
         log_safety._uninstall_addhandler_hook()
 
 
+def test_install_aggancia_hook_prima_dello_sweep(monkeypatch):
+    # Codex #251: l'hook su addHandler va installato PRIMA dello sweep degli handler di root,
+    # altrimenti un handler aggiunto nella finestra tra sweep e install dell'hook resta scoperto.
+    # Test deterministico dell'ORDINE: si registra la sequenza delle chiamate.
+    root = logging.getLogger()
+    calls = []
+    monkeypatch.setattr(log_safety, "_install_addhandler_hook",
+                        lambda flt: calls.append("hook"))
+    monkeypatch.setattr(log_safety, "_ensure_filter_on_handler",
+                        lambda h, flt: calls.append("sweep"))
+    pre = [f for f in root.filters if isinstance(f, log_safety.SecretRedactionFilter)]
+    for f in pre:
+        root.removeFilter(f)
+    sentinel = logging.StreamHandler(io.StringIO())     # garantisce ≥1 handler → almeno uno "sweep"
+    root.addHandler(sentinel)
+    try:
+        flt = log_safety.install_global_log_redaction()
+        assert "hook" in calls and "sweep" in calls
+        assert calls.index("hook") < calls.index("sweep")   # hook PRIMA dello sweep
+    finally:
+        root.removeHandler(sentinel)
+        root.removeFilter(flt)
+        log_safety._uninstall_addhandler_hook()
+
+
 def test_uninstall_addhandler_hook_ripristina_originale():
     orig = logging.Logger.addHandler
     flt = log_safety.SecretRedactionFilter()
