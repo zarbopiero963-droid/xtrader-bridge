@@ -101,3 +101,22 @@ def test_effective_max_age_integrazione_con_is_stale():
     # Con clamp a 90, un messaggio vecchio 100s È stantio; senza clamp (max_age 120) non lo era.
     assert mf.is_stale(0, 100, mf.effective_max_age(120, 90)) is True
     assert mf.is_stale(0, 100, 120) is False
+
+
+def test_effective_max_age_malformato_clampato_al_timeout():
+    # Codex #250: un max_signal_age malformato/bool/NaN/inf NON deve bypassare il clamp.
+    # is_stale ricondurrebbe questi valori a DEFAULT_MAX_AGE (120); effective_max_age deve
+    # quindi clampare 120 al timeout (90), non restituire il valore rotto così com'è.
+    for bad in ("abc", True, False, float("nan"), float("inf"), None, [], {}):
+        assert mf.effective_max_age(bad, 90) == 90, bad
+    # Con clear_delay >= DEFAULT (120) non c'è clamp: resta DEFAULT_MAX_AGE.
+    assert mf.effective_max_age("abc", 200) == mf.DEFAULT_MAX_AGE
+
+
+def test_effective_max_age_malformato_e_is_stale_non_scrivono_arretrato():
+    # Integrazione fail-first del finding: con riga da 90s e max_signal_age="abc", un
+    # arretrato di 100s deve risultare STANTIO (non scritto). Prima del fix effective_max_age
+    # ritornava "abc" → is_stale ricadeva su 120 → 100 < 120 → "fresco" → scritto.
+    eff = mf.effective_max_age("abc", 90)
+    assert mf.is_stale(0, 100, eff) is True              # 100s > clamp 90 → stantio
+    assert mf.is_stale(0, 80, eff) is False              # 80s < 90 → ancora fresco

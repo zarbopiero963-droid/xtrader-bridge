@@ -23,7 +23,11 @@ def effective_max_age(max_signal_age, clear_delay):
       così com'è; `is_stale` applica comunque la sua coercizione difensiva);
     - `max_signal_age` esplicitamente `<= 0` (filtro disattivato dall'utente) → resta tale:
       il clamp NON deve **ri-attivare** un filtro che l'utente ha spento di proposito;
-    - `max_signal_age` malformato → lasciato a `is_stale` (che ricade su `DEFAULT_MAX_AGE`)."""
+    - `max_signal_age` malformato/`bool`/`NaN`/`inf` → si clampa il **valore effettivo** che
+      `is_stale` userebbe (`DEFAULT_MAX_AGE`) al timeout, non si ritorna il valore rotto così
+      com'è (Codex #250): se si restituisse il valore malformato, `is_stale` ricadrebbe su
+      `DEFAULT_MAX_AGE` (120s) **bypassando il clamp** — con una riga da 90s un arretrato di
+      100s passerebbe come "fresco" e verrebbe scritto, pur essendo già oltre la vita CSV."""
     if isinstance(clear_delay, bool):
         return max_signal_age
     try:
@@ -32,14 +36,22 @@ def effective_max_age(max_signal_age, clear_delay):
         return max_signal_age
     if not math.isfinite(cd) or cd <= 0:
         return max_signal_age
+    # A questo punto `cd` è il timeout valido (vita reale della riga). Determina il `max_age`
+    # EFFETTIVO che `is_stale` userebbe e clampalo a `cd`, così NESSUN valore — anche uno
+    # malformato/bool/NaN/inf che `is_stale` riconduce a `DEFAULT_MAX_AGE` — può superare la
+    # vita della riga. Solo un `<= 0` esplicito (filtro spento dall'utente) resta tale.
     if isinstance(max_signal_age, bool):
-        return max_signal_age
-    try:
-        ma = float(max_signal_age)
-    except (TypeError, ValueError, OverflowError):
-        return max_signal_age
-    if not math.isfinite(ma) or ma <= 0:
-        return max_signal_age            # filtro disattivato dall'utente: non ri-attivarlo
+        ma = float(DEFAULT_MAX_AGE)          # bool → DEFAULT in is_stale
+    else:
+        try:
+            ma = float(max_signal_age)
+        except (TypeError, ValueError, OverflowError):
+            ma = float(DEFAULT_MAX_AGE)      # malformato → DEFAULT in is_stale
+        else:
+            if not math.isfinite(ma):
+                ma = float(DEFAULT_MAX_AGE)  # NaN/inf → DEFAULT in is_stale
+            elif ma <= 0:
+                return max_signal_age        # filtro disattivato dall'utente: non ri-attivarlo
     return min(ma, cd)
 
 
