@@ -476,6 +476,14 @@ con flag `False` e liste vuote → comportamento **single-row identico a prima**
 resolve_row` espone le righe in `RouteResult.rows` (e `RouteResult.row` resta la **prima**,
 retro-compatibile).
 
+- **Base «Non pronto» riempita dalle righe multi (#192 kyZ):** un campo `required` della **riga
+  base** che è però fornito da ogni riga multi (es. `SelectionName` obbligatorio in `NAME_ONLY`,
+  valorizzato da ogni MultiSelection) **non** blocca più la generazione. Con l'output multi
+  attivo, una base `NOT_READY` viene ri-valutata rilassando **solo** quel gate — passando
+  comunque per mappatura nomi/mercati ed enrichment ID — e ogni riga derivata è validata
+  singolarmente. Gli **altri** gate strutturali (`Provider` mancante, `Handicap` non numerico,
+  mappatura nomi/mercati non risolta) restano **fail-closed**: nessuna riga derivata.
+
 **Regole e limiti (v1):**
 
 - `BetType` resta `PUNTA`/`BANCA` (contratto XTrader): una riga multi con un valore diverso

@@ -858,6 +858,20 @@ fail-first: `tests/integration/test_app_runtime_glue.py`
 (`test_process_multi_display_riflette_riga_scritta_non_soppressa`,
 `test_process_multi_tutte_scritte_display_resta_prima_riga`).
 
+**kyZ — base `NOT_READY` non blocca le righe multi che riempiono il campo (RISOLTO, PR dedicata
+post-#289).** In `build_validated_rows`, un campo `required` della **riga base** riempito però da
+ogni riga multi (es. `SelectionName` obbligatorio in `NAME_ONLY`, fornito da ogni MultiSelection)
+mandava la base in `NOT_READY` → `_BASE_BLOCKING` → ritorno `[base]` **prima** degli override →
+**zero righe generate** a runtime (feature inutilizzabile senza rilassare a mano l'obbligatorietà).
+**Fix:** con output multi attivo, un base `NOT_READY` è ri-costruito rilassando **solo** quel gate
+(`build_validated_row(..., allow_not_ready=True)`), così la base passa comunque per mappatura
+nomi/mercati ed enrichment ID (che stanno **a valle** del gate) e OGNI riga derivata è validata
+singolarmente da `validator.validate` (fail-closed per riga). Gli **altri** stati di `_BASE_BLOCKING`
+(`INVALID_MISSING_PROVIDER`, `INVALID_HANDICAP`, `MAPPING_MISSING`, `MARKET_MAPPING_MISSING`)
+restano bloccanti. Test hard fail-first: `tests/unit/test_multirow_192.py`
+(`test_kyz_base_not_ready_riempita_da_multiselection`, `test_kyz_altri_gate_base_restano_fail_closed`,
+`test_kyz_mapping_applicata_su_righe_derivate_da_base_not_ready`).
+
 **Test hard:** `tests/unit/test_multirow_192.py`
 (`test_overwrite_last_preserva_riga_attiva_su_espansione`,
 `test_overwrite_last_non_rivive_duplicato_scaduto`,

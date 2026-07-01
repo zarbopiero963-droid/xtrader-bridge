@@ -173,7 +173,8 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
                         require_price: bool = True,
                         name_mapping_profiles=None,
                         market_mapping_profiles=None,
-                        id_resolver=None) -> PipelineResult:
+                        id_resolver=None,
+                        allow_not_ready: bool = False) -> PipelineResult:
     """Applica il parser al messaggio e valida la riga risultante.
 
     `provider` è fornito dal runtime/config (come per il parser hardcoded) e
@@ -204,15 +205,26 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
     Ritorna un `PipelineResult`: `placeable` True solo se supera il gate "Non
     pronto" del parser, ha un `Provider` E passa la validazione (modalità +
     prezzo + BetType). La riga è già in formato contratto (quota col punto,
-    BetType maiuscolo)."""
+    BetType maiuscolo).
+
+    `allow_not_ready` (#192 kyZ, uso INTERNO di `build_validated_rows`): se True il gate
+    "Non pronto" (`NOT_READY`) NON blocca — un obbligatorio della base può essere riempito
+    dalle righe multi. Gli altri gate (provider/handicap/mappature) restano fail-closed."""
     if value_maps_registry is None:
         value_maps_registry = _default_registry()
     res = apply_parser(defn, text, value_maps_registry)
     row = _normalize_to_contract(res.as_csv_row(), provider)
 
-    if not res.ready:
+    if not res.ready and not allow_not_ready:
         # Manca un obbligatorio della regola: non si costruisce un segnale.
         return PipelineResult(NOT_READY, row, list(res.missing_required))
+    # kyZ (#192): con `allow_not_ready` (usato SOLO da `build_validated_rows` quando l'output
+    # multi è attivo) NON si esce su NOT_READY: un obbligatorio della BASE può essere riempito
+    # dalle righe multi (es. `SelectionName` in un MultiSelection). Si prosegue così per le
+    # mappature nomi/mercati e l'arricchimento ID (a valle di questo gate), su cui poi
+    # `_apply_multi_rule` sovrascrive i campi della singola riga; ogni riga derivata è comunque
+    # validata da `validator.validate` (fail-closed per riga). Gli altri gate strutturali sotto
+    # (provider/handicap/mappature) restano invariati e fail-closed anche con `allow_not_ready`.
 
     if not str(row.get("Provider", "")).strip():
         # Provider è obbligatorio per il contratto; il runtime lo passa da config.
@@ -374,8 +386,12 @@ def build_validated_rows(defn: CustomParserDef, text: str, **kwargs) -> "list[Pi
     - altrimenti la riga base (già arricchita da mappature nomi/mercati e dizionario) fornisce
       i campi comuni ed OGNI regola MultiMarket/MultiSelection genera UNA riga distinta, validata
       singolarmente (una riga non valida non blocca le altre);
-    - se la riga base non supera i gate strutturali (Non pronto / provider / handicap / mappature)
-      non si derivano righe multi: si propaga ``[base]`` (fail-closed);
+    - **kyZ (#192):** un obbligatorio della BASE che sarà riempito dalle righe multi (es.
+      `SelectionName` in un MultiSelection) NON deve bloccare la generazione: quando l'output
+      multi è attivo, un base ``NOT_READY`` viene RI-costruito rilassando SOLO quel gate
+      (`allow_not_ready=True`), così la base passa comunque per mappature nomi/mercati ed
+      enrichment ID e ogni riga derivata è validata singolarmente. Gli ALTRI gate strutturali
+      (provider / handicap / mappature) restano fail-closed (``[base]``);
     - MultiMarket e MultiSelection insieme → righe SEPARATE (prima i mercati, poi le selezioni
       sul mercato base), MAI il prodotto cartesiano (vedi `both_multi_active`).
     """
@@ -384,6 +400,11 @@ def build_validated_rows(defn: CustomParserDef, text: str, **kwargs) -> "list[Pi
     selections = defn.active_multi_selections()
     if not markets and not selections:
         return [base]
+    # kyZ (#192): NOT_READY della base non è bloccante quando l'output multi è attivo — le righe
+    # multi possono fornire il campo obbligatorio mancante. Si RI-costruisce la base senza quel
+    # gate (mantenendo mappature/enrichment, che stanno a valle) e la validazione resta per-riga.
+    if base.status == NOT_READY:
+        base = build_validated_row(defn, text, allow_not_ready=True, **kwargs)
     if base.status in _BASE_BLOCKING:
         return [base]
     mode = kwargs.get("mode", recognition.DEFAULT_MODE)
