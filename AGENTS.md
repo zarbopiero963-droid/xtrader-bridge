@@ -30,6 +30,7 @@ The repository is small, but runtime behavior is safety-critical because a wrong
 - Never execute multiple tasks in parallel.
 - Never expand scope beyond the current task, current PR, or provided handoff.
 - Never mark work complete while checks are pending, checks are failing, or blocking review comments remain unresolved.
+- If a change touches the design/UI/UX aspect, you MUST update `docs/design/design_handoff.md` in the same PR **before** telling the owner the PR is ready/mergeable (or declare `N/A` with a written reason when there is no design impact): a stale handoff is an incomplete PR. See the "Design handoff gate".
 - Every task that modifies code MUST automatically add or update truthful hard tests that exercise the real behavior of the change — including, where relevant, resilience scenarios (crash/power-loss, reconnect, concurrency/race, START/STOP teardown, CSV/dedupe/daily recovery, write-failure with rollback): a code change without matching hard tests is an incomplete PR and cannot be declared `DONE`.
 - Never commit secrets, real Telegram tokens, real chat IDs, `.env`, local `config.json`, generated CSV files, build artifacts, logs, caches, EXE files, or ZIP artifacts unless explicitly requested.
 - Never add direct betting, browser automation, mouse/keyboard automation, Betfair login, XTrader login automation, or real-money execution beyond CSV output unless explicitly requested by the owner and protected by a dedicated safety plan.
@@ -308,6 +309,10 @@ applicable:
   XTrader compatibility (flag breaking changes in the PR body);
 - **`docs/audit/roadmap.md`** → architecture, roadmap, safety policy or relevant tech-debt
   decisions;
+- **`docs/design/design_handoff.md`** → any change that touches the **GUI / UX / design**
+  aspect (screens, tabs, controls, fields, buttons, dynamic states/indicators, confirmation
+  flows, colors/palette, UI copy/microcopy, information architecture, or the safety
+  invariants that constrain the UI). See the dedicated mandatory gate below;
 - **docstrings or technical comments** → for public functions, services or non-trivial
   modules (new/removed function, class or module: keep the docstring at the top and, until
   the generator below exists, describe it in the relevant domain doc);
@@ -325,6 +330,31 @@ check, where:
 
 If you touched code and touched no docs, confirm whether a doc needs updating; if it
 genuinely does not, declare `N/A` with the reason.
+
+### Design handoff gate — mandatory before proposing merge
+
+`docs/design/design_handoff.md` is the single source of truth handed to the design (UI/UX)
+work. It must never drift from the real app. Therefore:
+
+- **Before you tell the owner the PR is ready / mergeable (any `DONE`/`READY` state), you MUST
+  first update `docs/design/design_handoff.md` in the same PR whenever the change touches the
+  design aspect** — i.e. anything that alters what the handoff describes: GUI screens/windows,
+  tabs, controls/fields/buttons, dynamic states or indicators (ATTIVO/OFFLINE/RECONNECT,
+  active-rows N/M, real-mode banner, CSV-locked), confirmation flows / frictionful gates,
+  color palette or its safety semantics, UI copy/microcopy, information architecture, or the
+  UI-facing safety invariants.
+- The handoff update must be **truthful and consistent with the code** (verbatim labels,
+  correct states/flows), exactly like the rest of the docs rule.
+- If the change is **purely internal** and does not affect anything the handoff describes,
+  declare **N/A with a written reason** (same as the general docs rule). Never silently skip.
+- This is a **gate, not a suggestion**: a PR that changes the design aspect but leaves the
+  handoff stale is **incomplete** and must not be declared ready to merge. The merge itself
+  always stays manual with the owner.
+
+The post-fix micro-audit and final hard verify must include a
+**"design handoff updated: PASS/FAIL/N/A"** check (PASS = handoff updated in the same PR when
+the design aspect changed · FAIL = design aspect changed but handoff stale · N/A = no design
+impact, with written reason).
 
 **Future goal (not active yet).** A later phase will introduce the **`docs/api/`** folder and
 an **auto-generated** function reference (modules → classes → functions + signature +
@@ -362,7 +392,8 @@ The micro-audit must verify:
 - config persistence was not broken;
 - Windows compatibility was preserved;
 - tests or manual verification were updated for changed behavior;
-- documentation was updated for the change (README / domain docs / docstring), or a note explains why none was needed.
+- documentation was updated for the change (README / domain docs / docstring), or a note explains why none was needed;
+- the design handoff (`docs/design/design_handoff.md`) was updated when the change touches the design/UI/UX aspect, or a note explains why it has no design impact.
 
 Required micro-audit output:
 
@@ -400,6 +431,12 @@ Docs updated:
 - PASS / FAIL / N/A
   (PASS = docs updated in the same PR · FAIL = code changed but docs missing ·
    N/A = purely internal change with no documentation impact, with a written reason)
+
+Design handoff updated:
+- PASS / FAIL / N/A
+  (PASS = docs/design/design_handoff.md updated in the same PR when the design/UI/UX aspect
+   changed · FAIL = design aspect changed but handoff stale · N/A = no design impact, with a
+   written reason)
 
 Result:
 - PASS / FAIL
@@ -904,6 +941,7 @@ Final hard verify requires:
 - inline review comments read;
 - unresolved review threads read;
 - real findings patched or marked with evidence;
+- design handoff (`docs/design/design_handoff.md`) updated when the design/UI/UX aspect changed, or `N/A` with reason;
 - no blocking review comments remain unevidenced;
 - no pending checks remain;
 - no auto-merge;
@@ -927,6 +965,9 @@ Hard tests created/updated for the change:
 - PASS / FAIL / N/A with reason
 
 Docs updated for the change:
+- PASS / FAIL / N/A with reason
+
+Design handoff updated for the change:
 - PASS / FAIL / N/A with reason
 
 GitHub checks completed:

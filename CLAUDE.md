@@ -51,6 +51,7 @@ Per domande, spiegazioni o analisi read-only non serve aprire PR.
 - Non dichiarare test passati se non sono stati realmente eseguiti.
 - Non creare test finti, decorativi o che non esercitano il codice reale.
 - Ogni task che modifica codice DEVE generare automaticamente test hard veritieri nuovi o aggiornati che esercitino il comportamento reale del cambiamento — inclusi, quando pertinenti, gli scenari resilienza (crash/power-loss, riconnessione, concorrenza/race, teardown START/STOP, recovery CSV/dedupe/daily, write-failure con rollback): un cambiamento di codice senza test hard corrispondenti è un PR incompleto e NON può dichiarare `DONE`.
+- Se una modifica tocca l'aspetto design/UI/UX, DEVI aggiornare `docs/design/design_handoff.md` nello stesso PR **prima** di dirmi che la PR è pronta/mergiabile (o dichiarare `N/A` con motivazione se non ha impatto sul design): un handoff stantio è un PR incompleto. Vedi «GATE DESIGN HANDOFF».
 - Non dichiarare `READY_TO_MERGE`: il merge resta sempre manuale.
 
 ---
@@ -364,7 +365,8 @@ Il micro-audit deve verificare:
 - non hai aumentato rischio doppia scommessa;
 - non hai cambiato header CSV senza richiesta;
 - non hai fatto refactor largo non richiesto;
-- hai aggiornato le docs per il cambiamento (README/docs di dominio/docstring), o hai scritto perché non serviva.
+- hai aggiornato le docs per il cambiamento (README/docs di dominio/docstring), o hai scritto perché non serviva;
+- hai aggiornato `docs/design/design_handoff.md` se la modifica tocca l'aspetto design/UI/UX, o hai scritto perché non ha impatto sul design.
 
 Formato obbligatorio:
 
@@ -399,6 +401,12 @@ Docs updated:
 - PASS / FAIL / N/A
   (PASS = docs aggiornate nello stesso PR · FAIL = codice modificato ma docs mancanti ·
    N/A = modifica puramente interna senza impatto documentale, con motivazione scritta)
+
+Design handoff updated:
+- PASS / FAIL / N/A
+  (PASS = docs/design/design_handoff.md aggiornato nello stesso PR quando l'aspetto design è
+   cambiato · FAIL = aspetto design cambiato ma handoff stantio · N/A = nessun impatto sul
+   design, con motivazione scritta)
 
 Result:
 - PASS / FAIL
@@ -755,6 +763,10 @@ In pratica, nello stesso PR aggiorna, quando applicabile:
   compatibilità XTrader (se è un breaking change, segnalalo nel PR body);
 - **`docs/audit/roadmap.md`** → cambiamenti architetturali, roadmap, safety policy o debito
   tecnico rilevante;
+- **`docs/design/design_handoff.md`** → qualsiasi modifica che tocca l'aspetto **GUI / UX /
+  design** (schermate, tab, controlli/campi/pulsanti, stati o indicatori dinamici, flussi di
+  conferma, palette colori, copy/microcopy della UI, information architecture o le invarianti
+  di sicurezza che vincolano la UI). Vedi il **gate obbligatorio** dedicato qui sotto;
 - **docstring o commenti tecnici** → per funzioni pubbliche, servizi o moduli non banali
   (nuova/rimossa funzione, classe o modulo: mantieni il docstring in testa e, finché non
   esiste il generatore — vedi sotto — descrivila nel doc di dominio pertinente);
@@ -775,6 +787,32 @@ Se hai toccato il codice e non hai toccato nessuna doc, fermati e verifica se se
 aggiornarne una; se davvero non serve (es. fix interno senza impatto su comportamento/API
 documentata), dichiara `N/A` con il motivo. Non considerare completa una PR di codice senza
 questo controllo documentale.
+
+### GATE DESIGN HANDOFF — OBBLIGATORIO PRIMA DI PROPORRE IL MERGE
+
+`docs/design/design_handoff.md` è la **fonte unica** consegnata a chi fa il design (UI/UX) e
+**non deve mai restare disallineato** dall'app reale. Perciò:
+
+- **Prima di dirmi che la PR è pronta / mergiabile (qualsiasi stato `DONE`/`READY`), DEVI
+  prima aggiornare `docs/design/design_handoff.md` nello stesso PR ogni volta che la modifica
+  tocca l'aspetto design** — cioè tutto ciò che il handoff descrive: schermate/finestre GUI,
+  tab, controlli/campi/pulsanti, stati o indicatori dinamici (ATTIVO/OFFLINE/RICONNESSIONE,
+  righe attive N/M, banner modalità reale, CSV bloccato), flussi di conferma / gate
+  "frictionful", palette colori o la loro semantica di sicurezza, copy/microcopy della UI,
+  information architecture, o le invarianti di sicurezza lato UI.
+- L'aggiornamento del handoff deve essere **veritiero e coerente col codice** (label verbatim,
+  stati/flussi corretti), esattamente come per il resto delle docs.
+- Se la modifica è **puramente interna** e non tocca nulla di ciò che il handoff descrive,
+  dichiara **N/A con motivazione scritta** (come per la regola docs generale). Mai saltare in
+  silenzio.
+- È un **gate, non un consiglio**: una PR che cambia l'aspetto design ma lascia il handoff
+  stantio è **incompleta** e non può essere dichiarata pronta al merge. Il merge resta
+  comunque **sempre manuale del proprietario**.
+
+Il `POST_FIX_MICRO_AUDIT` e il `FINAL_HARD_VERIFY` devono includere anche il controllo
+**"design handoff aggiornato: PASS/FAIL/N/A"** (PASS = handoff aggiornato nello stesso PR
+quando l'aspetto design è cambiato · FAIL = aspetto design cambiato ma handoff stantio · N/A =
+nessun impatto sul design, con motivazione scritta).
 
 **Obiettivo futuro (non ancora attivo).** In una fase successiva saranno introdotte la
 cartella **`docs/api/`** e una **function-reference auto-generata** dal codice (moduli →
@@ -893,6 +931,9 @@ Hard tests created/updated for the change:
 - PASS / FAIL / N/A con motivo
 
 Docs updated for the change:
+- PASS / FAIL / N/A con motivo
+
+Design handoff updated for the change:
 - PASS / FAIL / N/A con motivo
 
 GitHub checks completed:
