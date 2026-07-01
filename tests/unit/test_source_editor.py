@@ -212,6 +212,19 @@ def test_parser_by_chat_disabled_corrotto_non_crasha_e_normalizza_chiavi():
     assert ed2.sources[0]["parser"] == "X"
 
 
+def test_prefill_override_falsy_diventa_stringa_vuota():
+    # #273 (Codex P2): un override falsy (es. null da config editata a mano) NON deve diventare
+    # la stringa "None" al prefill — verrebbe salvato come override attivo verso un parser
+    # inesistente (resolve_parser_name non ripiegherebbe più su active_parser).
+    ed = SourceEditor({"source_chats": [{"chat_id": "111", "enabled": True, "mode": "PRE"}],
+                       "parser_by_chat": {"111": None}})
+    assert ed.sources[0]["parser"] == ""
+    # stesso caso dal parcheggio (riga disattivata con valore falsy)
+    ed2 = SourceEditor({"source_chats": [{"chat_id": "222", "enabled": False, "mode": "PRE"}],
+                        "parser_by_chat_disabled": {"222": None}})
+    assert ed2.sources[0]["parser"] == ""
+
+
 def test_parcheggio_ignorato_per_riga_attiva_non_promuove_override():
     # #273 (Codex P2): una voce parcheggiata STALE per una sorgente ora ATTIVA (senza override
     # attivo) NON deve pre-riempire la riga né essere promossa in parser_by_chat al salvataggio

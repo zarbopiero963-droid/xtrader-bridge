@@ -49,7 +49,10 @@ class SourceEditor:
             sel = by_chat.get(s["chat_id"], "")
             if not sel and not s["enabled"]:
                 sel = disabled_by_chat.get(s["chat_id"], "")
-            s["parser"] = str(sel).strip()
+            # `or ""`: un valore FALSY (es. `null` da config editata a mano) va coerciato a ""
+            # e non stringificato a "None"/"0" — altrimenti verrebbe salvato come override
+            # attivo verso un parser inesistente (Codex P2). Come faceva il codice precedente.
+            s["parser"] = str(sel or "").strip()
             self.sources.append(s)
 
     # ── opzioni per i menu della GUI ───────────────────────────────────────
