@@ -61,20 +61,22 @@ def _multimarket_parser():
     return defn
 
 
-def _multiselection_parser():
-    # La base fornisce anche MarketType/MarketName: le selezioni ereditano il mercato.
+def _multiselection_parser_with(selections):
+    # La base fornisce anche MarketType/MarketName: le selezioni ereditano il mercato. Le
+    # selezioni sono parametriche per simulare un parser che, con lo STESSO testo, produce un
+    # numero DIVERSO di righe dopo un cambio di config a runtime (kyh #192).
     extra = [
         cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
         cp.FieldRule(target="MarketName", fixed_value="Risultato esatto"),
     ]
     defn = cp.CustomParserDef(name="MS", mode="NAME_ONLY", rules=_base_rules(extra))
     defn.multi_selection_enabled = True
-    defn.multi_selections = [
-        cp.MultiRowRule(selection_name="1 - 0"),
-        cp.MultiRowRule(selection_name="2 - 1"),
-        cp.MultiRowRule(selection_name="1 - 2"),
-    ]
+    defn.multi_selections = [cp.MultiRowRule(selection_name=s) for s in selections]
     return defn
+
+
+def _multiselection_parser():
+    return _multiselection_parser_with(["1 - 0", "2 - 1", "1 - 2"])
 
 
 def _rows(results):
@@ -415,6 +417,59 @@ def test_overwrite_last_tiene_tutto_il_blocco(tmp_path):
     assert [r["SelectionName"] for r in q.active_rows()] == ["1 - 0", "2 - 1", "1 - 2"]
 
 
+def test_overwrite_last_preserva_riga_attiva_su_espansione(tmp_path):
+    """kyh #192 (Codex #281, app.py:2129): in OVERWRITE_LAST un parser multi che prima produce UNA
+    riga (A) e poi — STESSO testo, config espansa a runtime — produce A+B non deve PERDERE A. La
+    riga A è ora un duplicato ma è ANCORA attiva in coda: deve restare nel blocco riscritto (tutte
+    le righe dell'istruzione), non essere scartata lasciando solo la riga nuova B."""
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    tracker = signal_dedupe.SignalTracker()
+    # 1) stesso messaggio → una sola riga A ("1 - 0"): scritta e attiva.
+    rows1 = _rows(pipe.build_validated_rows(
+        _multiselection_parser_with(["1 - 0"]), MSG, mode="NAME_ONLY"))
+    write_path.commit_signals(tracker, None, q, _cfg(path), MSG, rows1, path, now=0,
+                              write_rows=csv_writer.write_rows)
+    assert [r["SelectionName"] for r in q.active_rows()] == ["1 - 0"]
+    # 2) stesso testo, ora il parser espande a A+B ("1 - 0" + "2 - 1"): A è duplicata ma ATTIVA.
+    rows2 = _rows(pipe.build_validated_rows(
+        _multiselection_parser_with(["1 - 0", "2 - 1"]), MSG, mode="NAME_ONLY"))
+    r2 = write_path.commit_signals(tracker, None, q, _cfg(path), MSG, rows2, path, now=1,
+                                   write_rows=csv_writer.write_rows)
+    assert r2.write_error is None
+    # A PRESERVATA: il blocco è A+B (istruzione voluta), non solo B (il bug kyh).
+    assert [r["SelectionName"] for r in q.active_rows()] == ["1 - 0", "2 - 1"]
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        next(reader)
+        data = list(reader)
+    sel = CSV_HEADER.index("SelectionName")
+    assert [d[sel] for d in data] == ["1 - 0", "2 - 1"]
+
+
+def test_overwrite_last_reinvio_identico_non_riscrive(tmp_path):
+    """OVERWRITE_LAST: un reinvio IDENTICO (stesso testo, stesse righe, tutte duplicate ma ancora
+    attive) NON deve riscrivere il CSV — XTrader non deve riconsumare righe identiche — e il blocco
+    attivo resta invariato (nessuna riga persa)."""
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    tracker = signal_dedupe.SignalTracker()
+    rows = _rows(pipe.build_validated_rows(_multiselection_parser(), MSG, mode="NAME_ONLY"))
+    write_path.commit_signals(tracker, None, q, _cfg(path), MSG, rows, path, now=0,
+                              write_rows=csv_writer.write_rows)
+    calls = []
+
+    def _spy(rows_, path_):
+        calls.append(list(rows_))
+        csv_writer.write_rows(rows_, path_)
+
+    res = write_path.commit_signals(tracker, None, q, _cfg(path), MSG, rows, path, now=1,
+                                    write_rows=_spy)
+    assert res.decision == "DUPLICATE"
+    assert calls == []                              # nessuna riscrittura sul reinvio identico
+    assert [r["SelectionName"] for r in q.active_rows()] == ["1 - 0", "2 - 1", "1 - 2"]
+
+
 def test_commit_signals_tutte_duplicate_non_riscrive_csv(tmp_path):
     # Se TUTTE le righe sono duplicate, il CSV operativo NON deve essere riscritto (XTrader non
     # deve riconsumare righe identiche), come nel single-row su DUPLICATE.
@@ -437,9 +492,11 @@ def test_commit_signals_tutte_duplicate_non_riscrive_csv(tmp_path):
     assert calls == []                              # write_rows NON chiamata sui duplicati
 
 
-def test_commit_signals_cap_blocca_e_ripristina_guardrail(tmp_path):
-    # Una riga bloccata dal tetto max_active NON è scritta E non deve restare "vista" nel dedupe:
-    # con un tetto più alto, al retry quella riga passa (non è un duplicato).
+def test_commit_signals_cap_autoraise_scrive_tutto_il_blocco(tmp_path):
+    """#192 (decisione proprietario): in APPEND/QUEUE il tetto `max_active` NON spezza il blocco di
+    UN messaggio multi. Con `max_active=2` e un messaggio da 3 righe, tutte e 3 entrano (auto-raise
+    del tetto tramite `queue.add(force=True)`), invece di scriverne 2 e troncare la 3ª in silenzio
+    (partial-drop). Elimina alla radice il partial cap-block non segnalato all'operatore."""
     path = str(tmp_path / "segnali.csv")
     rows = _rows(pipe.build_validated_rows(_multiselection_parser(), MSG, mode="NAME_ONLY"))
     tracker = signal_dedupe.SignalTracker()
@@ -447,13 +504,9 @@ def test_commit_signals_cap_blocca_e_ripristina_guardrail(tmp_path):
                                  default_timeout=120, max_active=2)
     res = write_path.commit_signals(tracker, None, q, _cfg(path), MSG, rows, path, now=0,
                                     write_rows=csv_writer.write_rows)
-    assert len(res.rows) == 2                       # solo 2 righe entrano (tetto)
-    # La 3ª, bloccata dal tetto, non ha consumato il dedupe → ora passa.
-    q2 = signal_queue.SignalQueue(mode=signal_queue.QUEUE_UNTIL_CONFIRMED,
-                                  default_timeout=120, max_active=10)
-    res2 = write_path.commit_signals(tracker, None, q2, _cfg(path), MSG, [rows[2]], path, now=1,
-                                     write_rows=csv_writer.write_rows)
-    assert len(res2.rows) == 1 and res2.rows[0]["SelectionName"] == "1 - 2"
+    assert res.write_error is None and res.blocked_by_cap is False
+    assert len(res.rows) == 3                        # tutte e 3 (auto-raise: blocco non spezzato)
+    assert [r["SelectionName"] for r in q.active_rows()] == ["1 - 0", "2 - 1", "1 - 2"]
 
 
 # ── review #281 (Codex): cap-block reporting + shadow dedupe cross-schema ──────
@@ -463,19 +516,22 @@ def _one_active_row():
             "BetType": "PUNTA", "Provider": "P", "Price": "1.5"}
 
 
-def test_commit_signals_tutte_cap_blocked_segnala_il_tetto(tmp_path):
-    """Codex #281: in APPEND col tetto `max_active` pieno, se TUTTE le righe WRITE sono oltre il
-    tetto, `commit_signals` deve segnalare `blocked_by_cap=True` (percorso «tetto raggiunto»),
-    non un WRITE riuscito a 0 righe che l'operatore leggerebbe come scrittura ok."""
+def test_commit_signals_cap_pieno_autoraise_aggiunge_il_blocco(tmp_path):
+    """#192 (decisione proprietario, evoluzione del reporting cap di #281): anche con il tetto GIÀ
+    pieno da un segnale precedente, il blocco di un messaggio multi viene aggiunto per INTERO
+    (auto-raise), non bloccato. L'operatore vede una scrittura reale con tutte le righe, non un
+    WRITE a 0 righe né un cap-block: il blocco coerente dell'istruzione non è mai spezzato."""
     path = str(tmp_path / "s.csv")
     q = signal_queue.SignalQueue(mode=signal_queue.APPEND_ACTIVE, default_timeout=120, max_active=1)
-    q.add(_one_active_row(), now=0)                       # riempi il tetto (1/1)
+    q.add(_one_active_row(), now=0)                       # tetto pieno (1/1) da un segnale precedente
     tracker = signal_dedupe.SignalTracker()
     cfg = {"csv_path": path, "dry_run": False}
     rows = _rows(pipe.build_validated_rows(_multiselection_parser(), MSG, mode="NAME_ONLY"))
     res = write_path.commit_signals(tracker, None, q, cfg, MSG, rows, path, now=0,
                                     write_rows=csv_writer.write_rows)
-    assert res.blocked_by_cap is True                     # tetto raggiunto, non WRITE-ok a 0 righe
-    assert res.decision == live_guard.WRITE               # decisione WRITE ma bloccata dal cap
+    assert res.blocked_by_cap is False                    # niente cap-block: auto-raise del tetto
+    assert res.decision == live_guard.WRITE
+    assert len(res.rows) == 4                             # 1 precedente + 3 righe del blocco multi
+    assert len(q.active_rows()) == 4
 
 

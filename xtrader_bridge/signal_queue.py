@@ -162,7 +162,7 @@ class SignalQueue:
         return t
 
     def add(self, row: dict, *, signal_id: str = None, now: float = None,
-            timeout: float = None):
+            timeout: float = None, force: bool = False):
         """Aggiunge un segnale e ritorna il suo `signal_id`, oppure ``None`` se è stato
         BLOCCATO dal tetto `max_active` (#136 punto 5).
 
@@ -170,6 +170,13 @@ class SignalQueue:
         - altre modalità: aggiorna se `signal_id` è già presente, altrimenti accoda — ma un
           NUOVO segnale che porterebbe oltre `max_active` (se > 0) viene **bloccato**
           (ritorna ``None``, coda invariata) così non si superano N scommesse simultanee.
+
+        `force=True` (auto-raise del tetto, decisione proprietario #192): accoda il segnale
+        SENZA applicare il tetto `max_active`. Serve al commit MULTI-RIGA (`commit_signals`) per
+        NON spezzare mai il blocco coerente di UN singolo messaggio: tutte le righe di
+        quell'istruzione restano attive insieme invece di essere troncate al tetto (che
+        lascerebbe righe fuori in silenzio). Non incide sull'aggiornamento di un segnale già
+        attivo (mai bloccato comunque) né su `OVERWRITE_LAST`.
 
         `signal_id` assente → generato automaticamente. `timeout` assente →
         `default_timeout`."""
@@ -190,8 +197,9 @@ class SignalQueue:
             return signal_id
         is_update = any(a.signal_id == signal_id for a in self._active)
         # Tetto: blocca SOLO un nuovo segnale (non l'aggiornamento di uno già attivo) che
-        # porterebbe il numero di righe attive oltre `max_active` (#136 punto 5).
-        if not is_update and self.max_active and len(self._active) >= self.max_active:
+        # porterebbe il numero di righe attive oltre `max_active` (#136 punto 5). `force=True`
+        # bypassa il tetto per NON spezzare il blocco di un singolo messaggio multi (#192).
+        if not force and not is_update and self.max_active and len(self._active) >= self.max_active:
             return None
         self._active = [a for a in self._active if a.signal_id != signal_id]
         self._active.append(sig)

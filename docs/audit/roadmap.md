@@ -786,3 +786,47 @@ Vedi `docs/audit/release_checklist.md` e `docs/audit/xtrader_simulation_test.md`
 **Micro-audit:** nessun file di produzione modificato; nessun token/chat reale; CSV/contratto
 invariati; gli stub si installano solo se i moduli reali sono assenti (su Windows i test
 usano comunque `object.__new__` + sink shadowati, non aprono finestre). `pytest`: 1104 passed.
+
+## #192 — semantica del commit MULTI-riga (routing per-riga + OVERWRITE + auto-raise)
+
+**Contesto (review post-merge Codex/CodeRabbit su #281).** Un singolo messaggio Telegram può
+generare **più righe CSV** (MultiMarket/MultiSelection). Il commit multi-riga
+(`write_path.commit_signals`) e il suo instradamento da `app._process` hanno tre invarianti
+interdipendenti, indirizzate insieme (kyc + kyh + cap) perché non separabili al confine
+dedupe/coda:
+
+- **Routing per-riga (kyc).** Un parser **multi** (`is_multi_row()` = modalità attiva **e** almeno
+  una riga `enabled`) instrada SEMPRE da `commit_signals` con **deduplica per-riga**
+  (`signal_dedupe.row_dedup_key`), anche quando ORA produce **una sola** riga piazzabile. Senza,
+  se lo stesso messaggio in seguito ne genera di più, la riga già scritta (dedupata a
+  hash-messaggio) sarebbe riscritta → doppia scommessa. Una modalità accesa **senza righe attive**
+  ripiega sulla riga base e resta single-row (dedup legacy a hash-messaggio).
+- **Blocco OVERWRITE_LAST che preserva le righe attive (kyh).** In `OVERWRITE_LAST` il blocco
+  riscritto contiene **tutte** le righe dell'ultima istruzione ancora valide: le righe **nuove**
+  (`WRITE`) più le righe **`DUPLICATE` ancora attive** in coda. Un messaggio che (stesso testo,
+  config espansa a runtime) passa da `A` a `A+B` **non perde** `A`: prima `replace_block` usava le
+  sole righe nuove e scartava la riga già attiva (istruzione voluta `A+B` → restava `B`). Il CSV è
+  riscritto **solo** se c'è almeno una riga nuova: un reinvio identico (tutte duplicate ancora
+  attive) non tocca il file, così XTrader non riconsuma righe identiche.
+- **Auto-raise del tetto (cap, decisione del proprietario).** In `APPEND_ACTIVE`/
+  `QUEUE_UNTIL_CONFIRMED` il tetto `max_active` **non spezza** il blocco di UN singolo messaggio:
+  `queue.add(..., force=True)` accoda tutte le righe nuove dell'istruzione anche oltre il tetto,
+  invece di scriverne alcune e troncare le altre in silenzio (partial-drop). Il tetto continua a
+  limitare l'accumulo **tra messaggi distinti** (percorso single-row). **Tradeoff accettato dal
+  proprietario:** in APPEND le righe attive possono superare `max_active` per un blocco multi
+  intero; ogni riga scade comunque per timeout (nessun segnale immortale) e la modalità APPEND è
+  un'opzione avanzata non-default (il default `OVERWRITE_LAST` tiene un solo blocco alla volta).
+
+**Deferito alla PR dedicata (kyW).** La riconciliazione **cross-namespace** della dedupe alla
+**transizione di modalità a runtime** (parser multi→single o single→multi: le due dedupe usano
+namespace diversi — hash-messaggio vs chiave per-riga — quindi un cambio di modalità può far
+sfuggire un duplicato). Il tentativo di shadow cross-registration su #281 è stato **revertato**
+perché inquinava il rate-limit; verrà rifatto in kyW senza contaminare il conteggio al minuto.
+
+**Test hard:** `tests/unit/test_multirow_192.py`
+(`test_overwrite_last_preserva_riga_attiva_su_espansione`,
+`test_overwrite_last_reinvio_identico_non_riscrive`,
+`test_commit_signals_cap_autoraise_scrive_tutto_il_blocco`,
+`test_commit_signals_cap_pieno_autoraise_aggiunge_il_blocco`) e
+`tests/unit/test_signal_queue.py` (`test_add_force_bypassa_il_tetto`,
+`test_add_force_in_overwrite_last_resta_una_sola_riga`). Tutti fail-first sul codice precedente.
