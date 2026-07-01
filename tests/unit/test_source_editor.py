@@ -177,3 +177,33 @@ def test_apply_riga_disattivata_non_scrive_override():
     new_cfg, errors, _ = ed.apply({})
     assert errors == []
     assert "222" not in new_cfg.get("parser_by_chat", {})
+
+
+def test_apply_riga_disattivata_conserva_selezione_parser():
+    # #47 (Codex P2): la sorgente disattivata NON entra in parser_by_chat (P2-b: niente
+    # autorizzazione né blocco avvio), MA la selezione del parser va CONSERVATA a parte così
+    # riabilitandola in seguito non si perde (prefill al riapri).
+    ed = SourceEditor()
+    ed.add_source(chat_id="222", enabled=False, parser="X")
+    new_cfg, errors, _ = ed.apply({})
+    assert errors == []
+    assert "222" not in new_cfg.get("parser_by_chat", {})                 # non autorizzata
+    assert new_cfg.get("parser_by_chat_disabled", {}).get("222") == "X"   # selezione conservata
+    # round-trip: riaprendo l'editor la riga disattivata mostra ancora il suo parser
+    ed2 = SourceEditor(new_cfg)
+    row = next(s for s in ed2.sources if s["chat_id"] == "222")
+    assert row["parser"] == "X" and row["enabled"] is False
+
+
+def test_apply_riabilitare_sorgente_ripristina_override_attivo():
+    # #47 (Codex P2): riabilitando una sorgente prima disattivata, la selezione parcheggiata
+    # torna in parser_by_chat (autorizza + routing) e sparisce dal parcheggio.
+    base = {"source_chats": [{"chat_id": "222", "enabled": False, "mode": "PRE"}],
+            "parser_by_chat_disabled": {"222": "X"}}
+    ed = SourceEditor(base)
+    assert ed.sources[0]["parser"] == "X"        # prefill dal parcheggio
+    ed.update_source(0, enabled=True)            # riabilita
+    new_cfg, errors, _ = ed.apply(base)
+    assert errors == []
+    assert new_cfg["parser_by_chat"].get("222") == "X"                   # ora attivo → autorizza
+    assert "222" not in new_cfg.get("parser_by_chat_disabled", {})       # tolto dal parcheggio
