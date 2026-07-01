@@ -381,6 +381,50 @@ def test_vs_line_squadra_away_a_cifra_iniziale_ammessa():
     assert parse_message("P.Bet. 1\n🆚 Roma 2 - 1 Schalke 04")["teams"] == "Roma v Schalke 04"
 
 
+def test_vs_line_coda_recupero_col_marcatore_viene_rimossa():
+    """#206 (Codex P2): un minuto di RECUPERO col marcatore esplicito ("90+2'"/"90+2m") dopo la
+    squadra away va rimosso come "46m"/"90+2 FT". Prima `_META_TOK` copriva solo il "90+2" NUDO,
+    quindi "Barcelona 90+2'" restava nel nome → "Real Madrid v Barcelona 90+2'".
+
+    Fail-first: sul codice precedente l'EventName includeva il recupero marcato."""
+    for tail in ("90+2'", "90+2’", "90+2m", "90+2 '"):
+        assert parse_message(f"P.Bet. 1\n🆚 Real Madrid 2 - 1 Barcelona {tail}")["teams"] == \
+            "Real Madrid v Barcelona"
+    # il minuto NUDO di recupero resta coperto (nessuna regressione)
+    assert parse_message("P.Bet. 1\n🆚 Real Madrid 2 - 1 Barcelona 90+2")["teams"] == \
+        "Real Madrid v Barcelona"
+
+
+def test_vs_line_metadati_avvolti_non_diventano_squadra():
+    """#206 (Codex P2): un token di stato/minuto AVVOLTO tra parentesi/quadre ("(HT)"/"[FT]"/
+    "(90+2')") non è una squadra. Prima `_META_ONLY` matchava solo il token NUDO, quindi il
+    wrapping faceva passare le lettere a `_HAS_ALPHA` → "Real Madrid v (HT)".
+
+    Fail-first: sul codice precedente l'away avvolto diventava un EventName fasullo."""
+    # lato away = SOLO metadato avvolto → fail-closed (nessuna squadra)
+    for tok in ("(HT)", "[FT]", "(LIVE)", "(90+2')"):
+        assert parse_message(f"P.Bet. 1\n🆚 Real Madrid 2 - 1 {tok}")["teams"] == ""
+    # coda di metadato avvolto DOPO la squadra → rimossa, squadra preservata
+    assert parse_message("P.Bet. 1\n🆚 Real Madrid 2 - 1 Barcelona (HT)")["teams"] == \
+        "Real Madrid v Barcelona"
+
+
+def test_vs_line_metadato_avvolto_adiacente_senza_spazio_viene_rimosso():
+    """#267 (Codex P2): un token di stato/minuto AVVOLTO e ADIACENTE alla squadra SENZA spazio
+    ("Barcelona(HT)"/"Barcelona(90+2')") deve comunque perdere la coda: le parentesi sono un
+    confine non ambiguo. Prima `_META_TAIL` richiedeva sempre `\\s+` prima del token, quindi la
+    coda avvolta adiacente restava nel nome → "Real Madrid v Barcelona(HT)".
+
+    Fail-first: sul codice precedente l'EventName includeva la coda avvolta adiacente."""
+    for tail in ("(HT)", "[FT]", "(LIVE)", "(90+2')"):
+        assert parse_message(f"P.Bet. 1\n🆚 Real Madrid 2 - 1 Barcelona{tail}")["teams"] == \
+            "Real Madrid v Barcelona"
+    # una cifra NUDA adiacente NON è metadato: "Schalke 04" resta invariato (nessuna regressione),
+    # e un token BARE adiacente senza spazio ("Barcelona46m") NON va rimosso (resta conservativo:
+    # solo il confine avvolto è non ambiguo).
+    assert parse_message("P.Bet. 1\n🆚 Roma 2 - 1 Schalke 04")["teams"] == "Roma v Schalke 04"
+
+
 def test_vs_line_separatore_v_vince_sul_punteggio_in_coda():
     """#184 M10: se c'è un separatore `v` esplicito, il punteggio resta una CODA da rimuovere
     (non un separatore): "Inter v Milan 2 - 1 46m" → "Inter v Milan", non "Inter v Milan 2 - 1 46m"."""

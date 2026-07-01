@@ -427,6 +427,22 @@ righe 🆚
 produce squadre (`Italy 2 - 1 Serie A` → vuoto). Nessun cambio su CSV/quota/score; la rimozione
 del punteggio a fine riga (`Home v Away 6 - 0 46m`) resta invariata.
 
+**Hardening audit #241 (finding Codex P2 non risolti su PR #206).** Due code non-squadra
+sfuggivano ancora a `_clean_team_side` e finivano nell'EventName:
+- **recupero col marcatore** (`90+2'`/`90+2m`): `_META_TOK` copriva solo il `90+2` **nudo**; ora
+  ammette il marcatore opzionale (`\d+\+\d+\s*[m'’]?`), così `… 2 - 1 Barcelona 90+2'` →
+  `Real Madrid v Barcelona`;
+- **metadati AVVOLTI** (`(HT)`/`[FT]`/`(90+2')`): `_META_ONLY`/`_META_TAIL` matchavano solo il token
+  nudo, quindi il wrapping faceva passare le lettere a `_HAS_ALPHA` → `Real Madrid v (HT)`. Nuovo
+  `_META_TOK_W` (token anche fra `()`/`[]`) usato da entrambi: un lato di soli metadati avvolti
+  fallisce chiuso e una coda avvolta viene rimossa (`… 2 - 1 Barcelona (HT)` → `Real Madrid v
+  Barcelona`);
+- **coda avvolta ADIACENTE senza spazio** (`Barcelona(HT)`/`Barcelona(90+2')`): `_META_TAIL`
+  richiedeva sempre `\s+` prima del token, quindi il metadato incollato al nome restava
+  nell'EventName. Ora un token **avvolto** può seguire anche senza spazio (`\s*`, confine `()`/`[]`
+  non ambiguo), mentre un token **nudo** continua a richiedere `\s+` per non divorare cifre nude
+  interne al nome (`Schalke 04`) — `… 2 - 1 Barcelona(HT)` → `Real Madrid v Barcelona`.
+
 ## M9 — `dizionario.market_types()` degrada con `.get()` invece di `KeyError`
 
 `market_types(rows)` indicizzava diretto `row["MarketType_XTrader"]` mentre tutti i fratelli del
