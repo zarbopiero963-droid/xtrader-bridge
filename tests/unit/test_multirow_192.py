@@ -447,13 +447,11 @@ def test_overwrite_last_preserva_riga_attiva_su_espansione(tmp_path):
     assert [d[sel] for d in data] == ["1 - 0", "2 - 1"]
 
 
-def test_overwrite_last_blocco_e_istruzione_corrente_non_coda_stantia(tmp_path):
-    """Provenance (Codex #281, `write_path` r3507061639): in OVERWRITE_LAST il blocco riscritto è
-    l'ISTRUZIONE CORRENTE (righe del messaggio), non una riga stantia pescata dalla coda per un
-    match di soli campi-chiave sul testo corrente. Scenario: una riga A scade dalla coda (timeout)
-    ma è ancora nella finestra dedup; un reinvio dello STESSO testo che ora espande ad A+B deve
-    riscrivere l'istruzione COMPLETA A+B, non solo B (il vecchio match per chiave la scartava
-    perché non più attiva)."""
+def test_overwrite_last_non_rivive_duplicato_scaduto(tmp_path):
+    """P1 (Codex #281, `write_path`:205): in OVERWRITE_LAST una riga già SCADUTA dalla coda (timeout)
+    ma ancora DUPLICATE nella finestra dedup NON deve essere rivissuta nel blocco (violerebbe il
+    clear-timeout: XTrader rivedrebbe un segnale stantio). Scenario: A scritta a now=0 (timeout 120),
+    reinvio a now=200 (A scaduta, 0+120<200) che ora espande ad A+B → si scrive SOLO B (A non rivive)."""
     path = str(tmp_path / "segnali.csv")
     q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
     tracker = signal_dedupe.SignalTracker()               # dedupe_window default 300 > timeout 120
@@ -462,20 +460,76 @@ def test_overwrite_last_blocco_e_istruzione_corrente_non_coda_stantia(tmp_path):
     write_path.commit_signals(tracker, None, q, _cfg(path), MSG, rows1, path, now=0,
                               write_rows=csv_writer.write_rows)
     assert [r["SelectionName"] for r in q.active_rows()] == ["1 - 0"]
-    # now=200: A è scaduta dalla coda (0+120 < 200) ma è ancora DUPLICATE nella finestra dedup (<300).
     rows2 = _rows(pipe.build_validated_rows(
         _multiselection_parser_with(["1 - 0", "2 - 1"]), MSG, mode="NAME_ONLY"))
     res = write_path.commit_signals(tracker, None, q, _cfg(path), MSG, rows2, path, now=200,
                                     write_rows=csv_writer.write_rows)
-    assert res.write_error is None and res.decision == live_guard.WRITE
-    # Istruzione COMPLETA riscritta (A+B), non solo B: il blocco è il messaggio corrente.
-    assert [r["SelectionName"] for r in q.active_rows()] == ["1 - 0", "2 - 1"]
+    assert res.write_error is None
+    # A (scaduta) NON rivive: solo B è attiva/scritta.
+    assert [r["SelectionName"] for r in q.active_rows()] == ["2 - 1"]
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         next(reader)
         data = list(reader)
     sel = CSV_HEADER.index("SelectionName")
-    assert [d[sel] for d in data] == ["1 - 0", "2 - 1"]
+    assert [d[sel] for d in data] == ["2 - 1"]
+
+
+def test_overwrite_last_due_regole_stessa_riga_non_duplica(tmp_path):
+    """P1 (Codex #281, `write_path`:205): due regole multi che risolvono alla STESSA riga in UN solo
+    messaggio non devono scrivere DUE righe identiche (doppia scommessa). La prima è WRITE, la
+    seconda è un duplicato intra-messaggio e va soppressa: nel CSV resta UNA sola riga."""
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    tracker = signal_dedupe.SignalTracker()
+    # Due selezioni IDENTICHE ("1 - 0" due volte) → stessa riga per-riga.
+    rows = _rows(pipe.build_validated_rows(
+        _multiselection_parser_with(["1 - 0", "1 - 0"]), MSG, mode="NAME_ONLY"))
+    assert len(rows) == 2                                  # il parser produce 2 righe identiche…
+    res = write_path.commit_signals(tracker, None, q, _cfg(path), MSG, rows, path, now=0,
+                                    write_rows=csv_writer.write_rows)
+    assert res.write_error is None
+    assert [r["SelectionName"] for r in q.active_rows()] == ["1 - 0"]   # …ma ne resta UNA sola
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        next(reader)
+        assert len(list(reader)) == 1                     # una sola riga dati (no doppia scommessa)
+
+
+def test_overwrite_last_noop_ripristina_guardrail(tmp_path):
+    """P2 (Codex #281, `write_path`:232): un commit OVERWRITE il cui blocco coincide già con l'attivo
+    è un no-op (nessuna riscrittura). Se la riga risulta `WRITE` (chiave dedup non presente nel
+    tracker — es. scaduta con `clear_delay` > finestra dedup) `evaluate` ha già registrato tracker e
+    consumato una slot daily: il no-op DEVE ripristinare i guardrail e NON risultare `WRITE`,
+    altrimenti un segnale reale successivo sarebbe limitato per errore e `_process` registrerebbe una
+    scrittura mai avvenuta. Deterministico: coda pre-popolata con A + tracker VUOTO → A è `WRITE`."""
+    from xtrader_bridge import safety_guard
+    path = str(tmp_path / "segnali.csv")
+    rows = _rows(pipe.build_validated_rows(
+        _multiselection_parser_with(["1 - 0"]), MSG, mode="NAME_ONLY"))
+    a_row = rows[0]
+    key = signal_dedupe.row_dedup_key(MSG, a_row)
+    # A è GIÀ attiva in coda (timeout ampio) con la sua chiave, ma il tracker è VUOTO → al commit A
+    # risulta WRITE (registra tracker + consuma daily), poi il blocco == attivo → no-op.
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=600)
+    q.replace_block([dict(a_row)], keys=[key], now=0)
+    tracker = signal_dedupe.SignalTracker()
+    daily = safety_guard.DailyLimiter(max_per_day=5)
+    calls = []
+
+    def _spy(rows_, path_):
+        calls.append(list(rows_))
+        csv_writer.write_rows(rows_, path_)
+
+    res = write_path.commit_signals(tracker, daily, q, _cfg(path), MSG, rows, path, now=1,
+                                    write_rows=_spy)
+    assert calls == []                                    # blocco == attivo → nessuna riscrittura
+    assert res.decision != live_guard.WRITE               # no-op: NON WRITE (percorso non-write)
+    assert [r["SelectionName"] for r in q.active_rows()] == ["1 - 0"]   # riga ancora attiva
+    # Guardrail RIPRISTINATI: la registrazione WRITE annullata (tracker vuoto, daily non consumato),
+    # così un non-write non intacca dedup/limiti giornalieri.
+    assert tracker.state() == []
+    assert daily.remaining() == 5
 
 
 def test_overwrite_last_shrink_riscrive_e_segnala_write(tmp_path):

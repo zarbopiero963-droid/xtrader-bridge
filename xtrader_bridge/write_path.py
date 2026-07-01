@@ -131,6 +131,18 @@ def _summary_decision(decisions: list, accepted: int) -> str:
     return live_guard.WRITE
 
 
+def _noop_decision(decisions: list) -> str:
+    """Esito di un commit `OVERWRITE_LAST` che NON ha cambiato il CSV (reinvio identico, o righe
+    tutte soppresse/non-attive): **mai** WRITE — nulla è stato scritto, quindi `_process` deve
+    prendere il percorso non-write. Riporta il primo esito di soppressione se presente; se invece
+    tutte le righe erano WRITE ma il blocco coincideva già con l'attivo (chiavi dedup scadute con
+    `clear_delay` > finestra dedup), l'esito è `DUPLICATE` (di fatto un reinvio identico)."""
+    for d in decisions:
+        if d != live_guard.WRITE:
+            return d
+    return live_guard.DUPLICATE
+
+
 def commit_signals(tracker, daily, queue, cfg, text, rows, path, now, write_rows):
     """Commit MULTI-RIGA (#192): un singolo messaggio produce più righe (MultiMarket/
     MultiSelection). Valuta OGNI riga con **deduplica PER-RIGA** (`signal_dedupe.row_dedup_key`),
@@ -144,14 +156,16 @@ def commit_signals(tracker, daily, queue, cfg, text, rows, path, now, write_rows
 
     Accodamento per modo coda (Codex/CodeRabbit #239/#192):
     - `OVERWRITE_LAST`: l'«ultima istruzione» è il BLOCCO INTERO del messaggio → il blocco è
-      composto da TUTTE le righe piazzabili DEL MESSAGGIO CORRENTE (nuove `WRITE` + `DUPLICATE`),
-      con i **valori del messaggio corrente**, non pescando righe stantie dalla coda: così un
-      duplicato con gli stessi campi-chiave ma valori diversi (es. quota) di un ALTRO messaggio non
-      viene scambiato per questo (Codex #281 provenance). Il CSV è riscritto SOLO se il blocco
-      **differisce — per contenuto — dalle righe già attive**: un reinvio identico non tocca il CSV
-      (XTrader non riconsuma righe identiche), un'espansione `A→A+B` riscrive TENENDO A (kyh #192,
-      Codex #281), uno shrink `A+B→A` riscrive togliendo B; un blocco vuoto (tutte rate/daily-limited)
-      NON svuota il CSV (non si tolgono bet già piazzate per un limite su un reinvio).
+      composto dalle righe NUOVE (`WRITE`) del messaggio PIÙ le righe `DUPLICATE` che sono **ancora
+      attive con la STESSA provenienza** (chiave dedup memorizzata al piazzamento, confrontata via
+      `queue.active_keys`), con i **valori del messaggio corrente**. Così: un'espansione `A→A+B`
+      riscrive TENENDO A (kyh #192); un duplicato **scaduto** NON viene rivissuto (rispetta il
+      clear-timeout) e due regole che risolvono alla **stessa riga** non la scrivono due volte
+      (dedup intra-blocco) — Codex #281 P1. Il CSV è riscritto SOLO se il blocco **differisce, per
+      contenuto, dalle righe già attive**: un reinvio identico non tocca il CSV (XTrader non
+      riconsuma; su questo no-op i guardrail consumati da eventuali chiavi scadute sono
+      **ripristinati**), uno shrink `A+B→A` riscrive togliendo B, un blocco vuoto NON svuota il CSV
+      (lo svuotamento a timeout è dell'expire-tick).
     - `APPEND_ACTIVE`/`QUEUE_UNTIL_CONFIRMED`: `queue.add(..., force=True)` per ogni riga NUOVA →
       **auto-raise del tetto** (decisione proprietario #192): il blocco coerente di UN messaggio
       multi NON viene MAI spezzato dal tetto `max_active`. Elimina alla radice il partial-drop
@@ -170,17 +184,25 @@ def commit_signals(tracker, daily, queue, cfg, text, rows, path, now, write_rows
     queue_snap = queue.state()
     overwrite = queue.mode == signal_queue.OVERWRITE_LAST
     queue.expire(now=now)
+    # OVERWRITE_LAST: chiavi (PROVENIENZA esatta, memorizzate al piazzamento) delle righe ANCORA
+    # attive dopo l'expire. Una riga duplicata dell'istruzione va tenuta nel blocco SOLO se
+    # corrisponde a una di queste (stessa chiave = stessa riga già piazzata): così non si rivive un
+    # segnale SCADUTO (clear-timeout) né si scambia una riga di un ALTRO messaggio con la corrente
+    # (Codex #281 P1/provenance). Le chiavi sono lette dalla coda, NON ricalcolate dal testo corrente.
+    active_keys = set(queue.active_keys(now=now)) if overwrite else set()
 
     decisions = []
-    new_rows = []       # righe NUOVE (WRITE) di QUESTO messaggio, effettivamente piazzate
-    block = []          # OVERWRITE_LAST: blocco = righe piazzabili DEL MESSAGGIO CORRENTE (WRITE + DUPLICATE)
+    new_rows = []          # righe NUOVE (WRITE) di QUESTO messaggio, effettivamente piazzate
+    block = []             # OVERWRITE_LAST: righe dell'istruzione corrente da tenere attive
+    block_keys = []        # chiavi parallele a `block` (provenienza, memorizzate per il commit dopo)
+    seen_in_block = set()  # dedup INTRA-blocco: una stessa chiave non entra due volte (no doppia riga)
     for row in rows:
         if tracker is None:
-            # Chiamanti senza guardrail (test): ogni riga è NUOVA. In append usa `force=True`
-            # (auto-raise: il blocco del messaggio non è spezzato dal tetto, #192).
+            # Chiamanti senza guardrail (test): ogni riga è NUOVA, nessuna dedup disponibile.
             decisions.append(live_guard.WRITE)
             new_rows.append(row)
             block.append(row)
+            block_keys.append("")
             if not overwrite:
                 queue.add(row, now=now, force=True)
             continue
@@ -190,19 +212,24 @@ def commit_signals(tracker, daily, queue, cfg, text, rows, path, now, write_rows
         decisions.append(d)
         if d == live_guard.WRITE:
             new_rows.append(row)
-            block.append(row)
-            if not overwrite:
-                # Auto-raise del tetto (#192): `force=True` → la riga NUOVA di questo messaggio
-                # multi entra sempre, il blocco coerente non è mai troncato dal tetto max_active.
-                queue.add(row, now=now, force=True)
-        elif d == live_guard.DUPLICATE:
-            # OVERWRITE_LAST: la riga duplicata fa comunque parte dell'ISTRUZIONE CORRENTE, quindi
-            # entra nel blocco con i valori del MESSAGGIO corrente (kyh #192). Non si pesca dalla
-            # coda una riga stantia: il blocco è sempre l'istruzione corrente, così una riga con gli
-            # stessi campi-chiave ma valori diversi (es. quota) di un ALTRO messaggio non viene
-            # scambiata per questa (Codex #281 provenance). In append un duplicato non si riaccoda.
             if overwrite:
+                if key not in seen_in_block:          # dedup intra-blocco (due regole → stessa riga)
+                    block.append(row)
+                    block_keys.append(key)
+                    seen_in_block.add(key)
+            else:
+                # Auto-raise del tetto (#192): `force=True` → la riga NUOVA entra sempre; la chiave
+                # è memorizzata sul segnale per la provenienza al commit successivo.
+                queue.add(row, now=now, force=True, dedup_key=key)
+        elif d == live_guard.DUPLICATE:
+            # OVERWRITE_LAST: una riga duplicata resta nel blocco SOLO se è ANCORA attiva con la
+            # STESSA provenienza (kyh #192): altrimenti riscriverebbe un segnale scaduto (viola il
+            # clear-timeout) o duplicherebbe una riga già presente (Codex #281 P1). Si usa la riga
+            # del MESSAGGIO corrente (valori aggiornati), non quella stantia in coda; dedup intra-blocco.
+            if overwrite and key in active_keys and key not in seen_in_block:
                 block.append(row)
+                block_keys.append(key)
+                seen_in_block.add(key)
         elif d == live_guard.DAILY_LIMITED:
             # `daily.allow` ha rifiutato senza consumare slot ma `evaluate` ha registrato l'hash:
             # annulla SOLO il tracker (come single-row), non il daily (giorno normalizzato).
@@ -219,21 +246,29 @@ def commit_signals(tracker, daily, queue, cfg, text, rows, path, now, write_rows
                             rows=[], write_error=None)
 
     if overwrite:
-        # Il blocco È l'istruzione corrente. Si riscrive il CSV SOLO se differisce — per contenuto —
-        # dalle righe già attive: reinvio identico → nessuna riscrittura (XTrader non riconsuma),
-        # espansione A→A+B → riscrive tenendo A (kyh #192), shrink A+B→A → riscrive togliendo B. Un
-        # blocco vuoto (tutte rate/daily-limited) NON svuota il CSV: non si tolgono bet già piazzate
-        # per un limite scattato su un reinvio. Il confronto è per contenuto pieno delle righe, così
-        # anche un cambio di solo valore (es. quota) della stessa selezione viene riscritto.
+        # Il blocco È l'istruzione corrente (righe nuove + duplicate ANCORA attive). Si riscrive il
+        # CSV SOLO se differisce — per contenuto — dalle righe già attive: reinvio identico → nessuna
+        # riscrittura (XTrader non riconsuma), espansione A→A+B → riscrive tenendo A (kyh #192),
+        # shrink A+B→A → riscrive togliendo B. Un blocco vuoto (tutte soppresse/scadute) NON svuota
+        # il CSV: lo svuotamento a timeout è compito dell'expire-tick, non di un reinvio.
         current_active = queue.active_rows(now=now)
         if not block or block == current_active:
-            queue.restore_state(queue_snap)          # nessun cambiamento: coda allineata al disco
-            return CommitResult(decision=_summary_decision(decisions, 0), blocked_by_cap=False,
+            # NESSUN cambiamento reale → non riscrivere e RIPRISTINA anche i guardrail: una riga
+            # WRITE con chiave dedup SCADUTA (clear_delay > finestra dedup) ha già registrato
+            # tracker/daily pur non scrivendo nulla; senza rollback conterebbe un non-write contro i
+            # limiti e `_process` lo vedrebbe come WRITE riuscito (Codex #281 no-op).
+            queue.restore_state(queue_snap)
+            if tracker is not None:
+                tracker.restore_state(tracker_snap)
+                if daily is not None and daily_snap is not None:
+                    daily.restore_state(daily_snap)
+            return CommitResult(decision=_noop_decision(decisions), blocked_by_cap=False,
                                 rows=current_active, write_error=None)
-        queue.replace_block(block, now=now)
+        queue.replace_block(block, now=now, keys=block_keys)
     elif not new_rows:
         # APPEND/QUEUE: nessuna riga NUOVA accodata (tutte duplicati/limiti) → CSV invariato (come il
-        # single-row su DUPLICATE). Ripristina la coda (annulla l'expire), allineata al disco.
+        # single-row su DUPLICATE). Nessun guardrail da annullare: in append le righe WRITE sono
+        # sempre accodate (`force=True`) quindi finiscono in `new_rows`; qui non ce n'erano.
         queue.restore_state(queue_snap)
         return CommitResult(decision=_summary_decision(decisions, 0), blocked_by_cap=False,
                             rows=[], write_error=None)
