@@ -50,11 +50,17 @@ _SCORE_SEP = re.compile(r'^(.+?)\s+\d+\s*[-–:]\s*\d+\s+(.+)$')
 # del nome — quindi è esclusa: si distingue per il marcatore esplicito (m/'/+) o per essere una
 # parola di stato. Così si recuperano i club a cifra iniziale e si scartano i suffissi di tempo/stato
 # (#184 M10, Codex P1/P2).
-_META_TOK = r"(?:\d+\s*[m'’]|\d+\+\d+|ht|ft|live|prematch|pre)"
-# Coda di uno o più token di metadati a fine lato ("Barcelona 46m FT" → "Barcelona").
-_META_TAIL = re.compile(r'(?:\s+' + _META_TOK + r')+\s*$', re.IGNORECASE)
-# L'intero lato è SOLO un token di metadati (nessuna squadra): "46m", "HT", "FT", "LIVE".
-_META_ONLY = re.compile(r'^' + _META_TOK + r'$', re.IGNORECASE)
+# `\d+\+\d+\s*[m'’]?`: recupero minuto (`90+2`) ANCHE col marcatore esplicito (`90+2'`/`90+2m`),
+# altrimenti la coda `90+2'` non veniva riconosciuta come metadato e finiva nel nome away (Codex #206).
+_META_TOK = r"(?:\d+\s*[m'’]|\d+\+\d+\s*[m'’]?|ht|ft|live|prematch|pre)"
+# Come `_META_TOK` ma anche RACCHIUSO tra parentesi/quadre: "(HT)", "[FT]", "(90+2')". Senza, un lato
+# di soli metadati AVVOLTO (o una coda avvolta) sfuggiva ai check (`_HAS_ALPHA` vedeva le lettere) e
+# diventava una squadra fasulla, es. "Real Madrid v (HT)" (Codex #206).
+_META_TOK_W = (r"(?:" + _META_TOK + r"|\(\s*" + _META_TOK + r"\s*\)|\[\s*" + _META_TOK + r"\s*\])")
+# Coda di uno o più token di metadati a fine lato ("Barcelona 46m FT"/"Barcelona (HT)" → "Barcelona").
+_META_TAIL = re.compile(r'(?:\s+' + _META_TOK_W + r')+\s*$', re.IGNORECASE)
+# L'intero lato è SOLO un token di metadati (nessuna squadra): "46m", "HT", "FT", "LIVE", "(HT)", "[FT]".
+_META_ONLY = re.compile(r'^' + _META_TOK_W + r'$', re.IGNORECASE)
 # Token di stato da togliere dal signal_type (LIVE/PRE) prima del mapping.
 _STATUS_TAIL = re.compile(r'\s+\b(?:live|pre|prematch)\b.*$', re.IGNORECASE)
 # Emoji in CODA al signal_type da rimuovere prima del mapping (#184 low-parser-emoji): la cattura
