@@ -319,7 +319,7 @@ def commit_signals(tracker, daily, queue, cfg, text, rows, path, now, write_rows
         # kyW). Così un retry dello STESSO messaggio dopo una transizione del parser a SINGLE-row —
         # che deduplica sull'hash-messaggio, mai registrato dal percorso multi — riconosce il
         # messaggio come già processato (DUPLICATE) invece di riscriverlo → doppia scommessa.
-        # Fail-closed a livello di messaggio: al più più restrittivo, mai una scommessa doppia. Lo
+        # Fail-closed a livello di messaggio: al più restrittivo, mai una scommessa doppia. Lo
         # shadow non conta verso il rate-limit (`mark_seen`).
         tracker.mark_seen(signal_dedupe.message_hash(text))
     return CommitResult(decision=live_guard.WRITE,

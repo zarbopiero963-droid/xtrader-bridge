@@ -836,7 +836,7 @@ ora voci **reali** (contano verso il limite/minuto) e **shadow** (solo dedup): i
 chiave è già presente. Dopo una scrittura reale, `commit_signal` (single) ombreggia la **chiave
 per-riga** della riga, e `commit_signals` (multi) ombreggia l'**hash-messaggio**: così un retry
 dello stesso messaggio dopo un cambio di modalità è riconosciuto come `DUPLICATE`. Fail-closed
-(al più più restrittivo, mai una doppia scommessa). Lo stato serializza il flag reale/shadow
+(al più restrittivo, mai una doppia scommessa). Lo stato serializza il flag reale/shadow
 (retro-compatibile coi vecchi state a 2 elementi → reale). Test hard fail-first:
 `tests/unit/test_signal_dedupe.py` (`test_mark_seen_blocca_duplicato_ma_non_conta_verso_il_rate_limit`,
 `test_mark_seen_noop_se_gia_visto`, `test_mark_seen_shadow_sopravvive_al_riavvio`) e
