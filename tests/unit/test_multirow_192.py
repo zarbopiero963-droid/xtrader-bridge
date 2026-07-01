@@ -17,6 +17,7 @@ from xtrader_bridge import (
     custom_pipeline as pipe,
     csv_writer,
     live_guard,
+    name_mapping_store as nm,
     safety_guard,
     signal_dedupe,
     signal_queue,
@@ -24,6 +25,12 @@ from xtrader_bridge import (
     write_path,
 )
 from xtrader_bridge.csv_writer import CSV_HEADER
+
+# Config di mappatura nomi minima per il test kyZ (mapping su righe derivate da base NOT_READY).
+_MAP_CFG = {"name_mappings": {"Premier": [
+    {"country": "Inghilterra", "betfair": "Liverpool", "provider": "Liverpool FC"},
+    {"country": "Inghilterra", "betfair": "Leeds", "provider": "Leeds Utd"},
+]}}
 
 # Messaggio reale della issue #192.
 MSG = (
@@ -216,6 +223,205 @@ def test_validazione_parziale_riga_non_valida_non_blocca_le_altre():
     # Le righe valide restano (il router scrive solo quelle piazzabili).
     placeable = [r.row for r in results if r.placeable]
     assert [r["SelectionName"] for r in placeable] == ["1 - 0", "1 - 2"]
+
+
+# ── kyZ (#192): NOT_READY della base non blocca le righe multi ────────────────
+
+def _multiselection_parser_selname_obbligatoria():
+    """Parser MultiSelection dove `SelectionName` è OBBLIGATORIO nella base ma la base NON lo
+    estrae (nessun marcatore nel messaggio) → base `NOT_READY`. Sono le righe MultiSelection a
+    fornire il SelectionName. Riproduce il finding kyZ."""
+    extra = [
+        cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
+        cp.FieldRule(target="MarketName", fixed_value="Risultato esatto"),
+        # SelectionName obbligatorio ma estratto da un marcatore ASSENTE nel messaggio → vuoto.
+        cp.FieldRule(target="SelectionName", start_after="SEL:", end_before="\n", required=True),
+    ]
+    defn = cp.CustomParserDef(name="MSreq", mode="NAME_ONLY", rules=_base_rules(extra))
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name=s) for s in ("1 - 0", "2 - 1")]
+    return defn
+
+
+def test_kyz_base_not_ready_riempita_da_multiselection():
+    """kyZ (#192, finding A/#4): se la base è `NOT_READY` per un obbligatorio che le righe
+    multi riempiono (`SelectionName`), le righe multi devono comunque essere generate e validate.
+
+    Fail-first: sul vecchio codice `build_validated_rows` tornava `[base]` (1 sola riga
+    `NOT_READY`, non piazzabile) → ZERO righe scritte a runtime."""
+    defn = _multiselection_parser_selname_obbligatoria()
+    # Sanity: la base da sola È NOT_READY (SelectionName obbligatorio mancante).
+    base = pipe.build_validated_row(defn, MSG, mode="NAME_ONLY")
+    assert base.status == pipe.NOT_READY and not base.placeable
+
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY")
+    assert len(results) == 2                                  # una riga per selezione, NON [base]
+    assert all(r.status == validator.VALID and r.placeable for r in results)
+    assert [r.row["SelectionName"] for r in results] == ["1 - 0", "2 - 1"]
+    assert all(r.row["EventName"] == EVENT for r in results)  # campi comuni ereditati dalla base
+
+
+def test_kyz_altri_gate_base_restano_fail_closed():
+    """kyZ non deve indebolire gli ALTRI gate strutturali: una base senza `Provider`
+    (`INVALID_MISSING_PROVIDER`, in `_BASE_BLOCKING`) resta fail-closed anche con multi attivo →
+    `[base]`, nessuna riga derivata (mai un bet senza provider)."""
+    # Base SENZA Provider ma con SelectionName obbligatorio mancante: prima il NOT_READY viene
+    # rilassato, poi il gate provider deve comunque bloccare.
+    rules = [
+        cp.FieldRule(target="EventName", start_after="🆚", end_before="\n", required=True),
+        cp.FieldRule(target="Price", fixed_value="1.50", required=True),
+        cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+        cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
+        cp.FieldRule(target="SelectionName", start_after="SEL:", end_before="\n", required=True),
+    ]
+    defn = cp.CustomParserDef(name="NoProv", mode="NAME_ONLY", rules=rules)
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name="1 - 0")]
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY", provider="")
+    assert len(results) == 1                                       # solo la base, nessuna derivata
+    assert results[0].status == pipe.INVALID_MISSING_PROVIDER
+    assert not results[0].placeable
+
+
+def test_kyz_mapping_applicata_su_righe_derivate_da_base_not_ready():
+    """kyZ: quando la base `NOT_READY` viene ri-costruita, deve passare COMUNQUE per la mappatura
+    nomi (a valle del gate NOT_READY). Le righe derivate devono avere l'`EventName` TRADOTTO, non
+    quello provider grezzo — altrimenti si scriverebbe un evento sbagliato.
+
+    Fail-first: col vecchio codice non venivano generate righe; con un bypass ingenuo (derivare
+    dalla base NOT_READY non mappata) l'EventName resterebbe non tradotto."""
+    profiles = nm.entries_for_profiles(_MAP_CFG, ["Premier"])
+    defn = cp.CustomParserDef(
+        name="MSmap", mode="NAME_ONLY",
+        name_mapping_profiles=["Premier"], team_separator="v",
+        rules=[
+            cp.FieldRule(target="Provider", fixed_value="PBet"),
+            cp.FieldRule(target="EventName", start_after="Match:", end_before="\n", required=True),
+            cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
+            # SelectionName obbligatorio ma non estratto → base NOT_READY.
+            cp.FieldRule(target="SelectionName", start_after="SEL:", end_before="\n", required=True),
+            cp.FieldRule(target="Price", fixed_value="1.50", required=True),
+            cp.FieldRule(target="BetType", fixed_value="PUNTA", required=True),
+        ])
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name="1 - 0")]
+    msg = "Match: Liverpool FC v Leeds Utd\n⚽ 0 - 0\n"
+    results = pipe.build_validated_rows(defn, msg, mode="NAME_ONLY",
+                                        name_mapping_profiles=profiles)
+    assert len(results) == 1
+    assert results[0].status == validator.VALID and results[0].placeable
+    assert results[0].row["EventName"] == "Liverpool - Leeds"    # tradotto, non "Liverpool FC v Leeds Utd"
+    assert results[0].row["SelectionName"] == "1 - 0"
+
+
+def test_kyz_obbligatorio_non_coperto_dal_multi_resta_bloccante():
+    """kyZ / Codex P1: il rilassamento di `NOT_READY` copre SOLO gli obbligatori che OGNI riga
+    multi riempie. Un obbligatorio della base che il multi **non** fornisce (qui `MarketName`,
+    che il validator NAME_ONLY non ri-controlla) deve restare **bloccante** — un messaggio che il
+    parser ha dichiarato incompleto NON deve raggiungere il CSV.
+
+    Fail-first: col rilassamento «cieco» (bypass di TUTTI i NOT_READY) la base diventava
+    derivabile e le righe finivano nel CSV."""
+    extra = [
+        cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
+        # SelectionName obbligatorio → fornito dal MultiSelection; MarketName obbligatorio ma
+        # NON fornito da nessuna riga multi e assente nel messaggio → deve restare bloccante.
+        cp.FieldRule(target="SelectionName", start_after="SEL:", end_before="\n", required=True),
+        cp.FieldRule(target="MarketName", start_after="MKTNAME:", end_before="\n", required=True),
+    ]
+    defn = cp.CustomParserDef(name="MSp1", mode="NAME_ONLY", rules=_base_rules(extra))
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name=s) for s in ("1 - 0", "2 - 1")]
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY")
+    assert len(results) == 1                                  # nessuna riga derivata: fail-closed
+    assert results[0].status == pipe.NOT_READY and not results[0].placeable
+    assert "MarketName" in results[0].missing_required        # l'obbligatorio scoperto è ancora segnalato
+
+
+def test_kyz_market_mapping_missing_risolto_dalle_selezioni():
+    """kyZ / Codex P2 + CodeRabbit: con `market_mapping_profiles` attivo e NESSUNA frase che
+    combacia, il fallback della mappatura mercati dava `MARKET_MAPPING_MISSING` sulla base (che ha
+    `MarketType` ma non `SelectionName`) → `[base]`, zero righe — anche se ogni MultiSelection
+    fornisce il `SelectionName`. Ora `MARKET_MAPPING_MISSING` è un motivo **colmabile**: la base è
+    ri-valutata trattando come presenti i campi forniti da OGNI riga multi.
+
+    Fail-first: col codice precedente (re-run solo su NOT_READY) la base restava
+    `MARKET_MAPPING_MISSING` in `_BASE_BLOCKING` → nessuna riga."""
+    extra = [
+        cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
+        cp.FieldRule(target="MarketName", fixed_value="Risultato esatto"),
+    ]
+    defn = cp.CustomParserDef(name="MSmkt", mode="NAME_ONLY", rules=_base_rules(extra))
+    defn.market_mapping_profiles = ["P"]                      # mappatura mercati ATTIVA
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name=s) for s in ("1 - 0", "2 - 1")]
+    # Profilo la cui frase NON compare nel messaggio (delimitatore assente) → resolve_market="none".
+    profiles = [[{"start_after": "Mercato:", "end_before": "\n", "phrase": "gol gol",
+                  "market_type": "GOAL_NOGOAL", "market_name": "Entrambe le squadre a segno",
+                  "selection_name": "Sì"}]]
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY",
+                                        market_mapping_profiles=profiles)
+    placeable = [r for r in results if r.placeable]
+    assert [r.row["SelectionName"] for r in placeable] == ["1 - 0", "2 - 1"]  # righe generate
+
+
+def test_kyz_multi_supplied_gia_in_kwargs_non_crasha():
+    """kyZ / CodeRabbit: il re-run interno passa `multi_supplied`; se un chiamante l'ha GIÀ messo
+    nei kwargs, un merge naïf darebbe `TypeError: got multiple values`. Il fix copia/scarta i kwargs:
+    la chiamata non deve sollevare e deve generare comunque le righe."""
+    defn = _multiselection_parser_selname_obbligatoria()      # base NOT_READY → attiva il re-run
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY",
+                                        multi_supplied=frozenset())   # kwarg che collide col re-run
+    assert [r.row["SelectionName"] for r in results if r.placeable] == ["1 - 0", "2 - 1"]
+
+
+def test_kyz_multi_supplied_del_chiamante_ignorato_e_non_indebolisce_il_gate():
+    """kyZ / CodeRabbit (Major, safety): `multi_supplied` è INTERNO. Un chiamante che lo passa
+    NON deve poter rilassare i gate della prima valutazione: la copertura è ricalcolata SOLO dalle
+    regole multi realmente attive. Qui `MarketName` è obbligatorio, NON fornito da nessuna riga
+    multi, ma il chiamante finge che lo sia → deve restare `NOT_READY` (fail-closed).
+
+    Fail-first: se il primo `build_validated_row` onorasse il `multi_supplied` del chiamante, la
+    base verrebbe rilassata e le righe finirebbero nel CSV."""
+    extra = [
+        cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
+        cp.FieldRule(target="SelectionName", start_after="SEL:", end_before="\n", required=True),
+        cp.FieldRule(target="MarketName", start_after="MKTNAME:", end_before="\n", required=True),
+    ]
+    defn = cp.CustomParserDef(name="MSspoof", mode="NAME_ONLY", rules=_base_rules(extra))
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name=s) for s in ("1 - 0", "2 - 1")]
+    # Il chiamante finge che MarketName+SelectionName siano forniti dal multi (non è vero per MarketName).
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY",
+                                        multi_supplied=frozenset({"MarketName", "SelectionName"}))
+    assert len(results) == 1                                   # gate NON indebolito: nessuna riga
+    assert results[0].status == pipe.NOT_READY and not results[0].placeable
+    assert "MarketName" in results[0].missing_required
+
+
+def test_kyz_handicap_multi_malformato_non_raggiunge_il_csv():
+    """kyZ / Codex (safety): un override `handicap` malformato in una riga multi NON deve
+    raggiungere il CSV. Il gate `INVALID_HANDICAP` della base vede l'Handicap BASE (default "0") e
+    `validator.validate` non controlla l'Handicap → serve un controllo di formato sulla riga
+    DERIVATA. Vale sia col rilassamento kyZ sia nel percorso multi normale.
+
+    Fail-first: prima del controllo per-riga la riga con `handicap="abc"` risultava `VALID`."""
+    extra = [
+        cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
+        cp.FieldRule(target="MarketName", fixed_value="Risultato esatto"),
+    ]
+    defn = cp.CustomParserDef(name="MShcap", mode="NAME_ONLY", rules=_base_rules(extra))
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [
+        cp.MultiRowRule(selection_name="1 - 0", handicap="abc"),   # malformato → scartato
+        cp.MultiRowRule(selection_name="2 - 1", handicap="0.5"),   # valido → piazzabile
+    ]
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY")
+    assert len(results) == 2
+    bad = next(r for r in results if r.row["SelectionName"] == "1 - 0")
+    good = next(r for r in results if r.row["SelectionName"] == "2 - 1")
+    assert bad.status == pipe.INVALID_HANDICAP and not bad.placeable   # fail-closed
+    assert good.status == validator.VALID and good.placeable
 
 
 # ── commit atomico multi-riga (coda + CSV + rollback) ─────────────────────────

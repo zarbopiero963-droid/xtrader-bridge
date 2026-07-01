@@ -858,6 +858,46 @@ fail-first: `tests/integration/test_app_runtime_glue.py`
 (`test_process_multi_display_riflette_riga_scritta_non_soppressa`,
 `test_process_multi_tutte_scritte_display_resta_prima_riga`).
 
+**kyZ — base bloccata non deve fermare le righe multi che completano il campo (RISOLTO, PR dedicata
+post-#289).** In `build_validated_rows`, un campo della **riga base** riempito però da ogni riga
+multi (es. `SelectionName` obbligatorio in `NAME_ONLY`, fornito da ogni MultiSelection) bloccava la
+base — `NOT_READY` (obbligatorio della regola) o `MARKET_MAPPING_MISSING` (mercato incompleto,
+nessuna frase combacia) → `_BASE_BLOCKING` → ritorno `[base]` **prima** degli override → **zero
+righe generate** a runtime. **Fix:** quando l'output multi è attivo e la base è bloccata per un
+motivo **colmabile** (`_MULTI_RESOLVABLE` = `NOT_READY`/`MARKET_MAPPING_MISSING`), la base è
+ri-valutata passando `multi_supplied` = le colonne che **ogni** riga generata riempie
+(`_multi_supplied_cols`, intersezione su mercati+selezioni). I soli gate **strutturali** trattano
+quelle colonne come presenti; la base passa così per mappatura nomi/mercati ed enrichment ID e ogni
+riga derivata è validata singolarmente da `validator.validate` (fail-closed per riga). Invarianti di
+sicurezza (Codex/CodeRabbit su #290):
+- **P1** — si rilassano **solo** gli obbligatori mancanti che sono in `multi_supplied`; un
+  obbligatorio **non** coperto (es. un `MarketName` richiesto che il validator non ri-controlla)
+  resta `NOT_READY` → nessuna riga (un messaggio dichiarato incompleto **non** raggiunge il CSV);
+- **market-mapping** — il fallback `_row_has_market` considera coperti i campi mercato forniti dal
+  multi, evitando un falso `MARKET_MAPPING_MISSING`, ma resta fail-closed se il mercato **non** è
+  coperto;
+- gli **altri** stati (`INVALID_MISSING_PROVIDER`, `INVALID_HANDICAP`, `MAPPING_MISSING`) restano
+  bloccanti (provider/handicap/evento mancante **non** è colmabile da una riga multi);
+- il re-run copia i kwargs prima di iniettare `multi_supplied` (nessun `TypeError` da chiave doppia);
+- **`multi_supplied` è interno**: qualsiasi valore passato dal chiamante viene **scartato** prima
+  della prima valutazione (CodeRabbit Major) — solo le colonne calcolate dalle regole multi
+  realmente attive rilassano i gate, mai colonne arbitrarie del chiamante;
+- **Handicap per riga derivata** (Codex): un override `handicap` malformato non passa dal gate
+  `INVALID_HANDICAP` della base (che vede l'Handicap base, default "0") e `validator.validate` non
+  controlla l'Handicap → il formato è ora ri-verificato su **ogni riga derivata** in
+  `_validated_multi_row` (fail-closed, vale anche nel percorso multi normale).
+
+**Limite noto (follow-up):** in `ID_ONLY` con `id_resolver`, gli ID non vengono risolti **per riga
+derivata** (la base risolve con selezione vuota e `_apply_multi_rule` azzera comunque gli ID quando
+la selezione cambia) → un MultiSelection in ID_ONLY non produce righe con ID. È **pre-esistente**
+(indipendente da kyZ, fail-closed) e va affrontato con una risoluzione ID per-riga in una PR
+dedicata. Test hard fail-first: `tests/unit/test_multirow_192.py`
+(`test_kyz_base_not_ready_riempita_da_multiselection`, `test_kyz_altri_gate_base_restano_fail_closed`,
+`test_kyz_mapping_applicata_su_righe_derivate_da_base_not_ready`,
+`test_kyz_obbligatorio_non_coperto_dal_multi_resta_bloccante`,
+`test_kyz_market_mapping_missing_risolto_dalle_selezioni`,
+`test_kyz_multi_supplied_gia_in_kwargs_non_crasha`).
+
 **Test hard:** `tests/unit/test_multirow_192.py`
 (`test_overwrite_last_preserva_riga_attiva_su_espansione`,
 `test_overwrite_last_non_rivive_duplicato_scaduto`,
