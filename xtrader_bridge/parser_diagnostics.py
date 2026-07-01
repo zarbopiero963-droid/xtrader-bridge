@@ -163,10 +163,12 @@ def _overlay_validator(result, by_target, fields) -> None:
     elif status == validator.INVALID_POINTS:
         _mark(by_target, fields, "Points", INVALID_POINTS)
     elif status == validator.INVALID_PRICE_BOUNDS:
-        # Limiti incoerenti: segnala su entrambe le colonne dei limiti (l'errore è
-        # nella loro RELAZIONE con Price/fra loro, non in un singolo valore malformato).
-        _mark(by_target, fields, "MinPrice", INVALID_PRICE_BOUNDS)
-        _mark(by_target, fields, "MaxPrice", INVALID_PRICE_BOUNDS)
+        # Limiti incoerenti: segnala SOLO il/i limite/i che offende/ono (dal detail del
+        # validator), così non si crea un errore su un limite opzionale ASSENTE (Codex).
+        # Fallback difensivo a entrambi se il detail non è la tupla attesa.
+        cols = result.detail if isinstance(result.detail, (list, tuple)) else ("MinPrice", "MaxPrice")
+        for col in cols:
+            _mark(by_target, fields, col, INVALID_PRICE_BOUNDS)
     elif status == custom_pipeline.INVALID_MISSING_PROVIDER:
         _mark(by_target, fields, "Provider", MISSING_PROVIDER, required=True)
     elif status == custom_pipeline.INVALID_HANDICAP:

@@ -65,6 +65,31 @@ def price_status(value) -> str:
     return _price_status(value)
 
 
+def price_bounds_offenders(row: dict) -> tuple:
+    """Colonne dei limiti che rendono l'intervallo Min/Max INCOERENTE (tupla vuota = coerente).
+
+    Presuppone che i valori presenti siano già quote valide (validati a monte), quindi
+    `float(...)` è sicuro. Restituisce SOLO i limiti che offendono, così la diagnostica non
+    segnala un limite opzionale ASSENTE (Codex):
+    - `MinPrice > MaxPrice` → `("MinPrice", "MaxPrice")` (entrambi: la relazione è fra loro);
+    - `MinPrice > Price`     → `("MinPrice",)`;
+    - `MaxPrice < Price`     → `("MaxPrice",)`.
+    """
+    def _num(col):
+        v = str(row.get(col, "")).strip()
+        return float(v.replace(",", ".")) if v else None
+
+    price_v, min_v, max_v = _num("Price"), _num("MinPrice"), _num("MaxPrice")
+    if min_v is not None and max_v is not None and min_v > max_v:
+        return ("MinPrice", "MaxPrice")
+    if price_v is not None:
+        if min_v is not None and min_v > price_v:
+            return ("MinPrice",)
+        if max_v is not None and max_v < price_v:
+            return ("MaxPrice",)
+    return ()
+
+
 def validate(row: dict, mode: str, require_price: bool = True):
     """Valuta una riga CSV già costruita.
 
@@ -113,20 +138,11 @@ def validate(row: dict, mode: str, require_price: bool = True):
     # Coerenza dei limiti di prezzo: oltre a essere singolarmente validi (sopra),
     # Min/Max non devono CONTRADDIRE loro stessi o `Price`. Un intervallo invertito
     # (Min > Max) o che ESCLUDE la quota selezionata (Min > Price, Max < Price) non
-    # è usabile da XTrader → fail-closed. I valori qui sono già quote valide (i check
-    # sopra scartano i malformati), quindi `float(...)` è sicuro. Bordi inclusivi ok.
-    def _num(col):
-        v = str(row.get(col, "")).strip()
-        return float(v.replace(",", ".")) if v else None
-
-    price_v, min_v, max_v = _num("Price"), _num("MinPrice"), _num("MaxPrice")
-    if min_v is not None and max_v is not None and min_v > max_v:
-        return (INVALID_PRICE_BOUNDS, f"MinPrice {min_v} > MaxPrice {max_v}")
-    if price_v is not None:
-        if min_v is not None and min_v > price_v:
-            return (INVALID_PRICE_BOUNDS, f"MinPrice {min_v} > Price {price_v}")
-        if max_v is not None and max_v < price_v:
-            return (INVALID_PRICE_BOUNDS, f"MaxPrice {max_v} < Price {price_v}")
+    # è usabile da XTrader → fail-closed. Bordi inclusivi ok. `detail` è la tupla dei
+    # SOLI limiti che offendono, così la diagnostica non segnala un limite assente.
+    offenders = price_bounds_offenders(row)
+    if offenders:
+        return (INVALID_PRICE_BOUNDS, offenders)
 
     return (VALID, None)
 
