@@ -161,6 +161,30 @@ def test_minprice_invalido_attribuito_alla_colonna_giusta():
     assert diag.placeable is False
 
 
+def test_points_malformato_attribuito_alla_colonna_points():
+    # #17 (Codex P2): un Points valorizzato ma non positivo è attribuito alla colonna Points.
+    defn = _full_name_rules(Points=FieldRule(target="Points", start_after="P", required=False))
+    diag = pd.diagnose(defn, "P -5", mode=recognition.NAME_ONLY,
+                       provider="TG", value_maps_registry=_BUILTIN)
+    assert _f(diag, "Points").error == pd.INVALID_POINTS
+    assert diag.placeable is False
+
+
+def test_bounds_incoerenti_attribuiti_a_min_e_max():
+    # #17 (Codex P2): limiti incoerenti (Min > Max) sono segnalati su MinPrice E MaxPrice,
+    # non su Price (singolarmente ogni valore è una quota valida).
+    defn = _full_name_rules(
+        Price=FieldRule(target="Price", start_after="Quota", required=True),
+        MinPrice=FieldRule(target="MinPrice", start_after="Min", required=False),
+        MaxPrice=FieldRule(target="MaxPrice", start_after="Max", required=False))
+    diag = pd.diagnose(defn, "Quota 2.0\nMin 3.0\nMax 1.5", mode=recognition.NAME_ONLY,
+                       provider="TG", value_maps_registry=_BUILTIN)
+    assert _f(diag, "MinPrice").error == pd.INVALID_PRICE_BOUNDS
+    assert _f(diag, "MaxPrice").error == pd.INVALID_PRICE_BOUNDS
+    assert _f(diag, "Price").error == pd.OK
+    assert diag.placeable is False
+
+
 # ── report testuale ───────────────────────────────────────────────────────────
 
 def test_format_report_non_pronto():
