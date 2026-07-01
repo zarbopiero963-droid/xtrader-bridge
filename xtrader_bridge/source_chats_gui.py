@@ -42,15 +42,27 @@ class SourceChatsPanel(ctk.CTkFrame):
     `on_saved(new_cfg)`: callback opzionale chiamata dopo un salvataggio riuscito,
     così la GUI principale può aggiornare la propria config in memoria."""
 
+    @staticmethod
+    def _no_parser_label(real_names, override_values=()) -> str:
+        """Etichetta-sentinella "nessun override" GARANTITA diversa dai nomi reali dei parser
+        E dai valori di override attualmente tenuti dalle righe — inclusi quelli "danglanti"
+        verso un parser CANCELLATO. Così la sentinella non collide mai col valore di una riga:
+        un override verso un parser rimosso (es. un parser chiamato "(predefinito)") NON viene
+        scambiato per "nessun override" e azzerato al salvataggio (Codex #97). I valori vuoti
+        (= nessun override) sono ignorati. Logica pura, testata in CI."""
+        avoid = list(real_names) + [str(v).strip() for v in override_values if str(v).strip()]
+        return _none_sentinel(avoid)
+
     def __init__(self, master=None, on_saved=None):
         super().__init__(master)
         self._on_saved = on_saved
         self._editor = SourceEditor(config_store.load_config(config_store.CONFIG_FILE))
         self._modes = self._editor.mode_options()
-        # Nomi reali dei parser + sentinella "nessuno" unica (non collide mai con un
-        # nome reale). Opzioni menu: sentinella davanti, poi i nomi reali.
+        # Nomi reali dei parser + sentinella "nessuno" unica (non collide mai con un nome
+        # reale NÉ con un override tenuto da una riga, anche danglante). Menu: sentinella, poi i nomi.
         self._parser_names = self._editor.parser_options()
-        self._no_parser = _none_sentinel(self._parser_names)
+        self._no_parser = self._no_parser_label(
+            self._parser_names, [s.get("parser", "") for s in self._editor.sources])
         self._parser_options = [self._no_parser] + self._parser_names
         self._rows = []   # widget refs per sorgente
         self._build_ui()
@@ -68,7 +80,8 @@ class SourceChatsPanel(ctk.CTkFrame):
         self._editor = SourceEditor(config_store.load_config(config_store.CONFIG_FILE))
         self._modes = self._editor.mode_options()
         self._parser_names = self._editor.parser_options()
-        self._no_parser = _none_sentinel(self._parser_names)
+        self._no_parser = self._no_parser_label(
+            self._parser_names, [s.get("parser", "") for s in self._editor.sources])
         self._parser_options = [self._no_parser] + self._parser_names
         for refs in self._rows:
             refs["frame"].destroy()
@@ -87,7 +100,13 @@ class SourceChatsPanel(ctk.CTkFrame):
             return
         old_no_parser = self._no_parser
         self._parser_names = editor.parser_options()
-        self._no_parser = _none_sentinel(self._parser_names)
+        # Nuova sentinella unica vs nomi reali E override tenuti dalle righe (valore != vecchia
+        # sentinella). Così se un parser reale omonimo alla sentinella viene CANCELLATO mentre
+        # una riga lo tiene come override, la sentinella NON collassa sul suo valore e quell'override
+        # non viene azzerato al salvataggio (resta fail-closed verso il parser mancante, Codex #97).
+        self._no_parser = self._no_parser_label(
+            self._parser_names,
+            [refs["parser"].get() for refs in self._rows if refs["parser"].get() != old_no_parser])
         self._parser_options = [self._no_parser] + self._parser_names
         for refs in self._rows:
             var = refs["parser"]
