@@ -99,12 +99,6 @@ def commit_signal(tracker, daily, queue, cfg, text, row, path, now, write_rows):
                 tracker.restore_state(tracker_snap)
                 if daily is not None and daily_snap is not None:
                     daily.restore_state(daily_snap)
-            elif tracker is not None:
-                # Shadow cross-schema (#281): oltre all'hash-messaggio (registrato da `evaluate`),
-                # segna anche la chiave PER-RIGA di questa riga. Così se il parser passa a
-                # multi-riga a runtime, un retry dello stesso segnale è riconosciuto come
-                # duplicato dal percorso multi (per-riga) → niente doppia scrittura al confine.
-                tracker.mark_seen(signal_dedupe.row_dedup_key(text, row))
     elif tracker is not None and decision == live_guard.DAILY_LIMITED:
         # `evaluate` aveva registrato l'hash nel tracker (segnale NEW) ma `daily.allow()` ha
         # RIFIUTATO **senza consumare** una slot — ha solo (eventualmente) normalizzato il giorno
@@ -231,13 +225,6 @@ def commit_signals(tracker, daily, queue, cfg, text, rows, path, now, write_rows
     # OVERWRITE_LAST: l'ultima istruzione è il BLOCCO intero del messaggio (tutte le righe).
     if overwrite:
         queue.replace_block(accepted_rows, now=now)
-
-    # Shadow cross-schema (#281): registra anche l'hash-messaggio accanto alle chiavi per-riga,
-    # così se il parser torna single-row a runtime un retry dello stesso messaggio è riconosciuto
-    # come duplicato dal percorso single (message-hash) → niente doppia scrittura al confine. Va
-    # PRIMA della write: se la scrittura fallisce, il rollback di `tracker_snap` lo annulla.
-    if tracker is not None:
-        tracker.mark_seen(signal_dedupe.message_hash(text))
 
     active = queue.active_rows()
     try:

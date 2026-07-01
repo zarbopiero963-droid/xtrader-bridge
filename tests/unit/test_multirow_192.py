@@ -479,39 +479,3 @@ def test_commit_signals_tutte_cap_blocked_segnala_il_tetto(tmp_path):
     assert res.decision == live_guard.WRITE               # decisione WRITE ma bloccata dal cap
 
 
-def test_commit_signals_shadow_messagehash_blocca_retry_single(tmp_path):
-    """Codex #281 (multi→single): un commit MULTI registra anche l'hash-messaggio, così un
-    successivo commit SINGLE dello stesso messaggio (parser tornato single-row a runtime) è
-    DUPLICATE → niente doppia scrittura al confine tra i due schemi di dedup."""
-    path = str(tmp_path / "s.csv")
-    tracker = signal_dedupe.SignalTracker()
-    cfg = {"csv_path": path, "dry_run": False}
-    rows = _rows(pipe.build_validated_rows(_multiselection_parser(), MSG, mode="NAME_ONLY"))
-    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
-    res = write_path.commit_signals(tracker, None, q, cfg, MSG, rows, path, now=0,
-                                    write_rows=csv_writer.write_rows)
-    assert res.decision == live_guard.WRITE and len(res.rows) == 3
-    q2 = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
-    single = write_path.commit_signal(tracker, None, q2, cfg, MSG, rows[0], path, now=1,
-                                      write_rows=csv_writer.write_rows)
-    assert single.decision == live_guard.DUPLICATE        # riconosciuto via shadow hash-messaggio
-
-
-def test_commit_signal_shadow_perriga_blocca_retry_multi(tmp_path):
-    """Codex #281 (single→multi): un commit SINGLE registra anche la chiave PER-RIGA, così se il
-    parser passa a multi-riga un retry riconosce la riga già scritta (duplicata per-riga) e
-    scrive solo le righe NUOVE → niente doppia scrittura della stessa selezione."""
-    path = str(tmp_path / "s.csv")
-    tracker = signal_dedupe.SignalTracker()
-    cfg = {"csv_path": path, "dry_run": False}
-    rows = _rows(pipe.build_validated_rows(_multiselection_parser(), MSG, mode="NAME_ONLY"))
-    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
-    single = write_path.commit_signal(tracker, None, q, cfg, MSG, rows[0], path, now=0,
-                                      write_rows=csv_writer.write_rows)
-    assert single.decision == live_guard.WRITE
-    q2 = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
-    multi = write_path.commit_signals(tracker, None, q2, cfg, MSG, rows, path, now=1,
-                                      write_rows=csv_writer.write_rows)
-    written = {r["SelectionName"] for r in multi.rows}
-    assert rows[0]["SelectionName"] not in written        # la riga già scritta è duplicata (shadow)
-    assert len(multi.rows) == 2                            # solo le due selezioni nuove
