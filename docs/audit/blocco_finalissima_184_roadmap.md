@@ -436,7 +436,12 @@ sfuggivano ancora a `_clean_team_side` e finivano nell'EventName:
   nudo, quindi il wrapping faceva passare le lettere a `_HAS_ALPHA` → `Real Madrid v (HT)`. Nuovo
   `_META_TOK_W` (token anche fra `()`/`[]`) usato da entrambi: un lato di soli metadati avvolti
   fallisce chiuso e una coda avvolta viene rimossa (`… 2 - 1 Barcelona (HT)` → `Real Madrid v
-  Barcelona`).
+  Barcelona`);
+- **coda avvolta ADIACENTE senza spazio** (`Barcelona(HT)`/`Barcelona(90+2')`): `_META_TAIL`
+  richiedeva sempre `\s+` prima del token, quindi il metadato incollato al nome restava
+  nell'EventName. Ora un token **avvolto** può seguire anche senza spazio (`\s*`, confine `()`/`[]`
+  non ambiguo), mentre un token **nudo** continua a richiedere `\s+` per non divorare cifre nude
+  interne al nome (`Schalke 04`) — `… 2 - 1 Barcelona(HT)` → `Real Madrid v Barcelona`.
 
 ## M9 — `dizionario.market_types()` degrada con `.get()` invece di `KeyError`
 
