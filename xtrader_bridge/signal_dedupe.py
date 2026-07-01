@@ -215,7 +215,9 @@ class SignalTracker:
                 # voce storica è una registrazione reale, conservativa per il rate-limit).
                 r = bool(item[2]) if len(item) >= 3 else True
                 tf = float(t)
-            except (ValueError, TypeError, IndexError):
+            except (ValueError, TypeError, LookupError):
+                # LookupError = IndexError (lista troppo corta) + KeyError (voce dict `{}` da state
+                # corrotto/manomesso): va SCARTATA, non deve far crashare `load_state`/lo START.
                 continue
             if not math.isfinite(tf):
                 continue                    # NaN/inf da state corrotto/manomesso → scartato

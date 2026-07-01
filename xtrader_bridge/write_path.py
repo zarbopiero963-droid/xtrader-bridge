@@ -78,7 +78,11 @@ def commit_signal(tracker, daily, queue, cfg, text, row, path, now, write_rows):
         # atomica di TUTTE le righe attive. Snapshot per il rollback su write fallita.
         queue_snap = queue.state()
         queue.expire(now=now)
-        sid = queue.add(row, now=now)
+        # Accoda la riga con la sua chiave PER-RIGA (provenienza): serve al commit MULTI di un
+        # eventuale passaggio di modalità a runtime (single→multi). In OVERWRITE_LAST `commit_signals`
+        # tiene una riga duplicata solo se la sua chiave è tra `queue.active_keys()`; senza questa
+        # chiave la riga già attiva verrebbe scartata dal blocco A+B (kyh + kyW #192, Codex).
+        sid = queue.add(row, now=now, dedup_key=signal_dedupe.row_dedup_key(text, row))
         # `add` ritorna None se il nuovo segnale è oltre il tetto (#136 p5): le righe
         # attive restano quelle correnti (post-expire), il CSV è comunque riscritto.
         blocked_by_cap = sid is None

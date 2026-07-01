@@ -770,3 +770,24 @@ def test_transizione_multi_a_single_blocca_messaggio_gia_processato(tmp_path):
                                   write_rows=_spy)
     assert r2.decision == live_guard.DUPLICATE      # hash-messaggio ombreggiato dal commit multi
     assert calls == []                              # nessuna riscrittura (niente doppia scommessa)
+
+
+def test_transizione_single_a_multi_overwrite_preserva_riga_attiva(tmp_path):
+    """#192 kyW (Codex): in OVERWRITE_LAST, col bridge già in esecuzione, una riga scritta come
+    single-row resta in coda; abilitando il multi lo STESSO messaggio produce A+B. La riga A (ora
+    DUPLICATE per lo shadow kyW) deve restare ATTIVA nel blocco (A+B), non essere scartata lasciando
+    solo B — la single-row deve aver accodato A con la sua chiave per-riga (provenienza), così
+    `commit_signals` (kyh) la riconosce fra le righe ancora attive."""
+    path = str(tmp_path / "s.csv")
+    rows = _rows(pipe.build_validated_rows(
+        _multiselection_parser_with(["1 - 0", "2 - 1"]), MSG, mode="NAME_ONLY"))
+    row_a, row_b = rows[0], rows[1]
+    tracker = signal_dedupe.SignalTracker()
+    q = signal_queue.SignalQueue(mode=signal_queue.OVERWRITE_LAST, default_timeout=120)
+    write_path.commit_signal(tracker, None, q, _cfg(path), MSG, row_a, path, now=0,
+                             write_rows=csv_writer.write_rows)
+    assert [x["SelectionName"] for x in q.active_rows()] == ["1 - 0"]
+    # MULTI sulla STESSA coda: A è duplicata (shadow) ma ancora attiva → blocco A+B, A NON scartata.
+    write_path.commit_signals(tracker, None, q, _cfg(path), MSG, [row_a, row_b], path, now=1,
+                              write_rows=csv_writer.write_rows)
+    assert [x["SelectionName"] for x in q.active_rows()] == ["1 - 0", "2 - 1"]

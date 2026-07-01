@@ -331,3 +331,12 @@ def test_mark_seen_rinfresca_marcatore_fuori_finestra():
     t.mark_seen("S", now=40)                         # deve RINFRESCARE, non essere un no-op
     # ora "S" è di nuovo in finestra → un retry cross-namespace è DUPLICATE (niente doppia scommessa)
     assert t.register("z", now=41, key="S").status == sd.DUPLICATE
+
+
+def test_restore_state_scarta_voce_dict_senza_crash():
+    """#192 kyW (Codex): una voce OGGETTO in `dedupe_state.json` (es. `[{}]` da manomissione) non
+    deve far crashare il ripristino (`item[0]` su un dict → KeyError). Va SCARTATA come le altre
+    voci malformate, lasciando il tracker con solo le voci valide — lo START non deve crashare."""
+    t = sd.SignalTracker()
+    t.restore_state([{}, {"x": 1}, ["buono", 1000], "rotta"])
+    assert t.state() == [["buono", 1000.0, True]]
