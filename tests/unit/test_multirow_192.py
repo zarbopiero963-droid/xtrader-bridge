@@ -314,6 +314,67 @@ def test_kyz_mapping_applicata_su_righe_derivate_da_base_not_ready():
     assert results[0].row["SelectionName"] == "1 - 0"
 
 
+def test_kyz_obbligatorio_non_coperto_dal_multi_resta_bloccante():
+    """kyZ / Codex P1: il rilassamento di `NOT_READY` copre SOLO gli obbligatori che OGNI riga
+    multi riempie. Un obbligatorio della base che il multi **non** fornisce (qui `MarketName`,
+    che il validator NAME_ONLY non ri-controlla) deve restare **bloccante** — un messaggio che il
+    parser ha dichiarato incompleto NON deve raggiungere il CSV.
+
+    Fail-first: col rilassamento «cieco» (bypass di TUTTI i NOT_READY) la base diventava
+    derivabile e le righe finivano nel CSV."""
+    extra = [
+        cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
+        # SelectionName obbligatorio → fornito dal MultiSelection; MarketName obbligatorio ma
+        # NON fornito da nessuna riga multi e assente nel messaggio → deve restare bloccante.
+        cp.FieldRule(target="SelectionName", start_after="SEL:", end_before="\n", required=True),
+        cp.FieldRule(target="MarketName", start_after="MKTNAME:", end_before="\n", required=True),
+    ]
+    defn = cp.CustomParserDef(name="MSp1", mode="NAME_ONLY", rules=_base_rules(extra))
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name=s) for s in ("1 - 0", "2 - 1")]
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY")
+    assert len(results) == 1                                  # nessuna riga derivata: fail-closed
+    assert results[0].status == pipe.NOT_READY and not results[0].placeable
+    assert "MarketName" in results[0].missing_required        # l'obbligatorio scoperto è ancora segnalato
+
+
+def test_kyz_market_mapping_missing_risolto_dalle_selezioni():
+    """kyZ / Codex P2 + CodeRabbit: con `market_mapping_profiles` attivo e NESSUNA frase che
+    combacia, il fallback della mappatura mercati dava `MARKET_MAPPING_MISSING` sulla base (che ha
+    `MarketType` ma non `SelectionName`) → `[base]`, zero righe — anche se ogni MultiSelection
+    fornisce il `SelectionName`. Ora `MARKET_MAPPING_MISSING` è un motivo **colmabile**: la base è
+    ri-valutata trattando come presenti i campi forniti da OGNI riga multi.
+
+    Fail-first: col codice precedente (re-run solo su NOT_READY) la base restava
+    `MARKET_MAPPING_MISSING` in `_BASE_BLOCKING` → nessuna riga."""
+    extra = [
+        cp.FieldRule(target="MarketType", fixed_value="CORRECT_SCORE", required=True),
+        cp.FieldRule(target="MarketName", fixed_value="Risultato esatto"),
+    ]
+    defn = cp.CustomParserDef(name="MSmkt", mode="NAME_ONLY", rules=_base_rules(extra))
+    defn.market_mapping_profiles = ["P"]                      # mappatura mercati ATTIVA
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name=s) for s in ("1 - 0", "2 - 1")]
+    # Profilo la cui frase NON compare nel messaggio (delimitatore assente) → resolve_market="none".
+    profiles = [[{"start_after": "Mercato:", "end_before": "\n", "phrase": "gol gol",
+                  "market_type": "GOAL_NOGOAL", "market_name": "Entrambe le squadre a segno",
+                  "selection_name": "Sì"}]]
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY",
+                                        market_mapping_profiles=profiles)
+    placeable = [r for r in results if r.placeable]
+    assert [r.row["SelectionName"] for r in placeable] == ["1 - 0", "2 - 1"]  # righe generate
+
+
+def test_kyz_multi_supplied_gia_in_kwargs_non_crasha():
+    """kyZ / CodeRabbit: il re-run interno passa `multi_supplied`; se un chiamante l'ha GIÀ messo
+    nei kwargs, un merge naïf darebbe `TypeError: got multiple values`. Il fix copia i kwargs prima
+    di iniettare la chiave: la chiamata non deve sollevare e deve generare comunque le righe."""
+    defn = _multiselection_parser_selname_obbligatoria()      # base NOT_READY → attiva il re-run
+    results = pipe.build_validated_rows(defn, MSG, mode="NAME_ONLY",
+                                        multi_supplied=frozenset())   # kwarg che collide col re-run
+    assert [r.row["SelectionName"] for r in results if r.placeable] == ["1 - 0", "2 - 1"]
+
+
 # ── commit atomico multi-riga (coda + CSV + rollback) ─────────────────────────
 
 def _cfg(path):

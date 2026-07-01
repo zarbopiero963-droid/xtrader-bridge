@@ -119,17 +119,23 @@ class PipelineResult:
         return self.status == validator.VALID
 
 
-def _row_has_market(row: dict, mode: str) -> bool:
+def _row_has_market(row: dict, mode: str, supplied=()) -> bool:
     """True se la riga ha già un mercato sufficiente per la **modalità di riconoscimento**:
     NAME → `MarketType`+`SelectionName`; ID → `MarketId`+`SelectionId`; BOTH → almeno una
     delle due coppie. Usato dal fallback della mappatura mercati per decidere, quando
     NESSUNA frase combacia, se le regole-colonna hanno comunque prodotto un mercato (così
     non si fa fail-closed su una riga che — secondo la sua modalità — il mercato ce l'ha già,
-    evitando di scartare per errore una riga ID valida)."""
+    evitando di scartare per errore una riga ID valida).
+
+    `supplied` (#192 kyZ): colonne che OGNI riga multi generata riempirà — trattate come
+    **presenti** anche se vuote sulla base, così un campo mercato fornito dalle righe multi
+    (es. `SelectionName` di un MultiSelection) non provoca un falso `MARKET_MAPPING_MISSING`
+    (Codex/CodeRabbit). La riga base non viene scritta; ogni riga derivata è validata a parte."""
     m = recognition.normalize_mode(mode)
+    supplied = frozenset(supplied or ())
 
     def _present(*cols):
-        return all(str(row.get(c, "")).strip() for c in cols)
+        return all(c in supplied or str(row.get(c, "")).strip() for c in cols)
 
     if m == recognition.ID_ONLY:
         return _present("MarketId", "SelectionId")
@@ -174,7 +180,7 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
                         name_mapping_profiles=None,
                         market_mapping_profiles=None,
                         id_resolver=None,
-                        allow_not_ready: bool = False) -> PipelineResult:
+                        multi_supplied=None) -> PipelineResult:
     """Applica il parser al messaggio e valida la riga risultante.
 
     `provider` è fornito dal runtime/config (come per il parser hardcoded) e
@@ -207,24 +213,33 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
     prezzo + BetType). La riga è già in formato contratto (quota col punto,
     BetType maiuscolo).
 
-    `allow_not_ready` (#192 kyZ, uso INTERNO di `build_validated_rows`): se True il gate
-    "Non pronto" (`NOT_READY`) NON blocca — un obbligatorio della base può essere riempito
-    dalle righe multi. Gli altri gate (provider/handicap/mappature) restano fail-closed."""
+    `multi_supplied` (#192 kyZ, uso INTERNO di `build_validated_rows`): insieme di **colonne
+    CSV** che OGNI riga multi generata riempirà con un valore non vuoto (es. `SelectionName`
+    per un MultiSelection). I gate STRUTTURALI trattano quelle colonne come **già presenti**,
+    così un obbligatorio della base che le righe multi completeranno non blocca la generazione:
+    - il gate "Non pronto" (`NOT_READY`) ignora SOLO gli obbligatori mancanti che sono in
+      `multi_supplied` (Codex P1); se restano altri obbligatori scoperti → resta `NOT_READY`;
+    - il fallback della mappatura mercati (`_row_has_market`) considera coperti i campi mercato
+      forniti dalle righe multi (Codex/CodeRabbit), evitando un falso `MARKET_MAPPING_MISSING`.
+    Gli altri gate (provider/handicap, mappatura nomi) restano invariati e fail-closed. La base
+    non viene mai scritta: ogni riga derivata è comunque validata da `validator.validate`."""
     if value_maps_registry is None:
         value_maps_registry = _default_registry()
     res = apply_parser(defn, text, value_maps_registry)
     row = _normalize_to_contract(res.as_csv_row(), provider)
 
-    if not res.ready and not allow_not_ready:
-        # Manca un obbligatorio della regola: non si costruisce un segnale.
-        return PipelineResult(NOT_READY, row, list(res.missing_required))
-    # kyZ (#192): con `allow_not_ready` (usato SOLO da `build_validated_rows` quando l'output
-    # multi è attivo) NON si esce su NOT_READY: un obbligatorio della BASE può essere riempito
-    # dalle righe multi (es. `SelectionName` in un MultiSelection). Si prosegue così per le
-    # mappature nomi/mercati e l'arricchimento ID (a valle di questo gate), su cui poi
-    # `_apply_multi_rule` sovrascrive i campi della singola riga; ogni riga derivata è comunque
-    # validata da `validator.validate` (fail-closed per riga). Gli altri gate strutturali sotto
-    # (provider/handicap/mappature) restano invariati e fail-closed anche con `allow_not_ready`.
+    supplied = frozenset(multi_supplied or ())
+    if not res.ready:
+        # kyZ (#192): un obbligatorio mancante che le righe multi riempiranno (`multi_supplied`)
+        # NON blocca — ma quelli NON coperti restano bloccanti (Codex P1: mai un messaggio
+        # dichiarato incompleto dal parser che finisce nel CSV su un campo che il validator non
+        # ri-controlla). Se dopo aver scartato i coperti resta anche un solo obbligatorio → NOT_READY.
+        still_missing = [t for t in res.missing_required if t not in supplied]
+        if still_missing:
+            return PipelineResult(NOT_READY, row, still_missing)
+        # Tutti gli obbligatori mancanti sono forniti dalle righe multi: si prosegue per mappature
+        # nomi/mercati (a valle di questo gate); `_apply_multi_rule` poi sovrascrive i campi della
+        # singola riga e ogni riga derivata è validata da `validator.validate` (fail-closed per riga).
 
     if not str(row.get("Provider", "")).strip():
         # Provider è obbligatorio per il contratto; il runtime lo passa da config.
@@ -283,11 +298,13 @@ def build_validated_row(defn: CustomParserDef, text: str, *,
             # scommessa su un mercato ambiguo (CodeRabbit).
             row["MarketId"] = ""
             row["SelectionId"] = ""
-        elif not _row_has_market(row, mode):
+        elif not _row_has_market(row, mode, supplied=supplied):
             # status "none": nessuna frase combacia. Si tengono i valori della regola-colonna
             # SE costituiscono già un mercato per la modalità; altrimenti il mercato resterebbe
             # assente → fail-closed (niente mercato inventato), invece di lasciar passare una
             # riga senza mercato. Controllo mode-aware per non scartare per errore una riga ID.
+            # kyZ (#192): i campi mercato forniti da OGNI riga multi (`supplied`) contano come
+            # presenti — così un MultiSelection che riempie `SelectionName` non fa fail-closed qui.
             return PipelineResult(MARKET_MAPPING_MISSING, row, list(res.missing_required))
 
     # Identificazione precisa dal dizionario Betfair locale (PR-P12): dopo le mappature
@@ -345,6 +362,28 @@ _MULTI_OVERRIDE = (
 _BASE_BLOCKING = (NOT_READY, INVALID_MISSING_PROVIDER, INVALID_HANDICAP,
                   MAPPING_MISSING, MARKET_MAPPING_MISSING)
 
+# Stati bloccanti della base che le righe multi POSSONO risolvere completando un campo (kyZ #192):
+# `NOT_READY` (obbligatorio della regola mancante) e `MARKET_MAPPING_MISSING` (mercato assente,
+# nessuna frase combacia). Solo per questi si ri-valuta la base trattando come presenti i campi
+# forniti da OGNI riga multi. Gli altri (`INVALID_MISSING_PROVIDER`/`INVALID_HANDICAP`/
+# `MAPPING_MISSING`) restano fail-closed: un provider/handicap/evento mancante NON è colmabile
+# da una riga multi.
+_MULTI_RESOLVABLE = (NOT_READY, MARKET_MAPPING_MISSING)
+
+
+def _multi_supplied_cols(rules) -> "frozenset":
+    """Colonne CSV che OGNI riga multi generata riempirà con un valore non vuoto (kyZ #192):
+    una colonna è «fornita» solo se **tutte** le regole attive (mercati + selezioni) hanno il
+    corrispondente attributo non vuoto — così è garantita su OGNI riga derivata, non solo su
+    alcune. Serve ai gate strutturali della base per non bloccare un campo che il multi completerà.
+    Con `rules` vuoto → insieme vuoto (nessuna garanzia)."""
+    rules = list(rules or [])
+    if not rules:
+        return frozenset()
+    return frozenset(
+        col for col, attr in _MULTI_OVERRIDE
+        if all(str(getattr(r, attr, "") or "").strip() for r in rules))
+
 
 def _apply_multi_rule(base_row: dict, rule) -> dict:
     """Deriva una riga CSV dalla riga BASE applicando gli override NON VUOTI della regola
@@ -386,12 +425,14 @@ def build_validated_rows(defn: CustomParserDef, text: str, **kwargs) -> "list[Pi
     - altrimenti la riga base (già arricchita da mappature nomi/mercati e dizionario) fornisce
       i campi comuni ed OGNI regola MultiMarket/MultiSelection genera UNA riga distinta, validata
       singolarmente (una riga non valida non blocca le altre);
-    - **kyZ (#192):** un obbligatorio della BASE che sarà riempito dalle righe multi (es.
-      `SelectionName` in un MultiSelection) NON deve bloccare la generazione: quando l'output
-      multi è attivo, un base ``NOT_READY`` viene RI-costruito rilassando SOLO quel gate
-      (`allow_not_ready=True`), così la base passa comunque per mappature nomi/mercati ed
-      enrichment ID e ogni riga derivata è validata singolarmente. Gli ALTRI gate strutturali
-      (provider / handicap / mappature) restano fail-closed (``[base]``);
+    - **kyZ (#192):** un campo obbligatorio/mercato della BASE che sarà riempito dalle righe multi
+      (es. `SelectionName` in un MultiSelection) NON deve bloccare la generazione: quando l'output
+      multi è attivo e la base è bloccata per un motivo **colmabile** (`NOT_READY` o
+      `MARKET_MAPPING_MISSING`), si RI-valuta la base passando `multi_supplied` = le colonne che
+      OGNI riga multi riempie, trattate come presenti dai soli gate strutturali. La base passa così
+      per mappature nomi/mercati ed enrichment ID e ogni riga derivata è validata singolarmente.
+      Gli ALTRI gate (provider / handicap / mappatura nomi) e gli obbligatori NON coperti dal multi
+      restano fail-closed (``[base]``);
     - MultiMarket e MultiSelection insieme → righe SEPARATE (prima i mercati, poi le selezioni
       sul mercato base), MAI il prodotto cartesiano (vedi `both_multi_active`).
     """
@@ -400,11 +441,17 @@ def build_validated_rows(defn: CustomParserDef, text: str, **kwargs) -> "list[Pi
     selections = defn.active_multi_selections()
     if not markets and not selections:
         return [base]
-    # kyZ (#192): NOT_READY della base non è bloccante quando l'output multi è attivo — le righe
-    # multi possono fornire il campo obbligatorio mancante. Si RI-costruisce la base senza quel
-    # gate (mantenendo mappature/enrichment, che stanno a valle) e la validazione resta per-riga.
-    if base.status == NOT_READY:
-        base = build_validated_row(defn, text, allow_not_ready=True, **kwargs)
+    # kyZ (#192): se la base è bloccata per un motivo che le righe multi possono colmare
+    # (`NOT_READY`/`MARKET_MAPPING_MISSING`), si RI-valuta trattando come presenti SOLO le colonne
+    # fornite da OGNI riga generata (`multi_supplied`) — così un obbligatorio NON coperto resta
+    # bloccante (Codex P1) e la mappatura mercati non fa un falso fail-closed (Codex/CodeRabbit).
+    # `dict(kwargs)` evita il crash se un chiamante ha già passato `multi_supplied` (CodeRabbit).
+    if base.status in _MULTI_RESOLVABLE:
+        supplied = _multi_supplied_cols(list(markets) + list(selections))
+        if supplied:
+            retry_kwargs = dict(kwargs)
+            retry_kwargs["multi_supplied"] = supplied
+            base = build_validated_row(defn, text, **retry_kwargs)
     if base.status in _BASE_BLOCKING:
         return [base]
     mode = kwargs.get("mode", recognition.DEFAULT_MODE)

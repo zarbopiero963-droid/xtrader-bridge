@@ -476,13 +476,20 @@ con flag `False` e liste vuote → comportamento **single-row identico a prima**
 resolve_row` espone le righe in `RouteResult.rows` (e `RouteResult.row` resta la **prima**,
 retro-compatibile).
 
-- **Base «Non pronto» riempita dalle righe multi (#192 kyZ):** un campo `required` della **riga
-  base** che è però fornito da ogni riga multi (es. `SelectionName` obbligatorio in `NAME_ONLY`,
-  valorizzato da ogni MultiSelection) **non** blocca più la generazione. Con l'output multi
-  attivo, una base `NOT_READY` viene ri-valutata rilassando **solo** quel gate — passando
-  comunque per mappatura nomi/mercati ed enrichment ID — e ogni riga derivata è validata
-  singolarmente. Gli **altri** gate strutturali (`Provider` mancante, `Handicap` non numerico,
-  mappatura nomi/mercati non risolta) restano **fail-closed**: nessuna riga derivata.
+- **Base bloccata ma completata dalle righe multi (#192 kyZ):** un campo della **riga base** che è
+  però fornito da **ogni** riga multi (es. `SelectionName` obbligatorio in `NAME_ONLY`, valorizzato
+  da ogni MultiSelection) **non** blocca più la generazione. Con l'output multi attivo, se la base
+  è bloccata per un motivo **colmabile** — `NOT_READY` (obbligatorio della regola) o
+  `MARKET_MAPPING_MISSING` (mercato incompleto, nessuna frase combacia) — viene ri-valutata
+  trattando come presenti **solo** le colonne fornite da ogni riga multi; passa comunque per
+  mappatura nomi/mercati ed enrichment ID e ogni riga derivata è validata singolarmente.
+  **Fail-closed** restano: un obbligatorio **non** coperto dal multi (resta `NOT_READY`, così un
+  messaggio dichiarato incompleto non raggiunge il CSV), un mercato non coperto, e gli altri gate
+  (`Provider` mancante, `Handicap` non numerico, mappatura nomi non risolta).
+  - *Limite noto:* in `ID_ONLY` con dizionario Betfair gli ID **non** sono risolti per singola riga
+    derivata (una MultiSelection azzera comunque `SelectionId` al cambio selezione) → un
+    MultiSelection in ID_ONLY non produce righe con ID. Limite pre-esistente (fail-closed), da
+    affrontare con la risoluzione ID per-riga.
 
 **Regole e limiti (v1):**
 
