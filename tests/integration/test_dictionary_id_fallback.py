@@ -201,3 +201,82 @@ def test_app_betfair_id_resolver_fail_open_ritorna_none():
             raise RuntimeError("DB locale non apribile (simulato)")
 
     assert App._betfair_id_resolver(_Self()) is None
+
+
+# ── ID PER RIGA DERIVATA nelle righe multi (#192, follow-up review #290) ──────
+
+class _PerSelectionResolver:
+    """Resolver che ritorna una tripla ID DIVERSA per ciascuna `selection_name` (come il
+    dizionario reale). Registra le chiamate per verificare che ogni riga risolva la SUA selezione."""
+
+    def __init__(self, table):
+        self.table = table          # selection_name → {EventId, MarketId, SelectionId}
+        self.calls = []
+
+    def resolve_ids(self, **kw):
+        self.calls.append(kw)
+        return dict(self.table.get(kw.get("selection_name", ""), {}))
+
+
+def _multiselection_id_parser():
+    """Parser ID_ONLY MultiSelection: la base fornisce evento+mercato (per nome, per la
+    risoluzione), ogni MultiSelection fornisce una selezione diversa. Gli ID vengono dal resolver."""
+    defn = cp.CustomParserDef(
+        name="MSID", mode="ID_ONLY", sport="Calcio",
+        rules=[
+            cp.FieldRule(target="Provider", fixed_value="TG_CUSTOM"),
+            cp.FieldRule(target="EventName", start_after="Match:", end_before="\n", required=True),
+            cp.FieldRule(target="MarketType", start_after="Merc:", end_before="\n", required=True),
+            cp.FieldRule(target="Price", start_after="Quota:", end_before="\n", required=True),
+            cp.FieldRule(target="BetType", start_after="Lato:", value_map="bettype", required=True),
+        ])
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name="Inter"),
+                             cp.MultiRowRule(selection_name="Milan")]
+    return defn
+
+
+def test_multi_id_perriga_ogni_selezione_ottiene_i_suoi_id():
+    """#192 (follow-up #290): in ID_ONLY ogni riga MultiSelection deve risolvere gli ID per la
+    PROPRIA selezione ed essere piazzabile. Prima gli ID erano risolti solo sulla base (con
+    selezione vuota) e `_apply_multi_rule` li azzerava → righe senza ID, non piazzabili.
+
+    Fail-first: sul codice precedente entrambe le righe sono `INVALID_MISSING_FIELDS` (no ID)."""
+    res = _PerSelectionResolver({
+        "Inter": {"EventId": "ev1", "MarketId": "mk1", "SelectionId": "sel_inter"},
+        "Milan": {"EventId": "ev1", "MarketId": "mk1", "SelectionId": "sel_milan"},
+    })
+    results = pipe.build_validated_rows(_multiselection_id_parser(), _MSG, mode="ID_ONLY",
+                                        id_resolver=res)
+    assert len(results) == 2
+    assert all(r.status == validator.VALID and r.placeable for r in results)
+    by_sel = {r.row["SelectionName"]: r.row for r in results}
+    assert by_sel["Inter"]["SelectionId"] == "sel_inter"      # ID risolti PER RIGA
+    assert by_sel["Milan"]["SelectionId"] == "sel_milan"
+    assert by_sel["Inter"]["MarketId"] == "mk1" and by_sel["Milan"]["MarketId"] == "mk1"
+    # il resolver è stato interrogato con la selezione di OGNI riga.
+    sels = {c["selection_name"] for c in res.calls}
+    assert {"Inter", "Milan"} <= sels
+
+
+def test_multi_id_perriga_fail_open_resolver_che_solleva():
+    """Fail-open per riga: un resolver che solleva non blocca né fa crashare la generazione;
+    in ID_ONLY, senza ID, le righe restano non piazzabili (fail-closed sul contenuto)."""
+    res = _FakeResolver(boom=True)
+    results = pipe.build_validated_rows(_multiselection_id_parser(), _MSG, mode="ID_ONLY",
+                                        id_resolver=res)
+    assert len(results) == 2
+    assert all(not r.placeable and r.status == validator.INVALID_MISSING_FIELDS for r in results)
+
+
+def test_multi_id_perriga_senza_resolver_resta_a_nomi():
+    """Senza `id_resolver` (o parser agnostico) nessun arricchimento: in NAME_ONLY le righe
+    restano piazzabili a nomi — comportamento invariato del percorso multi esistente."""
+    defn = _multiselection_id_parser()
+    defn.mode = "NAME_ONLY"
+    # aggiunge un MarketName così il mercato a NOMI è completo per NAME_ONLY
+    defn.rules.append(cp.FieldRule(target="MarketName", fixed_value="Match Odds"))
+    results = pipe.build_validated_rows(defn, _MSG, mode="NAME_ONLY", id_resolver=None)
+    assert len(results) == 2
+    assert all(r.placeable for r in results)
+    assert all(r.row["SelectionId"] == "" for r in results)   # nessun ID, solo nomi

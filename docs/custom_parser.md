@@ -486,10 +486,10 @@ retro-compatibile).
   **Fail-closed** restano: un obbligatorio **non** coperto dal multi (resta `NOT_READY`, così un
   messaggio dichiarato incompleto non raggiunge il CSV), un mercato non coperto, e gli altri gate
   (`Provider` mancante, `Handicap` non numerico, mappatura nomi non risolta).
-  - *Limite noto:* in `ID_ONLY` con dizionario Betfair gli ID **non** sono risolti per singola riga
-    derivata (una MultiSelection azzera comunque `SelectionId` al cambio selezione) → un
-    MultiSelection in ID_ONLY non produce righe con ID. Limite pre-esistente (fail-closed), da
-    affrontare con la risoluzione ID per-riga.
+  - *ID per riga (risolto):* in `ID_ONLY` con dizionario Betfair gli ID sono ora risolti **per
+    singola riga derivata** (`_resolve_ids_into` in `_validated_multi_row`) — una MultiSelection
+    azzera `SelectionId` al cambio selezione e subito dopo ri-risolve gli ID per quella selezione,
+    così l'ID_ONLY produce righe con gli ID corretti. Vedi «ID coerenti + risoluzione per riga».
 
 **Regole e limiti (v1):**
 
@@ -515,9 +515,14 @@ retro-compatibile).
   - In `OVERWRITE_LAST` l'«ultima istruzione» è il **blocco intero** del messaggio: tutte le
     righe generate restano attive insieme (sostituiscono il blocco precedente), via
     `signal_queue.replace_block`.
-- **ID coerenti**: quando una riga multi cambia `MarketType`/`MarketName`/`SelectionName`/
-  `Handicap`, gli eventuali `MarketId`/`SelectionId` ereditati dalla base vengono **azzerati**
-  (una riga non può nominare un mercato e identificarne un altro per ID).
+- **ID coerenti + risoluzione per riga**: quando una riga multi cambia `MarketType`/`MarketName`/
+  `SelectionName`/`Handicap`, gli eventuali `MarketId`/`SelectionId` ereditati dalla base vengono
+  **azzerati** (una riga non può nominare un mercato e identificarne un altro per ID); subito dopo,
+  se è disponibile il dizionario Betfair locale (`id_resolver` + sport del parser), gli ID vengono
+  **ri-risolti per la selezione/mercato di QUELLA riga** (`_resolve_ids_into`, additivo/fail-open/
+  non distruttivo). Così un **MultiSelection in `ID_ONLY`** produce righe con gli ID corretti per
+  ciascuna selezione; senza dizionario (o parser agnostico) le righe restano a **nomi** — in
+  `NAME_ONLY` piazzabili, in `ID_ONLY` scartate (fail-closed, nessun ID inventato).
 
 **GUI (scheda 🧩 Parser di «🧰 Strumenti»):** la sezione **«Output multi-riga»** sopra la griglia
 14 colonne offre due interruttori indipendenti — **MultiMarket** e **MultiSelection** — ciascuno

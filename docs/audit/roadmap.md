@@ -887,11 +887,18 @@ sicurezza (Codex/CodeRabbit su #290):
   controlla l'Handicap → il formato è ora ri-verificato su **ogni riga derivata** in
   `_validated_multi_row` (fail-closed, vale anche nel percorso multi normale).
 
-**Limite noto (follow-up):** in `ID_ONLY` con `id_resolver`, gli ID non vengono risolti **per riga
-derivata** (la base risolve con selezione vuota e `_apply_multi_rule` azzera comunque gli ID quando
-la selezione cambia) → un MultiSelection in ID_ONLY non produce righe con ID. È **pre-esistente**
-(indipendente da kyZ, fail-closed) e va affrontato con una risoluzione ID per-riga in una PR
-dedicata. Test hard fail-first: `tests/unit/test_multirow_192.py`
+**ID per riga derivata (RISOLTO, follow-up post-#291).** Prima, in `ID_ONLY` con `id_resolver`, gli
+ID non venivano risolti **per riga derivata** (la base risolve con selezione vuota e
+`_apply_multi_rule` azzera gli ID al cambio selezione) → un MultiSelection in ID_ONLY non produceva
+righe con ID. **Fix:** la risoluzione ID è estratta in `_resolve_ids_into` (additiva / fail-open /
+NON distruttiva — riempie solo gli ID vuoti, scarta l'arricchimento su conflitto, non blocca su
+errore) e applicata sia alla base sia a **ogni riga multi** in `_validated_multi_row`: così ogni
+selezione ri-risolve gli ID per sé e un MultiSelection in ID_ONLY è ora piazzabile. Base single-row
+bit-identica (stessa logica). Test hard fail-first: `tests/integration/test_dictionary_id_fallback.py`
+(`test_multi_id_perriga_ogni_selezione_ottiene_i_suoi_id`,
+`test_multi_id_perriga_fail_open_resolver_che_solleva`,
+`test_multi_id_perriga_senza_resolver_resta_a_nomi`). Test hard fail-first (kyZ):
+`tests/unit/test_multirow_192.py`
 (`test_kyz_base_not_ready_riempita_da_multiselection`, `test_kyz_altri_gate_base_restano_fail_closed`,
 `test_kyz_mapping_applicata_su_righe_derivate_da_base_not_ready`,
 `test_kyz_obbligatorio_non_coperto_dal_multi_resta_bloccante`,
