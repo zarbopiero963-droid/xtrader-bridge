@@ -968,11 +968,13 @@ class CustomParserPanel(ctk.CTkFrame):
         # poi output multi-riga (verdetto sulle RIGHE GENERATE, non sulla sola base, Codex P2);
         # infine single-row col motivo e i campi mancanti — sia il gate parser sia i campi di
         # RICONOSCIMENTO del validator (INVALID_MISSING_FIELDS), così si sa QUALE colonna aggiungere.
+        # `content_ok`: esito del gate di contenuto whole-message (in `diag.message_error`),
+        # così il verdetto multi-riga onora NO_CONTENT_MATCH come il runtime (Codex, #192).
         self._result.configure(text=ParserBuilder.test_verdict(
             self.builder.errors(), preview,
             diag_placeable=diag.placeable, diag_status=diag.status,
             res_row=res.row, res_missing_required=res.missing_required,
-            res_detail=res.detail))
+            res_detail=res.detail, content_ok=not diag.message_error))
         self._last_report = parser_diagnostics.format_report(diag)
         self._render_diag_table(parser_diagnostics.diagnostic_table(diag, defn))
         self._render_preview_table(preview)

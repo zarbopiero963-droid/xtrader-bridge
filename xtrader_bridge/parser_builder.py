@@ -14,7 +14,16 @@ import json
 import os
 from dataclasses import dataclass, field
 
-from . import custom_parser, dizionario, recognition, sports, transforms, validator, value_maps
+from . import (
+    custom_parser,
+    dizionario,
+    parser_diagnostics,
+    recognition,
+    sports,
+    transforms,
+    validator,
+    value_maps,
+)
 from .custom_parser import CustomParserDef, FieldRule, MultiRowRule
 from .custom_pipeline import both_multi_active, build_validated_row, build_validated_rows
 
@@ -415,7 +424,7 @@ class ParserBuilder:
     @staticmethod
     def test_verdict(errors: list, preview_rows: list, *, diag_placeable: bool,
                      diag_status: str, res_row: dict, res_missing_required: list,
-                     res_detail) -> str:
+                     res_detail, content_ok: bool = True) -> str:
         """Verdetto sintetico di «Prova messaggio» (single + multi-riga). Logica pura, CI.
 
         Precedenza (Codex #19):
@@ -423,15 +432,42 @@ class ParserBuilder:
            che Save rifiuterebbe NON deve mai risultare «Pronto», anche se per caso la
            pipeline produce una riga (es. `fixed_value` + delimitatori sullo stesso campo).
            Si mostra l'errore invece della piazzabilità.
-        2. **Output multi-riga** attivo → `preview_summary` (basato sulle righe generate).
+        2. **Output multi-riga** attivo → gate di contenuto (`content_ok`) POI `preview_summary`.
         3. **Single-row**: «Pronto» se piazzabile; altrimenti «Non pronto» col motivo e i
            campi mancanti — sia il gate parser (`missing_required`) sia i campi di
            RICONOSCIMENTO mancanti (in `res_detail` quando lo status è INVALID_MISSING_FIELDS),
            così l'anteprima dice QUALE colonna aggiungere. Il `detail` di altri stati (es.
-           la tupla di INVALID_PRICE_BOUNDS) NON è trattato come «mancanti»."""
+           la tupla di INVALID_PRICE_BOUNDS) NON è trattato come «mancanti».
+
+        `content_ok` (#192, Codex): esito del gate di contenuto del runtime
+        (`custom_parser_engine.matches_message`, whole-message). Il runtime
+        (`signal_router.resolve_row`) scarta con `NO_CONTENT_MATCH` un parser che non estrae
+        NULLA dal messaggio (solo valori fissi) **anche se** le righe generate sarebbero
+        piazzabili. Il verdetto single-row lo onora già via `diag_placeable` (vedi `diagnose`);
+        per il **multi-riga** va onorato QUI, altrimenti «Prova messaggio» direbbe «✅ Pronto ·
+        N righe» per un parser che il runtime non scriverebbe (over-promise). Default `True`
+        preserva il comportamento dei chiamanti che non lo passano.
+
+        Il gate rispetta l'ORDINE del runtime (Codex): `matches_message` è valutato SOLO se esiste
+        almeno una riga piazzabile; con ZERO righe piazzabili il router ritorna lo status di
+        validazione reale, quindi qui si ripiega su `preview_summary` (che elenca gli status delle
+        righe scartate) invece di mascherare il vero errore con `NO_CONTENT_MATCH`."""
         if errors:
             return "⛔ Non salvabile: " + "; ".join(errors)
         if any(getattr(p, "kind", "base") != "base" for p in preview_rows):
+            # Gate di contenuto come il runtime (signal_router): un parser a soli valori fissi
+            # è piazzabile su qualsiasi testo ma verrebbe scartato con NO_CONTENT_MATCH. Non
+            # mostrare «Pronto» in quel caso, coerentemente col verdetto single-row (Codex).
+            # ORDINE come il runtime (Codex): matches_message è controllato SOLO dopo aver trovato
+            # almeno una riga piazzabile; se ZERO righe sono piazzabili il router ritorna lo status
+            # di validazione REALE (non NO_CONTENT_MATCH). Applicare il gate qui solo se esiste
+            # una riga piazzabile, così l'anteprima non MASCHERA il vero errore bloccante.
+            if any(p.placeable for p in preview_rows) and not content_ok:
+                # Riusa il token di stato condiviso (`parser_diagnostics`, stessa fonte di
+                # `diag.message_error` da cui deriva `content_ok`) così il messaggio resta
+                # allineato allo status del runtime, senza letterale divergente (CodeRabbit/Sourcery).
+                return (f"⛔ Non pronto ({parser_diagnostics.NO_CONTENT_MATCH}) · "
+                        "nessun contenuto estratto dal messaggio")
             return ParserBuilder.preview_summary(preview_rows)
         if diag_placeable:
             riga = ", ".join(f"{k}={v}" for k, v in res_row.items() if v != "")

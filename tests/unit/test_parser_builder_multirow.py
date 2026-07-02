@@ -314,13 +314,56 @@ def test_test_verdict_pronto_single_row():
 
 
 def test_test_verdict_multi_delega_a_preview_summary():
-    # Con output multi-riga attivo il verdetto si basa sulle righe generate.
+    # Con output multi-riga attivo (e contenuto estratto) il verdetto si basa sulle righe generate.
     rows = [_pr(index=0, kind="market", placeable=True),
             _pr(index=1, kind="market", placeable=False, status="INVALID_MISSING_FIELDS")]
     msg = pb.ParserBuilder.test_verdict(
         [], rows, diag_placeable=False, diag_status="X",
-        res_row={}, res_missing_required=[], res_detail=None)
+        res_row={}, res_missing_required=[], res_detail=None, content_ok=True)
     assert msg == pb.ParserBuilder.preview_summary(rows)
+
+
+def test_test_verdict_multi_onora_no_content_match():
+    """#192 (Codex): con output multi-riga, se il gate di contenuto whole-message fallisce
+    (`content_ok=False`, cioè il parser non estrae NULLA dal messaggio → il runtime scarterebbe
+    con NO_CONTENT_MATCH), il verdetto NON deve dire «✅ Pronto · N righe» anche se le righe
+    generate sono piazzabili — deve segnalare NO_CONTENT_MATCH come il runtime.
+
+    Fail-first: prima di questo fix il ramo multi ritornava sempre `preview_summary`, ignorando
+    il gate → «✅ Pronto» per un parser che il runtime non scriverebbe (over-promise)."""
+    rows = [_pr(index=0, kind="market", placeable=True),
+            _pr(index=1, kind="market", placeable=True)]
+    msg = pb.ParserBuilder.test_verdict(
+        [], rows, diag_placeable=False, diag_status="X",
+        res_row={}, res_missing_required=[], res_detail=None, content_ok=False)
+    assert msg.startswith("⛔")
+    assert "NO_CONTENT_MATCH" in msg
+    assert "Pronto" not in msg
+    # controprova: con content_ok=True le stesse righe danno il verdetto positivo di preview_summary.
+    ok = pb.ParserBuilder.test_verdict(
+        [], rows, diag_placeable=False, diag_status="X",
+        res_row={}, res_missing_required=[], res_detail=None, content_ok=True)
+    assert ok == pb.ParserBuilder.preview_summary(rows) and ok.startswith("✅ Pronto")
+
+
+def test_test_verdict_multi_content_gate_solo_se_riga_piazzabile():
+    """#192 (Codex, follow-up): il gate NO_CONTENT_MATCH nel ramo multi va applicato SOLO se
+    esiste almeno una riga piazzabile — come il runtime (`signal_router`: controlla
+    `matches_message` DOPO aver trovato righe piazzabili; con zero piazzabili ritorna lo status
+    di validazione reale). Con ZERO righe piazzabili + `content_ok=False` il verdetto NON deve
+    mascherare l'errore reale con NO_CONTENT_MATCH, ma mostrare `preview_summary` (gli status
+    delle righe scartate), così l'utente vede QUALE validazione blocca.
+
+    Fail-first: prima del fix il ramo multi ritornava NO_CONTENT_MATCH per `content_ok=False`
+    indipendentemente dalla piazzabilità → mascherava il vero errore bloccante."""
+    rows = [_pr(index=0, kind="market", placeable=False, status="INVALID_MISSING_FIELDS"),
+            _pr(index=1, kind="market", placeable=False, status="INVALID_PRICE_BOUNDS")]
+    msg = pb.ParserBuilder.test_verdict(
+        [], rows, diag_placeable=False, diag_status="X",
+        res_row={}, res_missing_required=[], res_detail=None, content_ok=False)
+    assert msg == pb.ParserBuilder.preview_summary(rows)     # status reali, NON mascherati
+    assert "NO_CONTENT_MATCH" not in msg
+    assert "INVALID_MISSING_FIELDS" in msg
 
 
 # ── il salvataggio NON azzera i campi multi non esposti (Codex P1) ────────────
