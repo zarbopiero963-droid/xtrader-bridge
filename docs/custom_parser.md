@@ -542,12 +542,29 @@ mercato), e altrimenti farebbe apparire un falso «Non pronto».
 > runtime e, quando il dizionario Betfair locale è disponibile, **risolve gli ID come il live**: la
 > GUI inoltra a `test_message`, `diagnose` e `preview_rows` un `id_resolver` opzionale, ottenuto
 > best-effort dall'app (factory `id_resolver_factory` → `App._betfair_id_resolver`). Così un parser
-> `ID_ONLY` che si affida al dizionario per `MarketId`/`SelectionId` (lasciati vuoti) appare
-> **pronto** in «Prova messaggio» esattamente come verrebbe scritto a runtime. Se il resolver **non**
-> è disponibile (factory assente o che solleva → `None`), l'anteprima resta **conservativa e
-> fail-closed** (mostra «non pronto» invece di un falso «pronto»): fail-open sul lato comodità, mai
-> sul lato sicurezza. La risoluzione in anteprima è puramente di lettura e non ha alcun effetto sul
-> flusso reale.
+> **multi-riga** `ID_ONLY` che si affida al dizionario per `MarketId`/`SelectionId` (lasciati vuoti)
+> mostra nella **tabella anteprima** le righe risolte come verrebbero scritte a runtime. Se il
+> resolver **non** è disponibile (factory assente o che solleva → `None`), l'anteprima resta
+> **conservativa e fail-closed** (mostra «non pronto» invece di un falso «pronto»): fail-open sul lato
+> comodità, mai sul lato sicurezza. La risoluzione in anteprima è puramente di lettura e non ha alcun
+> effetto sul flusso reale.
+>
+> **Limite single-row (#192, Codex).** L'arricchimento ID dal dizionario è una funzione **multi-riga**
+> (`build_validated_rows` rilassa il gate degli ID obbligatori PER RIGA solo quando è attivo
+> MultiMarket/MultiSelection). Un parser `ID_ONLY` **a riga singola** che lascia `MarketId`/
+> `SelectionId` obbligatori **vuoti** aspettandosi che li riempia il dizionario resta «Non pronto» in
+> anteprima — **coerentemente col runtime**, che per lo stesso parser ritorna `NOT_READY` e non
+> piazza nulla (nessun rilassamento del gate nel path single-row). Per un segnale a riga singola in
+> `ID_ONLY`, fornisci gli ID dal messaggio (regole `MarketId`/`SelectionId`), oppure usa il path
+> multi-riga. Il verdetto conservativo qui **non** è un buco di sicurezza (sotto-promette).
+>
+> **Tabella diagnostica base-level (#192, Codex).** Per un parser multi-riga la tabella «Diagnostica
+> per colonna» riflette la **riga base** (`diagnose` gira su `build_validated_row`): i campi che le
+> righe generate riempiono (es. `SelectionName` in un MultiSelection, o gli ID risolti PER RIGA dal
+> dizionario) possono comparire come «MANCANTE/REQUIRED_EMPTY» sulla base pur essendo risolti sulle
+> righe. La fonte **autorevole** per l'esito delle righe generate è la **tabella anteprima multi-riga**
+> (verde/rosso per riga); la tabella per-campo è un aiuto di diagnosi a livello base. È una discrepanza
+> in direzione conservativa (mostra più «mancanti» del reale), non un falso «pronto».
 >
 > **Sync-safe (Codex P2).** La factory dell'anteprima (`App._preview_id_resolver_factory`) **salta**
 > il resolver mentre è in corso una **sync Betfair** (`engine.is_syncing`, probe non bloccante): il
@@ -555,6 +572,11 @@ mercato), e altrimenti farebbe apparire un falso «Non pronto».
 > sul thread GUI durante una sync congelerebbe la finestra. Durante la sync l'anteprima è quindi
 > conservativa (nessun arricchimento ID). Il flusso **live** non è toccato: usa il resolver
 > direttamente su un worker thread, dove l'attesa sul lock è accettabile.
+>
+> **Gate di contenuto nel verdetto multi (#192, Codex).** Il verdetto sintetico «Prova messaggio»
+> onora `NO_CONTENT_MATCH` **anche** per l'output multi-riga: un parser a soli valori fissi (che non
+> estrae nulla dal messaggio) NON risulta «✅ Pronto · N righe» pur generando righe piazzabili, perché
+> il runtime lo scarterebbe (`matches_message`). Coerente col verdetto single-row.
 
 I campi per-riga **non esposti** nella griglia GUI (`min_price`, `max_price`, `points`,
 `start_after`, `end_before` di `MultiRowRule`) sono **preservati** quando si modifica e salva un

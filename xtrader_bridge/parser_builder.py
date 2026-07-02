@@ -415,7 +415,7 @@ class ParserBuilder:
     @staticmethod
     def test_verdict(errors: list, preview_rows: list, *, diag_placeable: bool,
                      diag_status: str, res_row: dict, res_missing_required: list,
-                     res_detail) -> str:
+                     res_detail, content_ok: bool = True) -> str:
         """Verdetto sintetico di «Prova messaggio» (single + multi-riga). Logica pura, CI.
 
         Precedenza (Codex #19):
@@ -423,15 +423,29 @@ class ParserBuilder:
            che Save rifiuterebbe NON deve mai risultare «Pronto», anche se per caso la
            pipeline produce una riga (es. `fixed_value` + delimitatori sullo stesso campo).
            Si mostra l'errore invece della piazzabilità.
-        2. **Output multi-riga** attivo → `preview_summary` (basato sulle righe generate).
+        2. **Output multi-riga** attivo → gate di contenuto (`content_ok`) POI `preview_summary`.
         3. **Single-row**: «Pronto» se piazzabile; altrimenti «Non pronto» col motivo e i
            campi mancanti — sia il gate parser (`missing_required`) sia i campi di
            RICONOSCIMENTO mancanti (in `res_detail` quando lo status è INVALID_MISSING_FIELDS),
            così l'anteprima dice QUALE colonna aggiungere. Il `detail` di altri stati (es.
-           la tupla di INVALID_PRICE_BOUNDS) NON è trattato come «mancanti»."""
+           la tupla di INVALID_PRICE_BOUNDS) NON è trattato come «mancanti».
+
+        `content_ok` (#192, Codex): esito del gate di contenuto del runtime
+        (`custom_parser_engine.matches_message`, whole-message). Il runtime
+        (`signal_router.resolve_row`) scarta con `NO_CONTENT_MATCH` un parser che non estrae
+        NULLA dal messaggio (solo valori fissi) **anche se** le righe generate sarebbero
+        piazzabili. Il verdetto single-row lo onora già via `diag_placeable` (vedi `diagnose`);
+        per il **multi-riga** va onorato QUI, altrimenti «Prova messaggio» direbbe «✅ Pronto ·
+        N righe» per un parser che il runtime non scriverebbe (over-promise). Default `True`
+        preserva il comportamento dei chiamanti che non lo passano."""
         if errors:
             return "⛔ Non salvabile: " + "; ".join(errors)
         if any(getattr(p, "kind", "base") != "base" for p in preview_rows):
+            # Gate di contenuto come il runtime (signal_router): un parser a soli valori fissi
+            # è piazzabile su qualsiasi testo ma verrebbe scartato con NO_CONTENT_MATCH. Non
+            # mostrare «Pronto» in quel caso, coerentemente col verdetto single-row (Codex).
+            if not content_ok:
+                return "⛔ Non pronto (NO_CONTENT_MATCH) · nessun contenuto estratto dal messaggio"
             return ParserBuilder.preview_summary(preview_rows)
         if diag_placeable:
             riga = ", ".join(f"{k}={v}" for k, v in res_row.items() if v != "")
