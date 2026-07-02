@@ -424,6 +424,43 @@ def test_process_cap_block_dopo_conferma_write_failure_risincronizza_csv(
     assert a._csv_dirty is False                        # disco di nuovo allineato alla coda
 
 
+def test_process_write_failure_con_disco_sporco_riarma_retry_breve(
+        make_app, app_mod, monkeypatch, tmp_path):
+    """Codex P1 #300 (round 2): se anche la RISINCRONIZZAZIONE del disco sporco fallisce
+    (XTrader tiene il lock), il ramo write-failure di `_process` non deve rimpiazzare il
+    retry breve pendente con il delay di scadenza normale: il disco resta stantio e va
+    ritentato in `_WRITE_RETRY_DELAY`, non alla prossima scadenza naturale.
+
+    Fail-first: il vecchio codice chiamava `_schedule_expiry(path)` senza delay →
+    l'ultima riprogrammazione era (path, None) invece del retry breve."""
+    from xtrader_bridge import csv_writer
+    path = str(tmp_path / "segnali.csv")
+    q = signal_queue.SignalQueue(mode=signal_queue.QUEUE_UNTIL_CONFIRMED,
+                                 default_timeout=120, max_active=1)
+    q.add(_row("Inter v Milan"), now=1000)
+    q.add(_row("Roma v Lazio"), now=1001, force=True)
+    csv_writer.write_rows(q.active_rows(), path)
+    a = make_app(csv_path=path, queue=q)
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: 1005.0)
+
+    # 1) Conferma con write FALLITA → disco stantio (dirty), retry breve programmato.
+    _spy_writer(monkeypatch, app_mod, fail=True)
+    app_mod.App._process_confirmation(a, "Inter v Milan Esito finale Inter piazzata",
+                                      {"csv_path": path})
+    assert a._csv_dirty is True
+
+    # 2) Nuovo segnale bloccato dal tetto: la risincronizzazione viene TENTATA (dirty)
+    #    ma fallisce anch'essa → il retry breve va riarmato, non sostituito dal delay
+    #    di scadenza normale.
+    _patch_resolve(monkeypatch, app_mod, _row("Napoli v Torino"))
+    app_mod.App._process(a, "nuovo segnale", {"csv_path": path, "dry_run": False},
+                         chat_id="1")
+
+    assert a._csv_dirty is True                                    # disco ancora stantio
+    assert a.expiry_calls[-1] == (path, app_mod._WRITE_RETRY_DELAY)  # retry breve riarmato
+    assert _events_in_csv(path) == ["Inter v Milan", "Roma v Lazio"]  # disco invariato (lock)
+
+
 def test_confirmation_gate_running_false_e_no_op(make_app, app_mod, tmp_path):
     from xtrader_bridge import csv_writer
     path = str(tmp_path / "segnali.csv")

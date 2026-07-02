@@ -2224,7 +2224,14 @@ class App(ctk.CTk):
             self.after(0, lambda e=write_error: self._set_last("error", f"scrittura CSV: {e}"))
             self.after(0, lambda e=write_error: self._log(
                 f"❌ Scrittura CSV fallita: {e}. Segnale non registrato (riprovabile)."))
-            self._schedule_expiry(path)           # i segnali ripristinati devono comunque scadere
+            # I segnali ripristinati devono comunque scadere. Ma se il disco è STANTIO
+            # (`_csv_dirty`: una risincronizzazione post-conferma/scadenza è fallita e anche
+            # QUESTA scrittura è fallita), il delay di scadenza normale RIMPIAZZEREBBE il
+            # retry breve pendente allungando la vita della riga stantia fino alla prossima
+            # scadenza naturale → si riarma il retry breve (Codex P1 #300, round 2).
+            self._schedule_expiry(
+                path,
+                delay=_WRITE_RETRY_DELAY if self.__dict__.get("_csv_dirty") else None)
             return
         if blocked_by_cap:
             # Tetto di righe attive raggiunto (#136 p5): segnale NON aggiunto, guardrail già
