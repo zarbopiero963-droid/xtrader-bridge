@@ -548,6 +548,13 @@ mercato), e altrimenti farebbe apparire un falso «Non pronto».
 > fail-closed** (mostra «non pronto» invece di un falso «pronto»): fail-open sul lato comodità, mai
 > sul lato sicurezza. La risoluzione in anteprima è puramente di lettura e non ha alcun effetto sul
 > flusso reale.
+>
+> **Sync-safe (Codex P2).** La factory dell'anteprima (`App._preview_id_resolver_factory`) **salta**
+> il resolver mentre è in corso una **sync Betfair** (`engine.is_syncing`, probe non bloccante): il
+> resolver legge il DB sotto lo stesso lock che la sync tiene per l'intera durata, quindi invocarlo
+> sul thread GUI durante una sync congelerebbe la finestra. Durante la sync l'anteprima è quindi
+> conservativa (nessun arricchimento ID). Il flusso **live** non è toccato: usa il resolver
+> direttamente su un worker thread, dove l'attesa sul lock è accettabile.
 
 I campi per-riga **non esposti** nella griglia GUI (`min_price`, `max_price`, `points`,
 `start_after`, `end_before` di `MultiRowRule`) sono **preservati** quando si modifica e salva un
