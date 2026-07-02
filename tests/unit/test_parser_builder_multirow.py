@@ -346,6 +346,26 @@ def test_test_verdict_multi_onora_no_content_match():
     assert ok == pb.ParserBuilder.preview_summary(rows) and ok.startswith("✅ Pronto")
 
 
+def test_test_verdict_multi_content_gate_solo_se_riga_piazzabile():
+    """#192 (Codex, follow-up): il gate NO_CONTENT_MATCH nel ramo multi va applicato SOLO se
+    esiste almeno una riga piazzabile — come il runtime (`signal_router`: controlla
+    `matches_message` DOPO aver trovato righe piazzabili; con zero piazzabili ritorna lo status
+    di validazione reale). Con ZERO righe piazzabili + `content_ok=False` il verdetto NON deve
+    mascherare l'errore reale con NO_CONTENT_MATCH, ma mostrare `preview_summary` (gli status
+    delle righe scartate), così l'utente vede QUALE validazione blocca.
+
+    Fail-first: prima del fix il ramo multi ritornava NO_CONTENT_MATCH per `content_ok=False`
+    indipendentemente dalla piazzabilità → mascherava il vero errore bloccante."""
+    rows = [_pr(index=0, kind="market", placeable=False, status="INVALID_MISSING_FIELDS"),
+            _pr(index=1, kind="market", placeable=False, status="INVALID_PRICE_BOUNDS")]
+    msg = pb.ParserBuilder.test_verdict(
+        [], rows, diag_placeable=False, diag_status="X",
+        res_row={}, res_missing_required=[], res_detail=None, content_ok=False)
+    assert msg == pb.ParserBuilder.preview_summary(rows)     # status reali, NON mascherati
+    assert "NO_CONTENT_MATCH" not in msg
+    assert "INVALID_MISSING_FIELDS" in msg
+
+
 # ── il salvataggio NON azzera i campi multi non esposti (Codex P1) ────────────
 # La GUI espone solo `_MULTI_FIELDS`: i campi min_price/max_price/points/start_after/
 # end_before di una regola CARICATA devono sopravvivere al salvataggio. La logica vive nel

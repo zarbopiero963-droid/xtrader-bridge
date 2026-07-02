@@ -14,7 +14,16 @@ import json
 import os
 from dataclasses import dataclass, field
 
-from . import custom_parser, dizionario, recognition, sports, transforms, validator, value_maps
+from . import (
+    custom_parser,
+    dizionario,
+    parser_diagnostics,
+    recognition,
+    sports,
+    transforms,
+    validator,
+    value_maps,
+)
 from .custom_parser import CustomParserDef, FieldRule, MultiRowRule
 from .custom_pipeline import both_multi_active, build_validated_row, build_validated_rows
 
@@ -437,15 +446,28 @@ class ParserBuilder:
         piazzabili. Il verdetto single-row lo onora già via `diag_placeable` (vedi `diagnose`);
         per il **multi-riga** va onorato QUI, altrimenti «Prova messaggio» direbbe «✅ Pronto ·
         N righe» per un parser che il runtime non scriverebbe (over-promise). Default `True`
-        preserva il comportamento dei chiamanti che non lo passano."""
+        preserva il comportamento dei chiamanti che non lo passano.
+
+        Il gate rispetta l'ORDINE del runtime (Codex): `matches_message` è valutato SOLO se esiste
+        almeno una riga piazzabile; con ZERO righe piazzabili il router ritorna lo status di
+        validazione reale, quindi qui si ripiega su `preview_summary` (che elenca gli status delle
+        righe scartate) invece di mascherare il vero errore con `NO_CONTENT_MATCH`."""
         if errors:
             return "⛔ Non salvabile: " + "; ".join(errors)
         if any(getattr(p, "kind", "base") != "base" for p in preview_rows):
             # Gate di contenuto come il runtime (signal_router): un parser a soli valori fissi
             # è piazzabile su qualsiasi testo ma verrebbe scartato con NO_CONTENT_MATCH. Non
             # mostrare «Pronto» in quel caso, coerentemente col verdetto single-row (Codex).
-            if not content_ok:
-                return "⛔ Non pronto (NO_CONTENT_MATCH) · nessun contenuto estratto dal messaggio"
+            # ORDINE come il runtime (Codex): matches_message è controllato SOLO dopo aver trovato
+            # almeno una riga piazzabile; se ZERO righe sono piazzabili il router ritorna lo status
+            # di validazione REALE (non NO_CONTENT_MATCH). Applicare il gate qui solo se esiste
+            # una riga piazzabile, così l'anteprima non MASCHERA il vero errore bloccante.
+            if any(p.placeable for p in preview_rows) and not content_ok:
+                # Riusa il token di stato condiviso (`parser_diagnostics`, stessa fonte di
+                # `diag.message_error` da cui deriva `content_ok`) così il messaggio resta
+                # allineato allo status del runtime, senza letterale divergente (CodeRabbit/Sourcery).
+                return (f"⛔ Non pronto ({parser_diagnostics.NO_CONTENT_MATCH}) · "
+                        "nessun contenuto estratto dal messaggio")
             return ParserBuilder.preview_summary(preview_rows)
         if diag_placeable:
             riga = ", ".join(f"{k}={v}" for k, v in res_row.items() if v != "")

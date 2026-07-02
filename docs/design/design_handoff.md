@@ -271,8 +271,15 @@ senza toccare il codice. È il cuore della configurazione avanzata. Sezioni:
   usa lo stesso motore del runtime e, quando il dizionario Betfair locale è disponibile, risolve
   gli ID come il live (un parser `ID_ONLY` che prende `MarketId`/`SelectionId` dal dizionario può
   quindi risultare `✅ Pronto`); se il dizionario manca resta conservativa (`⛔`), mai il contrario.
+  Il verdetto onora anche il **gate di contenuto** del runtime: un parser a soli valori fissi (che
+  non estrae nulla dal messaggio) mostra `⛔ Non pronto (NO_CONTENT_MATCH) · nessun contenuto
+  estratto dal messaggio` invece di `✅ Pronto`, sia in single-row sia in multi-riga — come lo
+  scarterebbe il bridge. Per un `ID_ONLY` **a riga singola** con ID obbligatori lasciati vuoti il
+  verdetto resta `⛔ Non pronto` (l'arricchimento ID dal dizionario è funzione multi-riga; coerente
+  col runtime che non lo piazzerebbe).
 - **Anteprima righe generate (#192):** tabella `# · Tipo (Base/Mercato/Selezione) · Esito ·
-  Riga CSV`.
+  Riga CSV`. È la fonte **autorevole** per l'esito delle righe generate (la tabella diagnostica
+  per-colonna qui sotto è a livello della sola riga base).
 - **Diagnostica per colonna:** tabella `Colonna · Stato (OK/MANCANTE) · Motivo · Inizia
   dopo · Finisce prima · Valore estratto`.
 
