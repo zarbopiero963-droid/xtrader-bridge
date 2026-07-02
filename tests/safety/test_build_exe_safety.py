@@ -125,7 +125,9 @@ _CLI_PREFIX = r"""^\s*&?\s*["']?(?:[^\s"']*[\\/])?pyinstaller(?:\.exe)?\b"""
 # prefisso call-operator/quote/path opzionali anche davanti al wrapper.
 _WRAPPED_PREFIX = (
     r"|(?:^|[\s;&|(])(?:&\s*)?[\"']?(?:[^\s\"']*[\\/])?"
-    r"(?:cmd(?:\.exe)?[\"']?\s+/[ck]\s+"
+    # `cmd` può avere switch documentati PRIMA di /c (`/d /s /c`, `/v:on /c` — Codex P2,
+    # 4° giro): gruppo `/x[:val]` ripetuto prima del /c|/k finale.
+    r"(?:cmd(?:\.exe)?[\"']?\s+(?:/\w+(?::\w+)?\s+)*/[ck]\s+"
     r"|(?:powershell|pwsh)(?:\.exe)?[\"']?\s+(?:-\w+(?:\s+[\w.:\\/-]+)?\s+)*"
     r"|(?:ba|z|da)?sh[\"']?\s+-c\s+)"
     r"""["']?\s*(?:&\s*)?["']?"""
@@ -469,6 +471,9 @@ def test_build_wrappate_rilevate_e_rifiutate():
         # wrapper QUOTATO o con path completo (Codex P2, 3° giro)
         '& "C:/Windows/System32/cmd.exe" /c pyinstaller --onefile main.py',
         '"pwsh.exe" -Command "pyinstaller --onefile main.py"',
+        # switch di cmd PRIMA di /c (Codex P2, 4° giro)
+        "cmd /d /s /c pyinstaller --onefile main.py",
+        "cmd /v:on /c pyinstaller --onefile main.py",
         "sh -c 'pyinstaller --onefile main.py'",
         "bash -c 'pyinstaller --onefile main.py'",
     ]
