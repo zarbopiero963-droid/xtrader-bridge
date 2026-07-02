@@ -895,9 +895,9 @@ NON distruttiva — riempie solo gli ID vuoti, scarta l'arricchimento su conflit
 errore) e applicata sia alla base sia a **ogni riga multi** in `_validated_multi_row`: così ogni
 selezione ri-risolve gli ID per sé e un MultiSelection in ID_ONLY è ora piazzabile. Base single-row
 bit-identica (stessa logica). Test hard fail-first: `tests/integration/test_dictionary_id_fallback.py`
-(`test_multi_id_perriga_ogni_selezione_ottiene_i_suoi_id`,
-`test_multi_id_perriga_fail_open_resolver_che_solleva`,
-`test_multi_id_perriga_senza_resolver_resta_a_nomi`). Test hard fail-first (kyZ):
+(`test_multi_id_per_riga_ogni_selezione_ottiene_i_suoi_id`,
+`test_multi_id_per_riga_fail_open_resolver_che_solleva`,
+`test_multi_id_per_riga_senza_resolver_resta_a_nomi`). Test hard fail-first (kyZ):
 `tests/unit/test_multirow_192.py`
 (`test_kyz_base_not_ready_riempita_da_multiselection`, `test_kyz_altri_gate_base_restano_fail_closed`,
 `test_kyz_mapping_applicata_su_righe_derivate_da_base_not_ready`,

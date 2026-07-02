@@ -173,18 +173,22 @@ def _resolve_ids_into(row: dict, *, sport: str, id_resolver) -> dict:
         ids = None
     if not ids:
         return row
+
+    def _norm(v):   # normalizzazione condivisa dei valori di riga (Sourcery: no duplicazione)
+        return str(v).strip()
+
     _keys = ("EventId", "MarketId", "SelectionId")
     _conflict = any(
-        str(row.get(_k, "")).strip()
-        and ids.get(_k) and str(row.get(_k, "")).strip() != str(ids[_k])
+        _norm(row.get(_k, ""))
+        and ids.get(_k) and _norm(row.get(_k, "")) != str(ids[_k])
         for _k in _keys)
     if _conflict:
         return row
     out = dict(row)
     for _k in _keys:
         _v = ids.get(_k)
-        if _v and not str(out.get(_k, "")).strip():
-            out[_k] = str(_v)
+        if _v and not _norm(out.get(_k, "")):
+            out[_k] = str(_v)   # valore ID invariato (base bit-identica): niente strip sull'ID risolto
     return out
 
 

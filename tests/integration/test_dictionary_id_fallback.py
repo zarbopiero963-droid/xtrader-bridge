@@ -236,7 +236,7 @@ def _multiselection_id_parser():
     return defn
 
 
-def test_multi_id_perriga_ogni_selezione_ottiene_i_suoi_id():
+def test_multi_id_per_riga_ogni_selezione_ottiene_i_suoi_id():
     """#192 (follow-up #290): in ID_ONLY ogni riga MultiSelection deve risolvere gli ID per la
     PROPRIA selezione ed essere piazzabile. Prima gli ID erano risolti solo sulla base (con
     selezione vuota) e `_apply_multi_rule` li azzerava → righe senza ID, non piazzabili.
@@ -259,7 +259,7 @@ def test_multi_id_perriga_ogni_selezione_ottiene_i_suoi_id():
     assert {"Inter", "Milan"} <= sels
 
 
-def test_multi_id_perriga_fail_open_resolver_che_solleva():
+def test_multi_id_per_riga_fail_open_resolver_che_solleva():
     """Fail-open per riga: un resolver che solleva non blocca né fa crashare la generazione;
     in ID_ONLY, senza ID, le righe restano non piazzabili (fail-closed sul contenuto)."""
     res = _FakeResolver(boom=True)
@@ -269,7 +269,27 @@ def test_multi_id_perriga_fail_open_resolver_che_solleva():
     assert all(not r.placeable and r.status == validator.INVALID_MISSING_FIELDS for r in results)
 
 
-def test_multi_id_perriga_senza_resolver_resta_a_nomi():
+def test_multi_id_per_riga_risoluzione_mista_indipendente():
+    """Indipendenza PER RIGA (Sourcery): il resolver risolve SOLO una selezione. In ID_ONLY la
+    riga risolta è VALID/piazzabile, l'altra resta `INVALID_MISSING_FIELDS` — il fallimento su una
+    selezione NON influenza le altre (ogni riga è arricchita/validata singolarmente)."""
+    res = _PerSelectionResolver({
+        "Inter": {"EventId": "ev1", "MarketId": "mk1", "SelectionId": "sel_inter"},
+        # "Milan" assente → dict vuoto → nessun ID risolto per quella riga.
+    })
+    results = pipe.build_validated_rows(_multiselection_id_parser(), _MSG, mode="ID_ONLY",
+                                        id_resolver=res)
+    assert len(results) == 2
+    by_sel = {r.row["SelectionName"]: r for r in results}
+    assert by_sel["Inter"].status == validator.VALID and by_sel["Inter"].placeable
+    assert by_sel["Inter"].row["SelectionId"] == "sel_inter"
+    assert by_sel["Milan"].status == validator.INVALID_MISSING_FIELDS and not by_sel["Milan"].placeable
+    assert by_sel["Milan"].row["SelectionId"] == ""          # nessun ID inventato
+    # entrambe le selezioni interrogate (fail-open per riga).
+    assert {"Inter", "Milan"} <= {c["selection_name"] for c in res.calls}
+
+
+def test_multi_id_per_riga_senza_resolver_resta_a_nomi():
     """Senza `id_resolver` (o parser agnostico) nessun arricchimento: in NAME_ONLY le righe
     restano piazzabili a nomi — comportamento invariato del percorso multi esistente."""
     defn = _multiselection_id_parser()
