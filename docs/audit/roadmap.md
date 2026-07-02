@@ -898,10 +898,13 @@ bit-identica (stessa logica). Robustezza fail-open (CodeRabbit): un resolver che
 NON dict non fa crashare la pipeline (`isinstance(ids, dict)`). **Gate della base per i parser ID_ONLY
 «da GUI» (Codex):** la GUI marca `MarketId`/`SelectionId` obbligatori; se lasciati vuoti per il
 riempimento dal dizionario, la base sarebbe `NOT_READY` e la generazione non partirebbe. Quando c'è
-un `id_resolver` + sport, in `build_validated_rows` gli ID sono trattati come «forniti»
-(`multi_supplied`) per il **solo** gate della base — ogni riga è comunque ri-validata dopo la
-risoluzione (senza ID risolti → `INVALID` in ID_ONLY), quindi **fail-closed per riga** come kyZ; senza
-resolver la base resta bloccata (nessuna scommessa senza ID). Test hard fail-first:
+un `id_resolver` + sport **e SOLO in `ID_ONLY`**, in `build_validated_rows` gli ID sono trattati come
+«forniti» (`multi_supplied`) per il **solo** gate della base — ogni riga è comunque ri-validata dopo
+la risoluzione (senza ID risolti → `INVALID` in ID_ONLY), quindi **fail-closed per riga** come kyZ;
+senza resolver la base resta bloccata (nessuna scommessa senza ID). La restrizione a `ID_ONLY` è
+deliberata (Codex): lì il validator ri-controlla `MarketId`/`SelectionId`, mentre in `NAME_ONLY`/`BOTH`
+non li esige → rilassare un ID obbligatorio lascerebbe passare una riga senza ID dichiarata incompleta,
+quindi lì l'ID obbligatorio resta bloccante. Test hard fail-first:
 `tests/integration/test_dictionary_id_fallback.py`
 (`test_multi_id_per_riga_ogni_selezione_ottiene_i_suoi_id`,
 `test_multi_id_per_riga_risoluzione_mista_indipendente`,

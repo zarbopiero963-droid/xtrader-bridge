@@ -496,7 +496,13 @@ def build_validated_rows(defn: CustomParserDef, text: str, **kwargs) -> "list[Pi
         # ogni riga derivata) si trattano gli ID come "forniti" per il solo gate della base: ogni
         # riga è comunque ri-validata dopo la risoluzione (senza ID risolti → INVALID in ID_ONLY),
         # quindi resta fail-closed PER RIGA come per kyZ.
-        if kwargs.get("id_resolver") is not None and getattr(defn, "sport", ""):
+        # SOLO in ID_ONLY (Codex): lì il validator ri-controlla MarketId/SelectionId → se il resolver
+        # manca, la riga resta INVALID (fail-closed). In NAME_ONLY/BOTH il validator NON esige gli ID,
+        # quindi rilassare un ID obbligatorio lascerebbe passare una riga senza ID che il parser aveva
+        # dichiarato incompleta → NON si rilassa (resta bloccante).
+        _relax_mode = recognition.normalize_mode(kwargs.get("mode", recognition.DEFAULT_MODE))
+        if (_relax_mode == recognition.ID_ONLY
+                and kwargs.get("id_resolver") is not None and getattr(defn, "sport", "")):
             supplied |= {"EventId", "MarketId", "SelectionId"}
         if supplied:
             retry_kwargs = dict(row_kwargs)     # `row_kwargs`: senza il `multi_supplied` del chiamante

@@ -353,3 +353,34 @@ def test_multi_id_per_riga_resolver_non_dict_non_crasha():
                                         id_resolver=_BadResolver())
     assert len(results) == 2
     assert all(not r.placeable for r in results)
+
+
+def test_multi_id_per_riga_name_only_id_obbligatori_non_rilassati():
+    """Codex (safety): il rilassamento degli ID obbligatori vale SOLO in ID_ONLY (dove il validator
+    li ri-controlla → fail-closed se il resolver manca). In NAME_ONLY, un parser che marca
+    `MarketId`/`SelectionId` obbligatori come guardia NON deve essere sbloccato dalla sola presenza
+    di un resolver: se il resolver manca, una riga senza ID — che il parser ha dichiarato incompleta
+    — NON deve diventare piazzabile (il validator NAME_ONLY non ri-controlla gli ID).
+
+    Fail-first: prima di questo fix, con resolver presente gli ID erano tolti dal gate della base
+    anche in NAME_ONLY → righe VALID/piazzabili con ID vuoti."""
+    defn = cp.CustomParserDef(
+        name="MSname_req_ids", mode="NAME_ONLY", sport="Calcio",
+        rules=[
+            cp.FieldRule(target="Provider", fixed_value="TG_CUSTOM"),
+            cp.FieldRule(target="EventName", start_after="Match:", end_before="\n", required=True),
+            cp.FieldRule(target="MarketType", start_after="Merc:", end_before="\n", required=True),
+            cp.FieldRule(target="MarketName", fixed_value="Match Odds"),
+            cp.FieldRule(target="Price", start_after="Quota:", end_before="\n", required=True),
+            cp.FieldRule(target="BetType", start_after="Lato:", value_map="bettype", required=True),
+            cp.FieldRule(target="MarketId", required=True),      # guardia: obbligatorio, vuoto
+            cp.FieldRule(target="SelectionId", required=True),   # guardia: obbligatorio, vuoto
+        ])
+    defn.multi_selection_enabled = True
+    defn.multi_selections = [cp.MultiRowRule(selection_name="Inter"),
+                             cp.MultiRowRule(selection_name="Milan")]
+    res = _FakeResolver({})     # resolver presente ma NON risolve (manca)
+    results = pipe.build_validated_rows(defn, _MSG, mode="NAME_ONLY", id_resolver=res)
+    # ID obbligatori NON rilassati in NAME_ONLY → la base resta NOT_READY → nessuna riga.
+    assert len(results) == 1
+    assert results[0].status == pipe.NOT_READY and not results[0].placeable
