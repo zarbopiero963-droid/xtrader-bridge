@@ -523,6 +523,11 @@ def test_as_bool_optin_allowlist_fail_closed():
     # Solo un truthy ESPLICITO riconosciuto → True.
     for on in (True, 1, "1", "true", "TRUE", "  yes  ", "on", "y", "t"):
         assert config_store.as_bool_optin(on) is True, on
+    # NaN/Infinity (config.json corrotto o editato a mano) NON sono un "sì" esplicito:
+    # fail-closed come `autostart.is_enabled` (#258/#259, finding C8). Prima della patch
+    # `value != 0` li faceva passare per True, accendendo opt-in di privacy/Betfair.
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        assert config_store.as_bool_optin(bad) is False, repr(bad)
 
 
 def test_debug_message_payload_default_off_e_migrazione(tmp_path):

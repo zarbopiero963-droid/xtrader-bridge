@@ -204,7 +204,8 @@ def as_bool_optin(value) -> bool:
     """Coercizione **allowlist, fail-closed** per i flag **opt-in** con default OFF
     (es. `debug_message_payload`): True SOLO per un valore esplicitamente acceso.
 
-    - `bool` → sé; numero → `!= 0`;
+    - `bool` → sé; numero **finito** → `!= 0` (NaN/±Infinity da un `config.json`
+      corrotto/editato a mano NON sono un "sì" esplicito → False, #258/#259 C8);
     - stringa → True solo se (normalizzata) è in ``_OPTIN_TRUE`` (`1/true/yes/on/y/t`);
     - QUALSIASI altro valore (None/`null`/vuoto, `"0"/"false"/"off"`, ma anche stringhe
       non riconosciute come `"flase"/"disabled"`) → **False**.
@@ -216,7 +217,9 @@ def as_bool_optin(value) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
-        return value != 0
+        # Stessa guardia di `autostart.is_enabled`: un numero non finito non è un
+        # "true" esplicito (fail-closed).
+        return math.isfinite(value) and value != 0
     return str(value).strip().lower() in _OPTIN_TRUE
 
 
