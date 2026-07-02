@@ -528,6 +528,11 @@ def test_as_bool_optin_allowlist_fail_closed():
     # `value != 0` li faceva passare per True, accendendo opt-in di privacy/Betfair.
     for bad in (float("nan"), float("inf"), float("-inf")):
         assert config_store.as_bool_optin(bad) is False, repr(bad)
+    # Int FUORI range float (10**400, JSON li ammette): niente OverflowError da
+    # `math.isfinite` (Codex P2 su #299) — un int esplicito ≠ 0 resta True, 0 resta False.
+    assert config_store.as_bool_optin(10**400) is True
+    assert config_store.as_bool_optin(-(10**400)) is True
+    assert config_store.as_bool_optin(0) is False
 
 
 def test_debug_message_payload_default_off_e_migrazione(tmp_path):

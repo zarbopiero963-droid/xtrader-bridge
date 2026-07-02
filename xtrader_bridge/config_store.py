@@ -216,8 +216,14 @@ def as_bool_optin(value) -> bool:
     `_migrate`, il settings controller e il runtime (finding Sourcery)."""
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
-        # Stessa guardia di `autostart.is_enabled`: un numero non finito non è un
+    if isinstance(value, int):
+        # Un int non può essere NaN/inf: basta `!= 0`. NON passare da `math.isfinite`,
+        # che su int fuori range float (es. 10**400, ammesso dal JSON) solleva
+        # OverflowError trasformando un config corrotto in un crash al load
+        # (Codex P2 su #299) invece del fail-closed documentato.
+        return value != 0
+    if isinstance(value, float):
+        # Stessa guardia di `autostart.is_enabled`: un float non finito non è un
         # "true" esplicito (fail-closed).
         return math.isfinite(value) and value != 0
     return str(value).strip().lower() in _OPTIN_TRUE
