@@ -658,6 +658,19 @@ La compilazione dell'EXE con **PyInstaller** resta invariata.
 
 ---
 
+## Review e audit AI (GitHub Actions)
+
+Quattro workflow opzionali usano modelli AI (GPT-5.5 e Claude Fable 5) come
+**filtro tecnico aggiuntivo**: due commentano automaticamente ogni PR con una
+review diff-only (senza checkout né esecuzione del codice) e due, avviabili
+**solo a mano** da *Actions → Run workflow*, scansionano l'intero repository in
+sola lettura producendo un report scaricabile. Nessuno modifica codice, apre
+PR, approva o merge — il merge resta manuale. Richiedono i secrets
+`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`. Dettagli, invarianti di sicurezza e
+valori consigliati: **`docs/ai_audit_workflows.md`**.
+
+---
+
 ## Struttura del progetto
 
 ```text
@@ -672,7 +685,7 @@ xtrader-bridge/
 ├── requirements-build.lock ← lockfile con hash (generato su Windows; va committato)
 ├── requirements.txt        ← dipendenze Python (install "soft")
 ├── README.md               ← questo file
-└── .github/workflows/      ← CI + build EXE Windows + Generate Windows Lockfile
+└── .github/workflows/      ← CI + build EXE Windows + lockfile + review/audit AI
 ```
 
 ---
