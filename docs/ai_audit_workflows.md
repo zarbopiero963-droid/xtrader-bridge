@@ -43,10 +43,16 @@ vengono mai stampate.
   scritte nel codice in analisi).
 - **OpenAI `store: false`**: le richieste alla Responses API chiedono di non
   memorizzare la response.
-- **Action pinnate a SHA** (convenzione hardening del repo; `upload-artifact`
+- **Actions pinnate a SHA** (convenzione hardening del repo; `upload-artifact`
   è pinnata allo stesso SHA v4.6.2 di `build.yaml`).
 - **Budget duri** su file, chunk, caratteri e token di output per limitare i
   costi (Fable 5 costa più di Sonnet; GPT-5.5 su repo interi costa in fretta).
+- **Script inline per design**: il Python vive negli heredoc dei workflow, non
+  in moduli del repo, perché i PR review non fanno checkout e gli audit devono
+  eseguire solo codice versionato **col workflow** (non codice preso dallo
+  snapshot del ref scansionato, che è input non attendibile). La duplicazione
+  tra le varianti GPT/Claude è il prezzo accettato di questo isolamento; le
+  invarianti comuni sono difese in un punto solo dal test di safety.
 
 ## PR review automatici — cosa fanno
 
@@ -74,10 +80,10 @@ uno rimuovendo il file o il secret corrispondente.
 *GitHub → Actions → nome del workflow → Run workflow*, scegliendo branch e
 input. Solo i file **testuali** vengono analizzati (riga per riga, con numeri
 riga); binari, cache, `dist/`, `node_modules/`, virtualenv e file oltre il
-limite dimensione vengono saltati e **tracciati in `skipped-files.json`** —
+limite di dimensione vengono saltati e **tracciati in `skipped-files.json`** —
 nessun troncamento silenzioso.
 
-Input principali (entrambi gli audit): `target_ref` (vuoto = branch scelta),
+Input principali (entrambi gli audit): `target_ref` (vuoto = la branch scelta),
 `audit_depth` (`standard`/`deep`/`paranoid`), `max_files`, `max_chunks`,
 `max_file_kb`, `chunk_max_chars`, `fail_on_critical` (fallisce il job se
 trova finding critical — utile come gate di release). Il workflow Claude ha
@@ -116,7 +122,7 @@ eventuali errori di parse grezzi (redatti).
 sicurezza (permessi, trigger, no-checkout, secrets dai GitHub Secrets,
 `store: false`, pin a SHA), compila il Python embedded negli heredoc ed
 esercita le funzioni reali degli script di audit (redaction, chunking con
-numeri riga, secret-scan locale, normalizzazione/dedupe dei finding, skip di
+numeri riga, secret-scan locale, normalizzazione/dedupe dei findings, skip di
 binari e directory generate). Il comportamento live (commento su PR reale,
 run di audit reale con API key) non è testabile offline: si verifica alla
 prima esecuzione reale.
