@@ -316,9 +316,12 @@ def _pytest_fail_open_lines(step: str):
     (`pytest || true`, `|| exit 0`, …): il fallimento dei test non farebbe fallire lo
     step (fail-open). Si scandisce il TESTO GREZZO per riga — non i comandi già spezzati
     da `_split_shell`, che separerebbe `pytest` da `|| true` nascondendo il pattern
-    (#296, audit #242/PR#177, Codex)."""
+    (#296, audit #242/PR#177, Codex). Le righe COMMENTATE (`#…`, vale per bash e pwsh)
+    sono ignorate: non vengono eseguite, flaggarle sarebbe un falso positivo (Sourcery
+    su #297)."""
     return [ln.strip() for ln in step.splitlines()
-            if _PYTEST_ANY.search(ln) and "||" in ln]
+            if not ln.lstrip().startswith("#")
+            and _PYTEST_ANY.search(ln) and "||" in ln]
 
 
 def _dynamic_args(cmd: str):
@@ -571,7 +574,13 @@ def test_pytest_fail_closed_nei_workflow():
     nessuna invocazione pytest addolcita con `||` (es. `pytest || true`) e nessun
     `continue-on-error` in ALCUN workflow. Un pytest che non fa fallire lo step
     maschererebbe regressioni prima della build. I `|| true` sui grep non-pytest
-    (forbidden-files) restano legittimi e non sono toccati."""
+    (forbidden-files) restano legittimi e non sono toccati.
+
+    Il divieto di `continue-on-error` è deliberatamente GLOBALE e non scopato ai soli
+    job di test/build (valutato su suggerimento Sourcery, #297): oggi NESSUN workflow
+    lo usa (costo zero) e un'euristica "solo job di test" lascerebbe scoperto un futuro
+    workflow di test non riconosciuto. Stesso stile fail-closed di `_ALLOWED_OPTS`: un
+    eventuale uso legittimo futuro dovrà emendare consapevolmente questo gate."""
     for path in _workflow_files():
         name = os.path.basename(path)
         text = _read(path)
@@ -590,6 +599,9 @@ def test_pytest_addolcito_rilevato():
     assert not _pytest_fail_open_lines('python -m pytest -q -m "not manual"')
     # `|| true` su un comando NON-pytest (es. i grep di forbidden-files) resta ammesso
     assert not _pytest_fail_open_lines("ci=$(git ls-files | grep -iE 'x' || true)")
+    # righe COMMENTATE non eseguite: niente falso positivo (Sourcery su #297)
+    assert not _pytest_fail_open_lines("# python -m pytest -q || true (esempio disattivato)")
+    assert not _pytest_fail_open_lines("  # nota: mai usare `pytest || true` nei gate")
 
 
 def test_data_dir_senza_file_sensibili():
