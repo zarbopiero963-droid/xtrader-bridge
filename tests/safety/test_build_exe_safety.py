@@ -40,7 +40,8 @@ Hardening #296 (residui audit #242/PR#177, Codex):
 - i VALORI di `--paths`/`--hidden-import` sono allowlistati (non solo il nome-opzione);
 - i comandi pytest non possono essere addolciti (`|| …`) e `continue-on-error` è vietato
   in tutti i workflow (fail-closed sui gate di test);
-- il comando di build non può contenere argomenti DINAMICI (`$VAR`, `${{ … }}`, `%VAR%`);
+- il comando di build non può contenere argomenti DINAMICI (`$VAR`, `${{ … }}`,
+  `$( … )` — bash e PowerShell —, `%VAR%`);
 - le build WRAPPATE (`cmd /c pyinstaller …`, `powershell -Command "pyinstaller …"`,
   `sh -c 'pyinstaller …'`) sono rilevate dal detector e rifiutate come forma non canonica.
 """
@@ -105,9 +106,12 @@ _CLI_PREFIX = r"""^\s*&?\s*["']?(?:[^\s"']*[\\/])?pyinstaller(?:\.exe)?\b"""
 # gate perché il detector era ancorato all'invocazione diretta (#296, audit #242/PR#177,
 # Codex). Ora vengono RILEVATI — e quindi RIFIUTATI da `test_forma_build_canonica`, perché
 # la forma wrappata non è la CLI canonica analizzabile (fail-closed, nessun wrapper ammesso).
+# Gli switch PowerShell possono avere un VALORE senza trattino (`-ExecutionPolicy Bypass
+# -Command …`, Codex P2 su #297): il gruppo ammette `-Switch [valore]` ripetuti, così il
+# wrapper è rilevato anche con parametri valorizzati prima di `-Command`.
 _WRAPPED_PREFIX = (
     r"|(?:^|[\s;&|(])(?:cmd(?:\.exe)?\s+/[ck]\s+"
-    r"|(?:powershell|pwsh)(?:\.exe)?\s+(?:-\w+\s+)*"
+    r"|(?:powershell|pwsh)(?:\.exe)?\s+(?:-\w+(?:\s+[\w.:\\/-]+)?\s+)*"
     r"|(?:ba|z|da)?sh\s+-c\s+)"
     r"""["']?\s*(?:[^\s"']*[\\/])?pyinstaller(?:\.exe)?\b""")
 _PYINSTALLER_DETECT = re.compile(
@@ -127,9 +131,10 @@ _PYTEST_CMD = re.compile(r"^\s*&?\s*python\s+-m\s+pytest\b", re.IGNORECASE)
 # serve al gate fail-closed #296, che deve vedere anche le forme che _PYTEST_CMD non copre.
 _PYTEST_ANY = re.compile(r"(?<![\w-])pytest\b", re.IGNORECASE)
 # Argomento DINAMICO in un comando: variabile shell (`$VAR`/`${VAR}`), expression GitHub
-# (`${{ … }}`) o variabile cmd (`%VAR%`). Un argomento dinamico sfugge a ogni allowlist
-# statica del gate (#296, audit #242/PR#177, Codex).
-_DYNAMIC_ARG = re.compile(r"\$\{\{[^}]*\}\}|\$\{?\w+\}?|%\w+%")
+# (`${{ … }}`), command/subexpression substitution `$( … )` (bash E PowerShell, stessa
+# grafia — Codex P2 su #297) o variabile cmd (`%VAR%`). Un argomento dinamico sfugge a
+# ogni allowlist statica del gate (#296, audit #242/PR#177, Codex).
+_DYNAMIC_ARG = re.compile(r"\$\{\{[^}]*\}\}|\$\([^)]*\)|\$\{?\w+\}?|%\w+%")
 # Indicatori di block scalar YAML per `run:` (folded `>` / literal `|`).
 _BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d*$")
 
@@ -314,12 +319,16 @@ def _import_expansion_offenders(cmd: str):
 def _pytest_fail_open_lines(step: str):
     """Righe di uno step `run:` in cui un'invocazione pytest è ADDOLCITA con `||`
     (`pytest || true`, `|| exit 0`, …): il fallimento dei test non farebbe fallire lo
-    step (fail-open). Si scandisce il TESTO GREZZO per riga — non i comandi già spezzati
-    da `_split_shell`, che separerebbe `pytest` da `|| true` nascondendo il pattern
-    (#296, audit #242/PR#177, Codex). Le righe COMMENTATE (`#…`, vale per bash e pwsh)
-    sono ignorate: non vengono eseguite, flaggarle sarebbe un falso positivo (Sourcery
-    su #297)."""
-    return [ln.strip() for ln in step.splitlines()
+    step (fail-open). Si scandisce il TESTO GREZZO per righe LOGICHE — non i comandi già
+    spezzati da `_split_shell`, che separerebbe `pytest` da `|| true` nascondendo il
+    pattern (#296, audit #242/PR#177, Codex). Le CONTINUAZIONI di riga (backslash bash o
+    backtick pwsh a fine riga) vengono ricongiunte prima del controllo: un pytest con
+    continuazione seguito da `|| true` sulla riga fisica successiva è UN solo comando
+    per la shell (Codex P2 su #297). Le righe
+    COMMENTATE (`#…`, vale per bash e pwsh) sono ignorate: non vengono eseguite,
+    flaggarle sarebbe un falso positivo (Sourcery su #297)."""
+    logical = re.sub(r"[\\`][ \t]*\n[ \t]*", " ", step)
+    return [ln.strip() for ln in logical.splitlines()
             if not ln.lstrip().startswith("#")
             and _PYTEST_ANY.search(ln) and "||" in ln]
 
@@ -384,6 +393,10 @@ def test_argomenti_dinamici_rilevati():
     assert _dynamic_args("pyinstaller $ARGS main.py") == ["$ARGS"]
     assert _dynamic_args("pyinstaller ${{ inputs.flags }} main.py")
     assert _dynamic_args("pyinstaller %FLAGS% main.py") == ["%FLAGS%"]
+    # command/subexpression substitution `$( … )` — bash e PowerShell (Codex P2 #297)
+    assert _dynamic_args("pyinstaller $(Get-Content flags.txt) --onefile main.py") == \
+        ["$(Get-Content flags.txt)"]
+    assert _dynamic_args("pyinstaller $(cat flags.txt) main.py")
     assert _dynamic_args("pyinstaller --onefile --paths . main.py") == []
 
 
@@ -397,6 +410,9 @@ def test_build_wrappate_rilevate_e_rifiutate():
         'cmd.exe /C "pyinstaller --onefile main.py"',
         'powershell -Command "pyinstaller --onefile main.py"',
         'pwsh -NoProfile -Command "pyinstaller --onefile main.py"',
+        # switch VALORIZZATI prima di -Command (Codex P2 #297)
+        'powershell -NoProfile -ExecutionPolicy Bypass -Command "pyinstaller --onefile main.py"',
+        'pwsh -ExecutionPolicy RemoteSigned -Command "pyinstaller --onefile main.py"',
         "sh -c 'pyinstaller --onefile main.py'",
         "bash -c 'pyinstaller --onefile main.py'",
     ]
@@ -602,6 +618,10 @@ def test_pytest_addolcito_rilevato():
     # righe COMMENTATE non eseguite: niente falso positivo (Sourcery su #297)
     assert not _pytest_fail_open_lines("# python -m pytest -q || true (esempio disattivato)")
     assert not _pytest_fail_open_lines("  # nota: mai usare `pytest || true` nei gate")
+    # CONTINUAZIONI di riga: `pytest \` + `|| true` è UN comando per la shell (Codex P2 #297)
+    assert _pytest_fail_open_lines("python -m pytest -q \\\n  || true")
+    assert _pytest_fail_open_lines("python -m pytest -q `\n  || exit 0")   # backtick pwsh
+    assert not _pytest_fail_open_lines("python -m pytest -q \\\n  -m 'not manual'")
 
 
 def test_data_dir_senza_file_sensibili():
